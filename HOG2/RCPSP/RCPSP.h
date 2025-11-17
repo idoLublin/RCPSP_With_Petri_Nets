@@ -42,7 +42,7 @@ class RCPSP : public SearchEnvironment<RCPSPState,int>{
 
 
 inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
-  //auto startS1 = std::chrono::high_resolution_clock::now();
+  auto startS1 = std::chrono::high_resolution_clock::now();
 
   std::size_t seed = 0;
 
@@ -55,9 +55,9 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
     seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-  //auto endS1 = std::chrono::high_resolution_clock::now();
+  auto endS1 = std::chrono::high_resolution_clock::now();
 
-  //hashTIME += endS1-startS1;
+  hashTIME += endS1-startS1;
   return seed;
 
 }
@@ -90,7 +90,10 @@ inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPStat
 }
 */
 inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
+  auto startS1 = std::chrono::high_resolution_clock::now();
+
   // Handle active transitions
+
   if (!nodeID.activeTransitionIndices.empty()) {
     count++;
     int t = 0;
@@ -119,8 +122,11 @@ inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPStat
 
     // Create successor state
     neighbors.emplace_back(RCPSPState(nodeID, transition, true, i, count));
+
   }
 
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  secssesorTIME += endS1 - startS1;
 }
 
 inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) const {
@@ -527,7 +533,7 @@ else {
   };
 
   uint64_t GetStateHash(const RCPSPState_bi &node) const {
-    //auto startS1 = std::chrono::high_resolution_clock::now();
+    auto startS1 = std::chrono::high_resolution_clock::now();
     std::size_t seed = 0;
     // Hash the marking (Petri net state)
     for (const auto& pair : node.activeTransitionIndices) {
@@ -545,8 +551,8 @@ else {
       seed ^= std::hash<int>{}(activity) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
-    //auto endS1 = std::chrono::high_resolution_clock::now();
-    //hashTIME += endS1 - startS1;
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    hashTIME += endS1 - startS1;
 
     return seed;
 
@@ -606,9 +612,14 @@ inline RCPSP_TT::RCPSP_TT() {
 }
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
+  auto startS1 = std::chrono::high_resolution_clock::now();
+
   for (const auto& [transId, firingTime] : nodeID.avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
   }
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  secssesorTIME += endS1 - startS1;
+
 }
 
 inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &goal) const {
@@ -697,7 +708,7 @@ inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 }
 
 inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
-  //auto startS1 = std::chrono::high_resolution_clock::now();
+  auto startS1 = std::chrono::high_resolution_clock::now();
 
   std::size_t seed = 0;
 
@@ -710,9 +721,9 @@ inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
     seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-  //auto endS1 = std::chrono::high_resolution_clock::now();
+  auto endS1 = std::chrono::high_resolution_clock::now();
 
-  //hashTIME += endS1-startS1;
+  hashTIME += endS1-startS1;
   return seed;
 
 }

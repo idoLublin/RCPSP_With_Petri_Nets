@@ -11,9 +11,16 @@
 #include <chrono>
 #include <atomic>
 #include <algorithm>
-//std::chrono::duration<double> generateTIME;
-//std::chrono::duration<double> avelableTIME;
-//std::chrono::duration<double> HTIME;
+std::chrono::duration<double> generateTIME;
+std::chrono::duration<double> avelableTIME;
+std::chrono::duration<double> HTIME;
+std::chrono::duration<double>hashTIME;
+
+std::chrono::duration<double> comperTime;
+std::chrono::duration<double>secssesorTIME;
+
+bool useCS;
+
 
 // std::atomic<bool> stop_printing(false); // Flag to stop the printing thread
 //
@@ -108,7 +115,7 @@ std::vector<Transition> getAvilableDetransitions(const std::unordered_map<std::s
 
  }
 std::vector<Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking) {
-   //auto startS1 = std::chrono::high_resolution_clock::now();
+   auto startS1 = std::chrono::high_resolution_clock::now();
 
    std::vector<Transition> avilableTransitions;
    avilableTransitions.reserve(petri.Transitions.size());  // Reserve memory to avoid multiple reallocations
@@ -134,8 +141,8 @@ std::vector<Transition> getAvilableTransitions(const std::unordered_map<std::str
      }
    }
 
-   // auto endS1 = std::chrono::high_resolution_clock::now();
-   // avelableTIME += endS1 - startS1;
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    avelableTIME += endS1 - startS1;
 
    return avilableTransitions;
  }
@@ -168,7 +175,7 @@ void GetNabor(std::vector<RCPSPState> &NodeList,int chosenNode,uint64_t &count) 
 }
 */
 double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<int, int>>activeTransitionIndices) {
- // auto startS3 = std::chrono::high_resolution_clock::now();
+  auto startS3 = std::chrono::high_resolution_clock::now();
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
   //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
@@ -217,8 +224,8 @@ double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<
   //   int asd;
   //   asd++;
   // }
-  // auto endS3 = std::chrono::high_resolution_clock::now();
-   //HTIME += endS3 - startS3;
+   auto endS3 = std::chrono::high_resolution_clock::now();
+   HTIME += endS3 - startS3;
 
  return h;
 
@@ -230,7 +237,7 @@ double getForwardHcost(std::vector<int>unstartedTransitions,
                       std::vector<std::pair<int, int>>activeTransitionIndices,
                       std::map<int, int> finishedActivities = {{0, 0}}
                       ) {
-  //auto startS3 = std::chrono::high_resolution_clock::now();
+  auto startS3 = std::chrono::high_resolution_clock::now();
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
    std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
@@ -279,16 +286,22 @@ double getForwardHcost(std::vector<int>unstartedTransitions,
     h = earlyfinishMap2.rbegin()->second;;
 
   }
-  if (1) {
-    return computeSequenceLowerBoundWithMax2(
+  if (useCS) {
+    h=computeSequenceLowerBoundWithMax2(
         unstartedTransitions,
         activeTransitionIndices,
         earlyfinishMap2,
         earlyfinishMap3,
         h,
         finishedActivities); // BL_Cs heuristic
-  } else {
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    avelableTIME += endS1 - startS3;
     return h;
+  } else {
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    avelableTIME += endS1 - startS3;
+    return h;
+
   }
 //return h;
  // return std::max(computeResourceCapacityLowerBound(unstartedTransitions,activeTransitionIndices,h), computeSequenceLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h));//BL_RC huristic
@@ -693,6 +706,9 @@ std::map<int, int> finishedActivities
         //         resourceTimeline[t][res] += demand;
         //     }
         // }
+
+
+
     }
 
 
@@ -1529,7 +1545,7 @@ double getBackwordsHcost(std::set<int>startedTransitions, std::vector<std::pair<
   */
 }
 RCPSPState::RCPSPState(): nodestatus(false) {
-//  auto startS1 = std::chrono::high_resolution_clock::now();
+  auto startS1 = std::chrono::high_resolution_clock::now();
 
   direction = true;
   startedActivitiys[0] = 0;
@@ -1558,8 +1574,8 @@ RCPSPState::RCPSPState(): nodestatus(false) {
     }
   }
 
- // auto endS1 = std::chrono::high_resolution_clock::now();
-  //generateTIME += endS1 - startS1;
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  generateTIME += endS1 - startS1;
 
   // Change: Get indices of available transitions instead of full Transition objects
   avilableTransitionIndices = getAvilableTransitionIndices(marking);
@@ -1615,7 +1631,7 @@ RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
 
 
 RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, int location, uint64_t &count) {
-  //auto startS4 = std::chrono::high_resolution_clock::now();
+  auto startS4 = std::chrono::high_resolution_clock::now();
 
   // Copy basic properties
   direction = predecesor.direction;
@@ -1651,8 +1667,8 @@ if (predecesor.g+predecesor.h==54) {
       if (active.duration==0) {
         status=0;
       }
-     // auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
+      auto endS1 = std::chrono::high_resolution_clock::now();
+      generateTIME += endS1-startS4;
     }
     if (!status) {
       g += active.duration;
@@ -1703,10 +1719,11 @@ if (predecesor.g+predecesor.h==54) {
       }
 
 
-      //auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
+      auto endS1 = std::chrono::high_resolution_clock::now();
+      generateTIME += endS1-startS4;
 
       h=getForwardHcost(unstartedTransitions,activeTransitionIndices,finishedActivitiys);
+      //h=0;
 
     }
 
@@ -1723,8 +1740,8 @@ if (predecesor.g+predecesor.h==54) {
       activeTransitionIndices.push_back({active.name, active.duration});
       startedActivitiys[active.name] = g;
 
-      //auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
+      auto endS1 = std::chrono::high_resolution_clock::now();
+      generateTIME += endS1-startS4;
     }
     else {
       g += active.duration;
@@ -1746,8 +1763,8 @@ if (predecesor.g+predecesor.h==54) {
           activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
         }
       }
-    //  auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
+      auto endS1 = std::chrono::high_resolution_clock::now();
+      generateTIME += endS1-startS4;
 
     }
   }
@@ -1903,7 +1920,7 @@ int asdasd;
   asdasd++;
 }
 std::vector<int> getAvilableTransitionIndices(const std::unordered_map<std::string, int>& marking) {
-  //auto startS4 = std::chrono::high_resolution_clock::now();
+  auto startS4 = std::chrono::high_resolution_clock::now();
 
   std::vector<int> availableIndices;
 
@@ -1925,8 +1942,8 @@ std::vector<int> getAvilableTransitionIndices(const std::unordered_map<std::stri
        availableIndices.push_back(i + 1);  // +1 assuming your indices start from 1
      }
    }
-//  auto endS1 = std::chrono::high_resolution_clock::now();
-  //avelableTIME += endS1-startS4;
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  avelableTIME += endS1-startS4;
    return availableIndices;
  }
 
@@ -2008,6 +2025,7 @@ bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
 
 RCPSPState_TT::RCPSPState_TT() {
   //startedActivitiys[0] = 0;
+  auto startS1 = std::chrono::high_resolution_clock::now();
 
   // Find initial and final places
   for (int i = 0; i < petri.places.size(); i++) {
@@ -2054,8 +2072,8 @@ RCPSPState_TT::RCPSPState_TT() {
 
 
 
-  // auto endS1 = std::chrono::high_resolution_clock::now();
-  //generateTIME += endS1 - startS1;
+   auto endS1 = std::chrono::high_resolution_clock::now();
+  generateTIME += endS1 - startS1;
 
   // Change: Get indices of available transitions instead of full Transition objects
 
@@ -2218,11 +2236,11 @@ double computeEarliestFinish(int activityId,
 double getForwardHcost_TT(std::vector<int>unstartedTransitions, std::map<int, int> finishedActivitiys
   //,std::string mode="defult"                     // activityID -> finish time
 ) {
-  //auto startS3 = std::chrono::high_resolution_clock::now();
+  auto startS3 = std::chrono::high_resolution_clock::now();
   //std::vector<std::pair<int, int>> activeTransitionIndices;
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-   //std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
+   std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
   //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
   double h;
   std::set<int> processedDependencies;
@@ -2251,7 +2269,7 @@ double getForwardHcost_TT(std::vector<int>unstartedTransitions, std::map<int, in
     }
 
     earlyfinishMap2[activityId] = maxFinishTime;
-    //earlyfinishMap3[activityId] = maxFinishTime;
+    earlyfinishMap3[activityId] = maxFinishTime;
     //std::cout <<activityId<<":"<< earlyfinishMap[activityId]+RCPSPex.activities[activityId-1].duration << std::endl;
     // For last element with duration 0, just use the max finish time of dependencies
   }
@@ -2262,18 +2280,25 @@ double getForwardHcost_TT(std::vector<int>unstartedTransitions, std::map<int, in
     h = earlyfinishMap2.rbegin()->second;;
 
   }
-  // if (mode == "cs") {
-  //   return computeSequenceLowerBoundWithMax2(
-  //       unstartedTransitions,
-  //       activeTransitionIndices,
-  //       earlyfinishMap2,
-  //       earlyfinishMap3,
-  //       h,
-  //       finishedActivitiys); // BL_Cs heuristic
-  // }
-  // else {
+  if (useCS) {
+    std::vector<std::pair<int, int>> activeTransitionIndices;
+
+    h=computeSequenceLowerBoundWithMax2(
+        unstartedTransitions,
+         activeTransitionIndices,
+        earlyfinishMap2,
+        earlyfinishMap3,
+        h,
+        finishedActivitiys); // BL_Cs heuristic
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    HTIME += endS1 - startS3;
     return h;
- // }
+  }
+  else {
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    HTIME += endS1 - startS3;
+    return h;
+  }
  // return h;
  // return std::max(computeResourceCapacityLowerBound(unstartedTransitions,activeTransitionIndices,h), computeSequenceLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h));//BL_RC huristic
   //return computeResourceCapacityLowerBound(unstartedTransitions,activeTransitionIndices,h);//BL_Cs huristic

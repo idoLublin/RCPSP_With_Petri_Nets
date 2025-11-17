@@ -100,23 +100,34 @@ struct AStarCompareWithF {
 
 bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
+	auto startS1 = std::chrono::high_resolution_clock::now();
+
 		// Primary: f_score (lower f = higher priority, so i1 should come BEFORE i2 if i1.f < i2.f)
 		if (!fequal(i1.f, i2.f)) {
+			auto endS1 = std::chrono::high_resolution_clock::now();
+			comperTime += endS1 - startS1;
 			return fgreater(i1.f, i2.f); // i1 has lower priority if it has higher f
 		}
 
 		// Secondary: g_score (higher g = higher priority when f is equal)
 		if (!fequal(i1.g, i2.g)) {
+			auto endS1 = std::chrono::high_resolution_clock::now();
+			comperTime += endS1 - startS1;
 			return fless(i1.g, i2.g); // i1 has lower priority if it has lower g
 		}
 
 		// Tertiary: started_activities (more started = higher priority)
 		if (i1.data.startedActivitiys.size() != i2.data.startedActivitiys.size()) {
+			auto endS1 = std::chrono::high_resolution_clock::now();
+			comperTime += endS1 - startS1;
 			return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size(); // i1 has lower priority if fewer started
 		}
 
 		// Quaternary: finished_activities (more finished = higher priority)
-		return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size(); // i1 has lower priority if fewer finished
+	auto endS1 = std::chrono::high_resolution_clock::now();
+	comperTime += endS1 - startS1;
+	return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size(); // i1 has lower priority if fewer finished
+
 	}
 	 };
 /*

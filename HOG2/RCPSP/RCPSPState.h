@@ -24,12 +24,9 @@ class RCPSPState {
 
         // Any additional custom cleanup logic can go here
     }
-  std::unordered_map<std::string, int> marking;
-   std::vector<int> unstartedTransitions;
-  //std::vector<Transition> avilableTransition;
-  //std::vector<Transition> activeTransitions;
+    std::unordered_map<std::string, int> marking;
+    std::vector<int> unstartedTransitions;
     std::vector<int> avilableTransitionIndices;  // Store transition IDs
-    //std::vector<int> avilableDeTransitionIndices;  // Store transition IDs
     std::vector<std::pair<int, int>> activeTransitionIndices;  // Store transition ID and remaining duration
 
     bool direction;
@@ -41,11 +38,10 @@ class RCPSPState {
 
   std::map<int, int> startedActivitiys;
   std::map<int, int> finishedActivitiys;
+
   double g=0;
   double h=0;
 
-  //int GetG();
-  //int checkEnd();
   bool operator==(const RCPSPState& other) const;
 };
 
@@ -116,24 +112,6 @@ public:
 
     // --- Comparison ---
     bool operator==(const RCPSPState_TT& other) const;
-
-    // --- Logic (to be implemented) ---
-  //  std::vector<int> getAvailableTransitionIndices_TT() const;
-    // std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
-    //     const std::vector<int> &unstartedTransitions,
-    //     const std::map<int, int> &finishedActivities,
-    //     const std::unordered_map<std::string, std::vector<std::pair<int, int>>> &marking) ;
-//     std::vector<std::pair<int, int>> checkAvailableTransitions_TT(
-//         const std::vector<int> &optionalTransitions,
-//         const std::map<int, int> &finishedActivities,
-//         const std::unordered_map<std::string, std::vector<std::pair<int, int>>> &marking
-//     );
-//     std::vector<int> getOptionalTransitions_TT(
-//     const std::vector<int> &unstartedTransitions,
-//     const std::map<int, int> &startedActivities  // Note: started, not finished
-// ) ;
-    // void startTransition(int transitionId, int currentTime);
-
 };
 
 

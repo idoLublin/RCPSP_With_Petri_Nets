@@ -15,7 +15,6 @@
 // searchNode node;
 //   };
 std::uint64_t count=0;
-//int Nsize=0;
 typedef int action;
 
 class RCPSP : public SearchEnvironment<RCPSPState,int>{
@@ -65,30 +64,7 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
 
 inline RCPSP::RCPSP() {
 }
-/*
-inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
 
-
-  if (nodeID.activeTransitions.size()>0) {
-
-    count++;
-    int t=0;
-    for (int i=0;i<nodeID.activeTransitions.size();i++) {
-       if (nodeID.activeTransitions[i].duration<nodeID.activeTransitions[t].duration) {
-         t=i;
-       }
-      //neighbors.emplace_back(RCPSPState(nodeID,nodeID.activeTransitions[t],0,t,count));
-    }
-    neighbors.emplace_back(RCPSPState(nodeID,nodeID.activeTransitions[t],0,t,count));
-  }
-  for (int i=0;i<nodeID.avilableTransition.size();i++) {
-    count++;
-    neighbors.emplace_back(RCPSPState(nodeID,nodeID.avilableTransition[i],1,i,count));
-  }
-  auto endS1 = std::chrono::high_resolution_clock::now();
-
-}
-*/
 inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
 
@@ -135,44 +111,6 @@ inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) cons
 }
   return false;
 }
-/*
-inline double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfinishMap,
-                                            const std::vector<int>& unstartedTransitions,
-                                            const std::vector<Transition>& activeTransitions,
-                                            const RCPSP_example& RCPSPex) {
-  // If we've already computed this activity's early finish time, return it
-  if (earlyfinishMap.find(activityId) != earlyfinishMap.end()) {
-    return earlyfinishMap[activityId];
-  }
-
-  int maxFinishTime = 0;
-
-  // Process all dependencies
-  for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-    int depId = std::stoi(dep) - 1;
-
-    // Recursively compute the early finish time of the dependency if not already computed
-    if (earlyfinishMap.find(depId + 1) == earlyfinishMap.end()) {
-      calculateEarlyFinishRecursive(depId + 1, earlyfinishMap, unstartedTransitions, activeTransitions, RCPSPex);
-    }
-
-    if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
-      int duration = getTransitionDuration(activeTransitions, std::stoi(dep));
-      if (duration != -1) {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + duration);
-      } else {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + RCPSPex.activities[depId].duration);
-      }
-    } else {
-      maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1]);
-    }
-  }
-
-  // Store and return the result
-  earlyfinishMap[activityId] = maxFinishTime;
-  return maxFinishTime;
-}
-*/
 
 double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfinishMap,
                                     const std::vector<int>& unstartedTransitions,
@@ -216,106 +154,10 @@ double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfi
 
 inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) const {
  return state1.h;
-  // for (int activityId: state1.unstartedTransitions) {
-  //   int maxFinishTime = 0;
-  //   std::set<int> processedDependencies;
-  //
-  //   for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-  //     int depId = std::stoi(dep) - 1;
-  //     // if (processedDependencies.count(depId) > 0) continue;
-  //     // processedDependencies.insert(depId);
-  //     if (std::find(state1.unstartedTransitions.begin(), state1.unstartedTransitions.end(), depId + 1) != state1.unstartedTransitions.end()) {
-  //       int duration = getTransitionDuration2(state1.activeTransitionIndices, std::stoi(dep));
-  //       if (duration !=-1) {
-  //         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
-  //         //if (RCPSPex.activities[depId].duration !=duration) {
-  //         //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
-  //         //}
-  //       }
-  //       else {
-  //         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-  //
-  //       }
-  //     }
-  //     else {
-  //       maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-  //     }
-  //   }
-  //
-  //   earlyfinishMap2[activityId] = maxFinishTime;
-  //   //std::cout <<activityId<<":"<< earlyfinishMap[activityId]+RCPSPex.activities[activityId-1].duration << std::endl;
-  //   // For last element with duration 0, just use the max finish time of dependencies
-  // }
-  // if (earlyfinishMap2.size()==0) {
-  //   h = 0;
-  // }
-  // else {
-  //   h = earlyfinishMap2.rbegin()->second;;
-  //
-  // }
-  // // if (h != newH) {
-  // //   int asd;
-  // //   asd++;
-  // // }
-  // auto endS3 = std::chrono::high_resolution_clock::now();
-  // HTIME += endS3 - startS3;
-  //
-  // return h;
-  /* double newH = 0;
-  // std::map<int, int> earlyfinishMap; // Map to store activity IDs and their early finish times
-  //
-  // if (!state1.unstartedTransitions.empty()) {
-  //   // We want the maximum early finish time, which should be the last activity
-  //   int lastActivity = state1.unstartedTransitions.back(); // Assuming the last activity is the one we care about
-  //   newH = calculateEarlyFinishRecursive(lastActivity, earlyfinishMap,
-  //                                   state1.unstartedTransitions,
-  //                                   state1.activeTransitions,
-  //                                   RCPSPex);
-  // }
-  // auto endS3 = std::chrono::high_resolution_clock::now();
-  // HTIME += endS3 - startS3;
-  // return newH;*/
-
 }
-/*
-inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) const {
-  auto startS3 = std::chrono::high_resolution_clock::now();
-
-  double newH = 0;
-  std::map<int, int> earlyfinishMap; // Map to store activity IDs and their early finish times
-
-  if (!state1.unstartedTransitions.empty()) {
-    // Convert activeTransitionIndices to a compatible format for the recursive function
-    std::vector<std::pair<int, int>> activeTransitions;
-    for (const auto& [transIdx, duration] : state1.activeTransitionIndices) {
-      activeTransitions.push_back({transIdx, duration});
-    }
-
-    // We want the maximum early finish time, which should be the last activity
-    int lastActivity = state1.unstartedTransitions.back(); // Assuming the last activity is the one we care about
-    newH = calculateEarlyFinishRecursive(lastActivity, earlyfinishMap,
-                                    state1.unstartedTransitions,
-                                    activeTransitions,
-                                    RCPSPex);
-  }
-
-  auto endS3 = std::chrono::high_resolution_clock::now();
-  HTIME += endS3 - startS3;
-  return newH;
-}
-*/
 
 inline double RCPSP::GCost(const RCPSPState &state1, const RCPSPState &state2) const {
-  // int remain=0;
-  // for (int i = state2.activeTransitions.size() - 1; i >= 0; --i) {
-  //   if (state2.activeTransitions[i].duration > remain) {
-  //     remain = state2.activeTransitions[i].duration;
-  //   }
-  // }
-    //return remain-state2.g;
    return state2.g-state1.g;//+state1.g
-    //return state2.g;
-
 }
 
 //NOT IN USE OF A*
@@ -324,9 +166,6 @@ inline uint64_t RCPSP::GetActionHash(int act) const {
   return std::hash<int>()(act);
 }
 inline void RCPSP::GetActions(const RCPSPState &nodeID, std::vector<int> &actions) const {
-  // for (int i = 0; i < nodeID.sons.size(); ++i) {
-  //   actions.push_back(i); // Add the index of each available transition as an action.
-  // }
 }
 
 inline bool RCPSP::InvertAction(int &a) const {
@@ -335,11 +174,7 @@ inline bool RCPSP::InvertAction(int &a) const {
 }
 
 inline std::vector<RCPSPState> RCPSP::GetSuccessors(const RCPSPState &nodeID) const {
-
      std::vector<RCPSPState> neighbors;
-    // for (int i = 0; i < nodeID.sons.size(); ++i) {
-    //   neighbors.push_back(nodeID.sons[i]);
-    // }
     return neighbors;
 }
 
@@ -348,21 +183,13 @@ inline int RCPSP::GetAction(const RCPSPState &nodeID, const RCPSPState &nodeID2)
   return 0;
 }
 
-//inline uint64_t RCPSP::GetStateHash(const RCPSPState &s) const {
- // return s.name;
-//}
 inline int RCPSP::GetNumSuccessors(const RCPSPState &stateID) const {
-  // int i=0;
-  // if (stateID.activeTransitions.size() > 0){i=1;}
-  // return stateID.avilableTransition.size()+i;
   return 0;
 }
-
-
-
 inline void RCPSP::ApplyAction(RCPSPState &s, int a) const {
 
 }
+
 inline double RCPSP::GCost(const RCPSPState &node, const int &act) const {
   return node.g;
 }
@@ -569,6 +396,7 @@ else {
   }
 
 };
+
 class ForwardRCPSPHeuristic : public Heuristic<RCPSPState_bi> {
 public:
   double HCost(const RCPSPState_bi &current, const RCPSPState_bi &goal) const override {
@@ -605,10 +433,6 @@ public:
 };
 
 inline RCPSP_TT::RCPSP_TT() {
-
-
-  //RCPSPex.computeAndStoreDeepDependencies();
-
 }
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
@@ -627,13 +451,7 @@ inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &g
     return true;
   else
     return false;
-  // const auto& placeMarking = node.marking.at(finalstatename);
-  // if (placeMarking.at("count") == 1) {
-  //   return true;
-  // }
-  // else {
-  //   return false;
-  // }
+
 }
 inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
   // 9. Optimized independent set calculation
@@ -711,12 +529,6 @@ inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
 
   std::size_t seed = 0;
-
-  // for (const auto& pair : node.startedActivitiys) {
-  //   seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
-
   for (const auto& pair : node.finishedActivitiys) {
     seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
@@ -750,9 +562,6 @@ inline bool RCPSP_TT::InvertAction(int &a) const {
 inline std::vector<RCPSPState_TT> RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID) const {
 
   std::vector<RCPSPState_TT> neighbors;
-  // for (int i = 0; i < nodeID.sons.size(); ++i) {
-  //   neighbors.push_back(nodeID.sons[i]);
-  // }
   return neighbors;
 }
 

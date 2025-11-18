@@ -381,12 +381,12 @@ void runBenchmark() {
     //file << "group,exam,initialHcost" << std::endl;
 //
 
-    // for(int i=1;i<49;i++) {
-    //      for(int j=1;j<11;j++) {
-    //      solveRCPSP(i,j,filename,"j60");
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
+    for(int i=1;i<49;i++) {
+         for(int j=1;j<11;j++) {
+         solveRCPSP(i,j,filename,"j60");
+      //   getinitialHcost(i,j,filename);
+         }
+     }
 
      //solveRCPSP(34, 9, filename);
   //   solveRCPSP(34, 10, filename);

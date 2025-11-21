@@ -1,8 +1,16 @@
+#ifndef PETRICLASSES_H  // <--- 1. ADD THIS (Check)
+#define PETRICLASSES_H
+
 #include <string>
 #include <map>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
+#include <set>
+
+
+namespace P_RCPSP {
 class Activity {
 public:
     int duration;
@@ -230,3 +238,8 @@ public:
     }
 
 };
+
+
+} // <--- END NAMESPACE
+
+#endif // <--- 4. END GUARD (ADD THIS LINE AT THE VERY BOTTOM)

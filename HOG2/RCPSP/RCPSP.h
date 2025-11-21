@@ -9,6 +9,7 @@
 #include "../utils//GLUtil.h"
 #include <functional>
 
+using namespace P_RCPSP;
 
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
@@ -16,7 +17,7 @@
 //   };
 std::uint64_t count=0;
 typedef int action;
-
+namespace P_RCPSP {
 class RCPSP : public SearchEnvironment<RCPSPState,int>{
   public:
   RCPSP();
@@ -36,7 +37,7 @@ class RCPSP : public SearchEnvironment<RCPSPState,int>{
   double GCost(const RCPSPState &node, const int &act) const override;
   };
 
-
+}
 
 
 

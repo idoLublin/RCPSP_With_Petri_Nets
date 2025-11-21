@@ -19,12 +19,9 @@
 #include <atomic>
 #include <iostream>
 // #include <windows.h>
-
+#include <omp.h> // Include this at the top of Driver.cpp
 #include <fstream>
 #include <vector>
-
-
-
 
 void runBenchmark();
 void runSolvedProblems();
@@ -60,9 +57,12 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     comperTime= std::chrono::duration<double>(0);
     secssesorTIME= std::chrono::duration<double>(0);
     clock_t setupTIME = clock();
+
     getPetri(petri, group, exam,problemType);
     getRCPSP(RCPSPex, group, exam,problemType);
+
     RCPSPex.computeAndStoreDeepDependencies();
+
     RCPSPState first;
     RCPSPState last = first;
     last.h = 0;
@@ -379,14 +379,32 @@ void runBenchmark() {
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
     file << "group,exam,time,finished,makespan,expand number,generated number,depth,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
-//
+omp_set_num_threads(2);
+    //omp_set_num_threads(4); // 1. Set the core count.
+#pragma omp parallel for collapse(2) schedule(dynamic)
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
 
-    for(int i=1;i<49;i++) {
-         for(int j=1;j<11;j++) {
-         solveRCPSP(i,j,filename,"j60");
-      //   getinitialHcost(i,j,filename);
-         }
-     }
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            solveRCPSP(i, j, filename, "j30");
+        }
+    }
+
+
+
+    // solveRCPSP(-1,-1,filename,"j30");
+    //
+    // for(int i=16;i<17;i++) {
+    //      for(int j=5;j<11;j++) {
+    //      solveRCPSP(i,j,filename,"j30");
+    //      solveRCPSP_TT(i,j,filename,"j30");
+    //   //   getinitialHcost(i,j,filename);
+    //      }
+    //  }
 
      //solveRCPSP(34, 9, filename);
   //   solveRCPSP(34, 10, filename);

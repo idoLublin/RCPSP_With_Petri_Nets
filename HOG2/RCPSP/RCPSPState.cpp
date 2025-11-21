@@ -5,12 +5,18 @@
 #include <vector>
 #include <set>
 #include <unordered_set>
-
+#include "petriclasses.h"
+#include "RCPSPState.h"
 #include "RCPSPState.h"
 #include <thread>
 #include <chrono>
 #include <atomic>
 #include <algorithm>
+#include <climits>
+
+using namespace P_RCPSP;
+
+
 std::chrono::duration<double> generateTIME;
 std::chrono::duration<double> avelableTIME;
 std::chrono::duration<double> HTIME;
@@ -31,7 +37,7 @@ bool useCS;
 //   }
 // }
 //std::vector<Transition> getAvilableTransitions(std::map<std::string, int> marking);
-std::vector<Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking);
+std::vector<P_RCPSP::Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking);
 double computeWorkloadLowerBoundWithMax(
     const std::vector<int>& unfinishedTransitions,
     const std::vector<std::pair<int, int>>& activeTransitionIndices,
@@ -83,8 +89,8 @@ double getBackwardHcost2(
 
 void GetNabor(std::vector<RCPSPState> &NodeList,int chosenNode,int &count);
 //int ChooseExpansion(std::vector<RCPSPState> network);
- PetriExample petri;
- RCPSP_example RCPSPex;
+ thread_local PetriExample petri;
+ thread_local RCPSP_example RCPSPex;
  int main2() {
    return 0;
  }
@@ -416,7 +422,7 @@ std::map<int, int> latefinishTimes;
         // Get forward dependencies (successors) for current activity
         const auto& successors = RCPSPex.dependencies[i - 1]; // Convert to 0-based
 
-        int minLateFinish = INT_MAX;
+        int minLateFinish = 999999;
         bool hasValidSuccessor = false;
 
         // Find the minimum late finish time among all successors
@@ -635,7 +641,7 @@ double computeCoreTimeLowerBoundWithMax(
     // --- Step 2: build capacity map and compute total work
     std::map<std::string, int> capacityMap;
     double totalWork = 0.0;
-    int minCapacity = INT_MAX;
+    int minCapacity = 9999999;
 
     for (const auto& [res, cap] : RCPSPex.resources) {
         capacityMap[res] = cap;

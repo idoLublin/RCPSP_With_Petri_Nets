@@ -2,7 +2,7 @@
 // Created by idolu on 06/01/2025.
 //
 #pragma once
-
+#include <set>
 #include "petriclasses.h"
 #include "readPetri.cpp"
 #ifndef RCPSPSTATE_H
@@ -12,7 +12,7 @@ std::string initialstatename;
 class RCPSPState {
   public:
   RCPSPState();
-  RCPSPState(RCPSPState predecessor,Transition newTransition,bool status,int location,uint64_t &count);
+  RCPSPState(RCPSPState predecessor,P_RCPSP::Transition newTransition,bool status,int location,uint64_t &count);
     ~RCPSPState() {
         // Clear STL containers explicitly (optional, as they would be destroyed automatically)
         marking.clear();
@@ -48,7 +48,7 @@ class RCPSPState {
 class RCPSPState_bi {
 public:
     RCPSPState_bi();
-    RCPSPState_bi(RCPSPState_bi predecessor,Transition newTransition,bool status,int location,uint64_t &count);
+    RCPSPState_bi(RCPSPState_bi predecessor,P_RCPSP::Transition newTransition,bool status,int location,uint64_t &count);
     ~RCPSPState_bi() {
         // Clear STL containers explicitly (optional, as they would be destroyed automatically)
         marking.clear();

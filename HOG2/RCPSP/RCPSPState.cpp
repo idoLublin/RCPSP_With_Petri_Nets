@@ -25,6 +25,9 @@ std::chrono::duration<double>hashTIME;
 std::chrono::duration<double> comperTime;
 std::chrono::duration<double>secssesorTIME;
 
+
+
+
 bool useCS;
 
 
@@ -47,7 +50,7 @@ double computeWorkloadLowerBoundWithMax(
 std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
     const std::vector<int> &unstartedTransitions,
     const std::map<int, int> &finishedActivities,
-    const std::unordered_map<std::string, std::vector<std::pair<int, int>>> &marking
+    const std::vector<std::vector<std::pair<int, int>>>&marking
 );
 std::vector<int> getCriticalPath(const std::map<int, int>& earlyStartTimes,
                                  int lastActivityId,
@@ -94,66 +97,67 @@ void GetNabor(std::vector<RCPSPState> &NodeList,int chosenNode,int &count);
  int main2() {
    return 0;
  }
-std::vector<Transition> getAvilableDetransitions(const std::unordered_map<std::string, int>& marking) {
-   std::vector<Transition> availableDetransitions;
-   availableDetransitions.reserve(petri.Transitions.size());
+// std::vector<Transition> getAvilableDetransitions(const std::unordered_map<std::string, int>& marking) {
+//    std::vector<Transition> availableDetransitions;
+//    availableDetransitions.reserve(petri.Transitions.size());
+//
+//    for (const auto& transition : petri.Transitions) {
+//      bool canUndo = true;
+//
+//      for (const auto& arc : transition.arcs_out) {  // Instead of arcs_in, we check arcs_out
+//        auto it = marking.find(arc.first);
+//        int tokenCount = (it != marking.end()) ? it->second : 0;
+//
+//        if (tokenCount < arc.second) {
+//          canUndo = false;  // Not enough tokens in the output place to undo
+//          break;
+//        }
+//      }
+//
+//      if (canUndo) {
+//        availableDetransitions.push_back(transition);
+//      }
+//    }
+//
+//    return availableDetransitions;
+//
+//
+// //  }
+// std::vector<Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking) {
+//    auto startS1 = std::chrono::high_resolution_clock::now();
+//
+//    std::vector<Transition> avilableTransitions;
+//    avilableTransitions.reserve(petri.Transitions.size());  // Reserve memory to avoid multiple reallocations
+//
+//    for (const auto& transition : petri.Transitions) {
+//      int avilable = 0, requirment = 0;
+//      bool canFire = true;
+//
+//      for (const auto& arc : transition.arcs_in) {
+//        auto it = marking.find(arc.first);
+//        int tokenCount = (it != marking.end()) ? it->second : 0;
+//
+//        if (tokenCount < arc.second) {
+//          canFire = false;  // Not enough tokens to fire
+//          break;            // Stop checking further
+//        }
+//        avilable += std::min(tokenCount, arc.second);
+//        requirment += arc.second;
+//      }
+//
+//      if (canFire) {
+//        avilableTransitions.push_back(transition);
+//      }
+//    }
+//
+//     auto endS1 = std::chrono::high_resolution_clock::now();
+//     avelableTIME += endS1 - startS1;
+//
+//    return avilableTransitions;
+//  }
 
-   for (const auto& transition : petri.Transitions) {
-     bool canUndo = true;
+std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking);
 
-     for (const auto& arc : transition.arcs_out) {  // Instead of arcs_in, we check arcs_out
-       auto it = marking.find(arc.first);
-       int tokenCount = (it != marking.end()) ? it->second : 0;
-
-       if (tokenCount < arc.second) {
-         canUndo = false;  // Not enough tokens in the output place to undo
-         break;
-       }
-     }
-
-     if (canUndo) {
-       availableDetransitions.push_back(transition);
-     }
-   }
-
-   return availableDetransitions;
-
-
- }
-std::vector<Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking) {
-   auto startS1 = std::chrono::high_resolution_clock::now();
-
-   std::vector<Transition> avilableTransitions;
-   avilableTransitions.reserve(petri.Transitions.size());  // Reserve memory to avoid multiple reallocations
-
-   for (const auto& transition : petri.Transitions) {
-     int avilable = 0, requirment = 0;
-     bool canFire = true;
-
-     for (const auto& arc : transition.arcs_in) {
-       auto it = marking.find(arc.first);
-       int tokenCount = (it != marking.end()) ? it->second : 0;
-
-       if (tokenCount < arc.second) {
-         canFire = false;  // Not enough tokens to fire
-         break;            // Stop checking further
-       }
-       avilable += std::min(tokenCount, arc.second);
-       requirment += arc.second;
-     }
-
-     if (canFire) {
-       avilableTransitions.push_back(transition);
-     }
-   }
-
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    avelableTIME += endS1 - startS1;
-
-   return avilableTransitions;
- }
-
-std::vector<int> getAvilableTransitionIndices(const std::unordered_map<std::string, int>& marking);
 std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::string, int>& marking);
 
 double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<int, int>>activeTransitionIndices) {
@@ -1066,47 +1070,62 @@ double getBackwordsHcost(std::set<int>startedTransitions, std::vector<std::pair<
   return h;
   */
 }
-
-RCPSPState::RCPSPState(): nodestatus(false) {
+RCPSPState::RCPSPState() : nodestatus(false) {
+  // 1. Safety Valve
   auto startS1 = std::chrono::high_resolution_clock::now();
-
   direction = true;
   startedActivitiys[0] = 0;
 
-  // Find initial and final places
+  // 2. Initialize Marking Vector (Fast!)
+  marking.resize(petri.places.size(), 0);
+
+  // 3. LOOP 1: Setup Places
   for (int i = 0; i < petri.places.size(); i++) {
-    if (petri.places[i].arcs_out.size() == 0) {
+
+    // Check Final Node (Just for bookkeeping)
+    if (petri.places[i].arcs_out.empty()) {
       finalstatename = petri.places[i].name;
     }
-    if (petri.places[i].arcs_in.size() == 0) {
+
+    // Check Initial Node (The ONLY one that should be 1)
+    if (petri.places[i].arcs_in.empty()) {
       initialstatename = petri.places[i].name;
+      marking[i] = 1; // <--- INSIDE THE IF. ONLY HAPPENS ONCE.
+    }
+    else {
+      // For everyone else, check the JSON state
+      // Usually this is 0, so this block barely runs.
+      if (!petri.places[i].state.empty() && !petri.places[i].state[0].empty()) {
+        int val = petri.places[i].state[0][0];
+        if (val > 0) {
+          marking[i] = (short)val;
+        }
+      }
     }
   }
+  // 4. LOOP 2: Setup Resources (CRITICAL MISSING PIECE)
+  // This sets R1=4, R2=2, etc. Without this, resources stay 0.
+  for (const auto& [resName, capacity] : RCPSPex.resources) {
+    int resID = petri.place_name_to_id.at(resName);
+    marking[resID] = (short)capacity;
+  }
 
-  // Initialize unstartedTransitions
+  // 5. Initialize Unstarted Transitions
+  unstartedTransitions.reserve(petri.Transitions.size());
   for (int i = 1; i < petri.Transitions.size(); i++) {
     unstartedTransitions.push_back(i + 1);
-  }
-
-  // Initialize marking
-  for (int i = 0; i < petri.places.size(); i++) {
-    if (petri.places[i].name == initialstatename) {
-      marking[petri.places[i].name] = 1;
-    } else {
-      marking[petri.places[i].name] = petri.places[i].state[0][0];
-    }
   }
 
   auto endS1 = std::chrono::high_resolution_clock::now();
   generateTIME += endS1 - startS1;
 
-  // Change: Get indices of available transitions instead of full Transition objects
+  // 6. GET AVAILABLE (Do this ONCE at the end)
+  // Now that marking is fully built, calculate what can run.
   avilableTransitionIndices = getAvilableTransitionIndices(marking);
 
   g = 0;
   name = 0;
 }
-
 //not working
 RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
  // auto startS1 = std::chrono::high_resolution_clock::now();
@@ -1142,9 +1161,9 @@ RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
   //generateTIME += endS1 - startS1;
 
   // Change: Get indices of available transitions instead of full Transition objects
-  avilableTransitionIndices = getAvilableTransitionIndices(marking);
+  //avilableTransitionIndices = getAvilableTransitionIndices(marking);
 
-  avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
+ // avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
   g_b = 0;
   g_f = 0;
   name = 0;
@@ -1176,7 +1195,12 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
       h = predecesor.h;
 
       // Apply arcs_in from the transition
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
+      for (const auto& arc : petri.Transitions[active.name-1].arcs_in_indices) {
+
+        // arc.first  is now the integer Place ID (e.g., 5)
+        // arc.second is the token count (e.g., 1)
+
+        // This is a direct array access. 1 CPU cycle.
         marking[arc.first] -= arc.second;
       }
 
@@ -1219,7 +1243,7 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
       for (int id : finishedNow) {
         finishedActivitiys[id] = g;
 
-        for (const auto& arc : petri.Transitions[id - 1].arcs_out) {
+        for (const auto& arc : petri.Transitions[id - 1].arcs_out_indices) {
           marking[arc.first] += arc.second;
         }
 
@@ -1254,7 +1278,7 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
     if (status) {
       h = predecesor.h;
 
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
+      for (const auto& arc : petri.Transitions[active.name-1].arcs_out_indices) {
         marking[arc.first] -= arc.second;
       }
 
@@ -1278,9 +1302,9 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
           activeTransitionIndices[i].second=0;
         }
         if (activeTransitionIndices[i].first == active.name) {
-          for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
-            marking[arc.first] += arc.second;
-          }
+          // for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
+          //   marking[arc.first] += arc.second;
+          // }
           activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
         }
       }
@@ -1321,8 +1345,13 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
       //h_f = predecesor.h_f;
 
       // Apply arcs_in from the transition
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
-        marking[arc.first] -= arc.second;
+      for (const auto& arc : petri.Transitions[active.name-1].arcs_in_indices) {
+
+        // arc.first  is now the integer Place ID (e.g., 5)
+        // arc.second is the token count (e.g., 1)
+
+        // This is a direct array access. 1 CPU cycle.
+       // marking[arc.first] -= arc.second;
       }
 
       // Store index and duration instead of full Transition
@@ -1351,9 +1380,9 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
         }
         if (activeTransitionIndices[i].first == active.name) {
           // Apply arcs_out from the transition
-          for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
-            marking[arc.first] += arc.second;
-          }
+          // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
+          //   marking[arc.first] += arc.second;
+          // }
           activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
         }
 
@@ -1370,7 +1399,7 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
     f=2*g_f+h_f-h_b;
     //f=2*g_f+h_f;
 
-    avilableTransitionIndices = getAvilableTransitionIndices(marking);
+    //avilableTransitionIndices = getAvilableTransitionIndices(marking);
   }
   else {
 
@@ -1379,9 +1408,9 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
     if (status) {
       //h_b = predecesor.h_b;
 
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
-        marking[arc.first] -= arc.second;
-      }
+      // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
+      //   marking[arc.first] -= arc.second;
+      // }
 
       activeTransitionIndices.push_back({active.name, 0});
       auto it = std::find(finishedActivitiys.begin(), finishedActivitiys.end(), active.name);
@@ -1410,9 +1439,9 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
           activeTransitionIndices[i].second=petri.Transitions[activeTransitionIndices[i].first-1].duration;
         }
         if (activeTransitionIndices[i].first == active.name) {
-          for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
-            marking[arc.first] += arc.second;
-          }
+          // for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
+          //   marking[arc.first] += arc.second;
+          // }
           activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
         }
       }
@@ -1441,33 +1470,49 @@ int asdasd;
   asdasd++;
 }
 
-std::vector<int> getAvilableTransitionIndices(const std::unordered_map<std::string, int>& marking) {
+// CHANGE 1: Input is now a fast vector, not a slow map
+std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking) {
+
+
+
   auto startS4 = std::chrono::high_resolution_clock::now();
 
   std::vector<int> availableIndices;
 
-   // Loop through all transitions (assuming they're indexed starting from 1)
-   for (int i = 0; i < petri.Transitions.size(); i++) {
-     const Transition& t = petri.Transitions[i];
-     bool available = true;
+  // Optimization: Reserve memory to prevent re-allocations
+  // We know it can't be bigger than the total number of transitions
+  availableIndices.reserve(petri.Transitions.size());
 
-     // Check if all input arcs have sufficient tokens
-     for (const auto& arc : t.arcs_in) {
-       auto it = marking.find(arc.first);
-       if (it == marking.end() || it->second < arc.second) {
-         available = false;
-         break;
-       }
-     }
+  // Loop through all transitions
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    const P_RCPSP::Transition& t = petri.Transitions[i];
+    bool available = true;
 
-     if (available) {
-       availableIndices.push_back(i + 1);  // +1 assuming your indices start from 1
-     }
-   }
+    // CHANGE 2: Use the Integer indices we built in getPetri
+    // t.arcs_in_indices is vector<pair<int, int>>
+    for (const auto& arc : t.arcs_in_indices) {
+
+      // CHANGE 3: Direct Access (The Speedup)
+      // arc.first  = Place ID (0, 1, 2...)
+      // arc.second = Weight (Tokens needed)
+
+      // No .find(), no hashing, just array access!
+      if (marking[arc.first] < arc.second) {
+        available = false;
+        break;
+      }
+    }
+
+    if (available) {
+      availableIndices.push_back(i + 1);
+    }
+  }
+
   auto endS1 = std::chrono::high_resolution_clock::now();
   avelableTIME += endS1-startS4;
-   return availableIndices;
- }
+
+  return availableIndices;
+}
 
 std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::string, int>& marking) {
    std::vector<int> availableIndices;
@@ -1478,13 +1523,13 @@ std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::st
      bool available = true;
 
      // Check output arcs instead of input arcs for detransitions
-     for (const auto& arc : t.arcs_out) {
-       auto it = marking.find(arc.first);
-       if (it == marking.end() || it->second < arc.second) {
-         available = false;
-         break;
-       }
-     }
+     // for (const auto& arc : t.arcs_out) {
+     //   auto it = marking.find(arc.first);
+     //   if (it == marking.end() || it->second < arc.second) {
+     //     available = false;
+     //     break;
+     //   }
+     // }
 
      if (available) {
        availableIndices.push_back(i + 1);
@@ -1547,57 +1592,70 @@ bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
 
 RCPSPState_TT::RCPSPState_TT() {
   //startedActivitiys[0] = 0;
-  auto startS1 = std::chrono::high_resolution_clock::now();
+auto startS1 = std::chrono::high_resolution_clock::now();
 
-  // Find initial and final places
-  for (int i = 0; i < petri.places.size(); i++) {
-    if (petri.places[i].arcs_out.size() == 0) {
-      finalstatename = petri.places[i].name;
-    }
-    if (petri.places[i].arcs_in.size() == 0) {
-      initialstatename = petri.places[i].name;
-    }
-  }
+    // 1. Initialize Vectors ONCE
+    marking.resize(petri.places.size()); // Vectors start empty
+    unstartedTransitions.reserve(petri.Transitions.size());
 
-  // Initialize unstartedTransitions
+    // -------------------------------------------------------
+    // STEP A: Setup Places (Start/End nodes & Initial tokens)
+    // -------------------------------------------------------
+    for (int i = 0; i < petri.places.size(); ++i) {
+        const auto& place = petri.places[i];
+
+        // Identify Start/End Names
+        if (place.arcs_out.empty()) finalstatename = place.name;
+        if (place.arcs_in.empty())  initialstatename = place.name;
+
+        // Set Initial Tokens (Start Node = 1)
+        if (place.name == initialstatename) {
+            marking[i].push_back({1, 0});
+        }
+        else {
+            // Check JSON for other tokens (rare, but possible)
+            if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                if (val > 0) marking[i].push_back({val, 0});
+            }
+        }
+    }
+
+    // -------------------------------------------------------
+    // STEP B: Setup Resources (MUST BE OUTSIDE LOOP A)
+    // -------------------------------------------------------
+    // This runs exactly once per resource.
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        if (cap > 0) {
+            int resID = petri.place_name_to_id.at(resName);
+
+            // Only add if not already added by Step A
+            if (marking[resID].empty()) {
+                marking[resID].push_back({cap, 0});
+            }
+        }
+    }
+
+    // -------------------------------------------------------
+    // STEP C: Setup Transitions
+    // -------------------------------------------------------
+    // Start from 1 (Task 2) because Task 1 (Start Dummy) is handled by initial marking
   for (int i = 0; i < petri.Transitions.size(); i++) {
     unstartedTransitions.push_back(i + 1);
   }
 
-  // Initialize marking
+    // -------------------------------------------------------
+    // Finalize
+    // -------------------------------------------------------
+    auto endS1 = std::chrono::high_resolution_clock::now();
+    generateTIME += endS1 - startS1;
 
-  for (const auto& place : petri.places) {
-    std::string name = place.name;
-    int initialCount = place.state.empty() ? 0 : place.state[0][0];
 
-    if (name == initialstatename) {
-      // Start place has 1 token at time 0
-      marking[name] = { {1, 0} };
-    } else {
-      if (initialCount > 0) {
-        marking[name] = { {initialCount, 0} };
-      } else {
-        marking[name] = {}; // no token
-      }
-    }
-  }
 
-  // 2. Initialize resource markings (e.g., R1–R4)
-  for (const auto& [resName, cap] : RCPSPex.resources) {
-    if (cap > 0) {
-      marking[resName] = { {cap, 0} };  // all capacity available at time 0
-    } else {
-      marking[resName] = {}; // no tokens
-    }
-  }
-
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  generateTIME += endS1 - startS1;
+    // Check availability based on the clean state we just built
+    avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
   g = 0;
- avilableTransitionIndices = getAvailableTransitionIndices_TT( unstartedTransitions, finishedActivitiys, marking);
-
 }
-
 std::vector<std::pair<int, int>> consumeResourceList(
     const std::vector<std::pair<int, int>>& resource,
     int amount,
@@ -1792,26 +1850,64 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     const int activityFinishTime = firingTime + duration;
 
     // 3. Update Petri net marking
-    for (const auto& [place, outAmount] : transition.arcs_out) {
-        if (marking.count(place) == 0) {
-            marking[place] = {{outAmount, firingTime + transition.duration}};
-        } else {
-            marking[place].emplace_back(outAmount, firingTime + transition.duration);
-        }
-    }
+  // // A. CONSUME (Remove tokens from Predecessors) -> REQUIRED
+  // for (const auto& [placeID, weight] : transition.arcs_in_indices) {
+  //   auto& tokens = marking[placeID];
+  //
+  //   // We need to find and remove 'weight' tokens that are available <= firingTime
+  //   int needed = weight;
+  //
+  //   // Use iterator to safely remove while looping
+  //   for (auto it = tokens.begin(); it != tokens.end(); ) {
+  //     // Only consume tokens that exist at or before the firing time
+  //     if (it->second <= firingTime) {
+  //       if (it->first > needed) {
+  //         // Token has more than we need (e.g., 5 available, need 1)
+  //         it->first -= needed;
+  //         needed = 0;
+  //         break; // Done
+  //       } else {
+  //         // Token has equal or less (e.g., 1 available, need 1)
+  //         needed -= it->first;
+  //         it = tokens.erase(it); // Remove this entry entirely
+  //         if (needed == 0) break; // Done
+  //         continue; // Continue to next since we erased current
+  //       }
+  //     }
+  //     ++it;
+  //   }
+  // }
+  //
+
+  for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+
+    // DIRECT ACCESS (Fast)
+    // No need for 'if (marking.count(place) == 0)'
+    // The vector slot at 'placeID' already exists. Just push to it.
+
+    marking[placeID].push_back({outAmount, firingTime + transition.duration});
+  }
 
     // 4. Update activity states
     startedActivitiys[transitionId] = firingTime;
     finishedActivitiys[transitionId] = activityFinishTime;
 
     // 5. Consume resources - optimized loop
-    for (const std::string& res : resourceNames) {
-        auto demandIt = act.resource_demands.find(res);
-        if (demandIt != act.resource_demands.end() && demandIt->second > 0) {
-            marking[res] = consumeResourceList(marking[res], demandIt->second, firingTime);
-            // Uncomment when ready: marking[res] = return_resource(marking[res], demandIt->second, activityFinishTime);
-        }
+  for (const auto& [resName, demand] : act.resource_demands) {
+
+    if (demand > 0) {
+      // 1. TRANSLATE: String Name -> Integer ID
+      // Use the map we built in getPetri
+      int resID = petri.place_name_to_id.at(resName);
+
+      // 2. UPDATE: Direct Vector Access
+      // marking[resID] accesses the specific resource's timeline instantly
+      marking[resID] = consumeResourceList(marking[resID], demand, firingTime);
+
+      // Uncomment when ready:
+      // marking[resID] = return_resource(marking[resID], demand, activityFinishTime);
     }
+  }
 
     // 6. Remove from unstarted - optimized removal
     auto it = std::find(unstartedTransitions.begin(), unstartedTransitions.end(), transitionId);
@@ -1897,11 +1993,22 @@ int lastActivityId = -1;
 std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
     const std::vector<int> &unstartedTransitions,
     const std::map<int, int> &finishedActivities,
-    const std::unordered_map<std::string, std::vector<std::pair<int, int>>> &marking
+    const std::vector<std::vector<std::pair<int, int>>> &marking
 ) {
     std::vector<std::pair<int, int>> available;
 
     for (int transId : unstartedTransitions) {
+
+      const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
+
+      // DEBUG: Check if Task 2 (usually the first real task) has dependencies
+      if (transId == 2 && dependencies.empty()) {
+        std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+        exit(1); // Stop immediately so you see this
+      }
+
+
+
         const Activity &act = RCPSPex.activities[transId - 1];
 
         // 1. Precedence constraints
@@ -1926,52 +2033,60 @@ std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
         // 2. Resource availability
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
+      for (const auto &[res, demand] : act.resource_demands) {
 
-        for (const auto &[res, demand] : act.resource_demands) {
-            auto it = marking.find(res);
-            if (it == marking.end()) {
-                resourcesOK = false;
-                break;
-            }
+        // 1. Get ID
+        int resID = petri.place_name_to_id.at(res);
 
-            auto tokens = it->second;
-            std::sort(tokens.begin(), tokens.end(),
-                      [](auto &a, auto &b) { return a.second < b.second; });
-
-            int totalAvailable = 0;
-            int resourceReadyTime = -1;
-
-            for (const auto &[amt, time] : tokens) {
-                if (time <= maxPredFinishTime) {
-                    totalAvailable += amt;
-                }
-            }
-
-            if (totalAvailable >= demand) {
-                resourceReadyTime = maxPredFinishTime;
-            } else {
-                for (const auto &[amt, time] : tokens) {
-                    if (time > maxPredFinishTime) {
-                        totalAvailable += amt;
-                        if (totalAvailable >= demand) {
-                            resourceReadyTime = time;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (resourceReadyTime == -1) {
-                resourcesOK = false;
-                break;
-            }
-
-            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+        // 2. Check if resource has any tokens (Vector check)
+        if (marking[resID].empty()) {
+          resourcesOK = false;
+          break;
         }
 
-        if (resourcesOK) {
-            available.emplace_back(transId, maxResourceTime);
+        // 3. GET DATA (The Fix)
+        // We make a local copy 'tokens' because we are about to sort it.
+        // DO NOT use 'it->second'. Use 'marking[resID]'.
+        auto tokens = marking[resID];
+
+        // ... The rest of your logic is perfect ...
+        std::sort(tokens.begin(), tokens.end(),
+                  [](auto &a, auto &b) { return a.second < b.second; });
+
+        int totalAvailable = 0;
+        int resourceReadyTime = -1;
+
+        for (const auto &[amt, time] : tokens) {
+          if (time <= maxPredFinishTime) {
+            totalAvailable += amt;
+          }
         }
+
+        if (totalAvailable >= demand) {
+          resourceReadyTime = maxPredFinishTime;
+        } else {
+          for (const auto &[amt, time] : tokens) {
+            if (time > maxPredFinishTime) {
+              totalAvailable += amt;
+              if (totalAvailable >= demand) {
+                resourceReadyTime = time;
+                break;
+              }
+            }
+          }
+        }
+
+        if (resourceReadyTime == -1) {
+          resourcesOK = false;
+          break;
+        }
+
+        maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+      }
+
+      if (resourcesOK) {
+        available.emplace_back(transId, maxResourceTime);
+      }
     }
 
     return available;

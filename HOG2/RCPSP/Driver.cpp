@@ -67,18 +67,25 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     RCPSPState last = first;
     last.h = 0;
 
-    for (auto& pair : last.marking) {
-        if (pair.second == 1) { pair.second = 0; }
-        if (pair.first == finalstatename) { pair.second = 1; }
+    for (int i = 0; i < last.marking.size(); ++i) {
+        if (last.marking[i] == 1) {
+            last.marking[i] = 0;
+        }
     }
-    for (const auto& pair : last.marking) {
-        const std::string& name = pair.first;
-        int value = pair.second;
 
-    }
+    // 2. Set the Goal State
+    // Use the map we built to translate "FinalStateName" -> Integer ID
+    // Then set that specific index to 1.
+    int finalID = petri.place_name_to_id.at(finalstatename);
+    last.marking[finalID] = 1;
+
     RCPSP as1;
     TemplateAStar<RCPSPState, int, RCPSP> astar;
     std::vector<RCPSPState> path;
+
+
+
+
 
     bool finished = false;
     bool timeout_occurred = false;
@@ -256,7 +263,7 @@ last.name=1;
         if (pair.first == finalstatename) { pair.second = 1; }
     }
     last.avilableDeTransitionIndices=getAvilableDetransitionIndices(last.marking);
-    last.avilableTransitionIndices=getAvilableTransitionIndices(last.marking);
+    //last.avilableTransitionIndices=getAvilableTransitionIndices(last.marking);
     for (int i=1;i<petri.Transitions.size()+1;i++) {
         last.finishedActivitiys.insert(i);
         last.startedActivitiys.insert(i);
@@ -379,9 +386,9 @@ void runBenchmark() {
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
     file << "group,exam,time,finished,makespan,expand number,generated number,depth,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
-omp_set_num_threads(2);
+//omp_set_num_threads(1);
     //omp_set_num_threads(4); // 1. Set the core count.
-#pragma omp parallel for collapse(2) schedule(dynamic)
+//#pragma omp parallel for collapse(2) schedule(dynamic)
     for(int i = 16; i < 17; i++) {
         for(int j = 1; j < 11; j++) {
 
@@ -390,7 +397,7 @@ omp_set_num_threads(2);
             RCPSPex.reset();
 
             // 2. SOLVE
-            solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
         }
     }
 

@@ -148,24 +148,18 @@ public:
 };
 class Transition {
 public:
-    std::unordered_map<std::string, int> arcs_in;  // Arcs coming into the place
-    std::unordered_map<std::string, int> arcs_out; // Arcs going out from the place
+    std::vector<std::pair<int, int>> arcs_in_indices;
+    std::vector<std::pair<int, int>> arcs_out_indices;
     int duration;                       // Duration of the place
     int name;                   // Name of the place
     // Constructor
     ~Transition() {};
-    Transition(const std::string& TransitionName,
-          const std::unordered_map<std::string, int>& inputArcs = {},
-          const std::unordered_map<std::string, int>& outputArcs = {},
-
-          int initialDuration = 0)
-        : name(std::stoi(TransitionName)), arcs_in(inputArcs), arcs_out(outputArcs), duration(initialDuration) {}
-
+    Transition(int Name, int Duration) : name(Name), duration(Duration) {}
 
     bool operator==(const Transition& other) const {
         return name == other.name &&
-               arcs_in == other.arcs_in &&
-               arcs_out == other.arcs_out &&
+               arcs_in_indices == other.arcs_in_indices &&
+               arcs_out_indices == other.arcs_out_indices &&
                duration == other.duration;
     }
 };
@@ -209,23 +203,28 @@ public:
   ~PetriExample() = default;
   PetriExample(): place_len(0) {
   };
+
     std::vector<Place> places;  // Vector of Place objects
+    std::vector<Transition_dict> Transitions_dict;  // Vector of Place objects
+    int place_len;
+    std::vector<Place_dict> places_dict;  // Vector of Place objects
+    std::vector<Transition> Transitions;  // Vector of Place objects
+    std::unordered_map<std::string, int> place_name_to_id;
+
+
 
     // Add a place to the Petri example
     void addPlace(const Place& place) {
         places.push_back(place);
     }
-    int place_len;
-    std::vector<Place_dict> places_dict;  // Vector of Place objects
+
 
     void addPlace_dict(const Place_dict& place_dict) {
         places_dict.push_back(place_dict);
     }
-    std::vector<Transition> Transitions;  // Vector of Place objects
     void addTransition(const Transition& transition) {
         Transitions.push_back(transition);
     }
-    std::vector<Transition_dict> Transitions_dict;  // Vector of Place objects
     void addTransition_dist(const Transition_dict& transition_dict) {
         Transitions_dict.push_back(transition_dict);
     }

@@ -24,7 +24,7 @@ class RCPSPState {
 
         // Any additional custom cleanup logic can go here
     }
-    std::unordered_map<std::string, int> marking;
+    std::vector<short> marking;
     std::vector<int> unstartedTransitions;
     std::vector<int> avilableTransitionIndices;  // Store transition IDs
     std::vector<std::pair<int, int>> activeTransitionIndices;  // Store transition ID and remaining duration
@@ -101,7 +101,7 @@ public:
     }
 
     // --- Resource state ---
-    std::unordered_map<std::string, std::vector<std::pair<int, int>>> marking;
+    std::vector<std::vector<std::pair<int, int>>> marking;
     std::vector<int> unstartedTransitions;                         // transitions not yet started
     std::map<int, int> startedActivitiys;                          // activityID -> start time
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time

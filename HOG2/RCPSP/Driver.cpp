@@ -25,6 +25,7 @@
 
 void runBenchmark();
 void runSolvedProblems();
+void sortCSV(const std::string& filename);
 std::atomic<bool> cancel_requested(false);
 
 std::atomic<bool> stop_printing1(false); // Flag to stop the printing thread
@@ -132,6 +133,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
+         << "TP"<< ","
          << problemType<< ","
          << (useCS ? "True" : "False")<< ","
        //  << "\n";
@@ -213,6 +215,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
+        << "TT"<< ","
         << problemType<< ","
          << (useCS ? "True" : "False")<< ","
     << 100 * generateTIME.count() / elapsed.count() << ","
@@ -384,23 +387,24 @@ void runBenchmark() {
 
     // Write header
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
-    file << "group,exam,time,finished,makespan,expand number,generated number,depth,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
-//omp_set_num_threads(1);
+omp_set_num_threads(3);
     //omp_set_num_threads(4); // 1. Set the core count.
-//#pragma omp parallel for collapse(2) schedule(dynamic)
+#pragma omp parallel for collapse(2) schedule(dynamic)
     for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
+        for(int j = 3; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
             RCPSPex.reset();
 
             // 2. SOLVE
+            solveRCPSP(i, j, filename, "j30");
             solveRCPSP_TT(i, j, filename, "j30");
         }
     }
-
+    sortCSV(filename);
 
 
     // solveRCPSP(-1,-1,filename,"j30");
@@ -519,6 +523,83 @@ void runBenchmark() {
     //  }
 
 }
+
+struct ResultRow {
+    std::string fullLine;
+    // Sorting Keys
+    std::string petriType; // TP/TT
+    std::string setType;   // j30
+    int setSize;           // 30 (for sorting)
+    int group;
+    int exam;
+};
+
+void sortCSV(const std::string& filename) {
+    std::cout << "🔄 Sorting results..." << std::endl;
+
+    std::ifstream inFile(filename);
+    if (!inFile.is_open()) return;
+
+    std::vector<ResultRow> rows;
+    std::string line, header;
+
+    // 1. Read Header
+    if (getline(inFile, header)) {
+        // Ensure we keep the header!
+    }
+
+    // 2. Read and Parse Rows
+    while (getline(inFile, line)) {
+        if (line.empty()) continue;
+
+        std::stringstream ss(line);
+        std::string segment;
+        ResultRow row;
+        row.fullLine = line;
+        int colIndex = 0;
+
+        // Parse columns by comma
+        while (getline(ss, segment, ',')) {
+            // Column 0: Group
+            if (colIndex == 0) try { row.group = std::stoi(segment); } catch (...) { row.group = 0; }
+            // Column 1: Exam
+            else if (colIndex == 1) try { row.exam = std::stoi(segment); } catch (...) { row.exam = 0; }
+            // Column 8: PetriType (TP/TT)
+            else if (colIndex == 8) row.petriType = segment;
+            // Column 9: SetType (j30)
+            else if (colIndex == 9) {
+                row.setType = segment;
+                // Extract integer for sorting (j30 -> 30)
+                std::string nums = segment;
+                nums.erase(std::remove_if(nums.begin(), nums.end(), [](char c){ return !isdigit(c); }), nums.end());
+                try { row.setSize = std::stoi(nums); } catch (...) { row.setSize = 0; }
+            }
+            colIndex++;
+        }
+        rows.push_back(row);
+    }
+    inFile.close();
+
+    // 3. Sort (Priority: PetriType -> SetSize -> Group -> Exam)
+    std::sort(rows.begin(), rows.end(), [](const ResultRow& a, const ResultRow& b) {
+        if (a.petriType != b.petriType) return a.petriType < b.petriType; // TP vs TT
+        if (a.setSize != b.setSize) return a.setSize < b.setSize;         // j30 vs j60
+        if (a.group != b.group) return a.group < b.group;                 // 1 vs 2
+        return a.exam < b.exam;                                           // 1 vs 2
+    });
+
+    // 4. Write Back
+    std::ofstream outFile(filename);
+    outFile << header << "\n"; // Write original header
+    for (const auto& row : rows) {
+        outFile << row.fullLine << "\n";
+    }
+
+    std::cout << "✅ Sorted " << rows.size() << " rows." << std::endl;
+}
+
+
+
 
 void getinitialHcost(int i, int i1, const std::string & string);
 void getinitialHcost(int group, int exam, const std::string &filename) {

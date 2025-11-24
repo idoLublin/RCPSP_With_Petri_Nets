@@ -44,7 +44,7 @@ class RCPSPState {
   std::map<int, int> finishedActivitiys;
 
   double g=0;
-  double h=0;
+  //double h=0;
 
   bool operator==(const RCPSPState& other) const;
 };
@@ -112,7 +112,7 @@ public:
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
 
     double g = 0;
-    double h = 0;
+    //double h = 0;
 
     // --- Comparison ---
     bool operator==(const RCPSPState_TT& other) const;

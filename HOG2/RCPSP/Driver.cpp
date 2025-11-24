@@ -66,7 +66,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     RCPSPState first;
     RCPSPState last = first;
-    last.h = 0;
+    //last.h = 0;
 
     for (int i = 0; i < last.marking.size(); ++i) {
         if (last.marking[i] == 1) {
@@ -393,7 +393,7 @@ void runBenchmark() {
 //     //omp_set_num_threads(4); // 1. Set the core count.
 // #pragma omp parallel for collapse(2) schedule(dynamic)
     for(int i = 16; i < 17; i++) {
-        for(int j = 3; j < 11; j++) {
+        for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();

@@ -39,11 +39,11 @@ class RCPSP : public SearchEnvironment<RCPSPState,int>{
 
 }
 
-
+//int test=0;
 
 inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
-
+//test=1;
   std::size_t seed = 0;
 
   for (const auto& pair : node.startedActivitiys) {
@@ -62,6 +62,51 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
 
 }
 
+std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking) {
+
+
+
+  auto startS4 = std::chrono::high_resolution_clock::now();
+
+  std::vector<int> availableIndices;
+
+  // Optimization: Reserve memory to prevent re-allocations
+  // We know it can't be bigger than the total number of transitions
+  availableIndices.reserve(petri.Transitions.size());
+
+  // Loop through all transitions
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    const P_RCPSP::Transition& t = petri.Transitions[i];
+    bool available = true;
+
+    // CHANGE 2: Use the Integer indices we built in getPetri
+    // t.arcs_in_indices is vector<pair<int, int>>
+    for (const auto& arc : t.arcs_in_indices) {
+
+      // CHANGE 3: Direct Access (The Speedup)
+      // arc.first  = Place ID (0, 1, 2...)
+      // arc.second = Weight (Tokens needed)
+
+      // No .find(), no hashing, just array access!
+      if (marking[arc.first] < arc.second) {
+        available = false;
+        break;
+      }
+    }
+
+    if (available) {
+      availableIndices.push_back(i + 1);
+    }
+  }
+
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  avelableTIME += endS1-startS4;
+
+  return availableIndices;
+}
+
+
+
 
 inline RCPSP::RCPSP() {
 }
@@ -69,11 +114,19 @@ inline RCPSP::RCPSP() {
 inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
 
-  // Handle active transitions
+  // --- OPTIMIZATION FIX ---
+  // 1. Calculate locally (Stack allocation).
+  // This replaces the memory-heavy class member.
+  std::vector<int> avilableTransitionIndices = getAvilableTransitionIndices(nodeID.marking);
+  // ------------------------
 
+  // Handle active transitions (Finishing a task)
   if (!nodeID.activeTransitionIndices.empty()) {
     count++;
     int t = 0;
+
+    // (You don't need to calculate 'avilable' here anymore, we did it above)
+
     // Find the transition with the minimum remaining duration
     for (int i = 0; i < nodeID.activeTransitionIndices.size(); i++) {
       if (nodeID.activeTransitionIndices[i].second < nodeID.activeTransitionIndices[t].second) {
@@ -83,29 +136,34 @@ inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPStat
 
     // Get the actual transition object using the index
     int transitionIdx = nodeID.activeTransitionIndices[t].first;
-    Transition transition = petri.Transitions[transitionIdx - 1];
-    transition.duration= nodeID.activeTransitionIndices[t].second;
 
-    // Create successor state
-    neighbors.emplace_back(RCPSPState(nodeID, transition, false, t, count));
+    // Use 'petri_RCPSP' (Member) or 'petri' (Macro) depending on your setup
+    const Transition& transition = petri.Transitions[transitionIdx - 1];
+
+    // Note: Modifying 'transition' here is risky if it's a const ref from the global list.
+    // Better to pass the duration to the constructor directly if possible.
+    // But assuming this works for your logic:
+    Transition tCopy = transition;
+    tCopy.duration = nodeID.activeTransitionIndices[t].second;
+
+    neighbors.emplace_back(RCPSPState(nodeID, tCopy, false, t, count));
   }
 
-  // Handle available transitions
-  for (int i = 0; i < nodeID.avilableTransitionIndices.size(); i++) {
+  // Handle available transitions (Starting a task)
+  // Now this loop can see 'avilableTransitionIndices' because it's in the top scope.
+  for (int i = 0; i < avilableTransitionIndices.size(); i++) {
     count++;
-    // Get the actual transition object using the index
-    int transitionIdx = nodeID.avilableTransitionIndices[i];
+
+    int transitionIdx = avilableTransitionIndices[i];
     const Transition& transition = petri.Transitions[transitionIdx - 1];
 
     // Create successor state
     neighbors.emplace_back(RCPSPState(nodeID, transition, true, i, count));
-
   }
 
   auto endS1 = std::chrono::high_resolution_clock::now();
   secssesorTIME += endS1 - startS1;
 }
-
 inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) const {
   int finalID = petri.place_name_to_id.at(finalstatename);
 
@@ -117,8 +175,8 @@ inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) cons
 }
 
 double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfinishMap,
-                                    const std::vector<int>& unstartedTransitions,
-                                    const std::vector<std::pair<int, int>>& activeTransitions,
+                                    const std::vector<short>& unstartedTransitions,
+                                    const std::vector<std::pair<short, short>>& activeTransitions,
                                     const RCPSP_example& RCPSPex) {
   // If we've already computed this activity's early finish time, return it
   if (earlyfinishMap.find(activityId) != earlyfinishMap.end()) {
@@ -291,17 +349,17 @@ return false;
         // processedDependencies.insert(depId);
         if (std::find(state1.unstartedTransitions.begin(), state1.unstartedTransitions.end(), depId + 1) != state1.unstartedTransitions.end()) {
           //maby state1 or state2
-          int duration = getTransitionDuration2(state1.activeTransitionIndices, std::stoi(dep));
-          if (duration !=-1) {
-            maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + duration);
+         // int duration = getTransitionDuration2(state1.activeTransitionIndices, std::stoi(dep));
+         // if (duration !=-1) {
+            //maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + duration);
             //if (RCPSPex.activities[depId].duration !=duration) {
             //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
             //}
-          }
-          else {
-            maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + RCPSPex.activities[depId].duration);
-
-          }
+         // }
+          // else {
+          //   maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + RCPSPex.activities[depId].duration);
+          //
+          // }
         }
         else {
           maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1]);
@@ -363,7 +421,9 @@ else {
     return 0;
   };
 
+
   uint64_t GetStateHash(const RCPSPState_bi &node) const {
+
     auto startS1 = std::chrono::high_resolution_clock::now();
     std::size_t seed = 0;
     // Hash the marking (Petri net state)
@@ -384,7 +444,6 @@ else {
 
     auto endS1 = std::chrono::high_resolution_clock::now();
     hashTIME += endS1 - startS1;
-
     return seed;
 
     // Hash the finished activities
@@ -441,8 +500,9 @@ inline RCPSP_TT::RCPSP_TT() {
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
+  std::vector<std::pair<short, short>>avilableTransitionIndices = getAvailableTransitionIndices_TT(nodeID.unstartedTransitions, nodeID.finishedActivitiys, nodeID.marking);
 
-  for (const auto& [transId, firingTime] : nodeID.avilableTransitionIndices) {
+  for (const auto& [transId, firingTime] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
   }
   auto endS1 = std::chrono::high_resolution_clock::now();
@@ -490,7 +550,7 @@ inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 
     // Create lookup set for efficient filtering
     std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
-    std::vector<int> newUnstartedTransitions;
+    std::vector<short> newUnstartedTransitions;
     newUnstartedTransitions.reserve(state1.unstartedTransitions.size());
 
     for (int id : state1.unstartedTransitions) {

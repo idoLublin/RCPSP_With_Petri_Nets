@@ -172,7 +172,7 @@ int getTransitionDuration(const std::vector<Transition>& transitions, const int&
     }
     return -1;  // Return -1 or any other value to indicate not found
 }
-int getTransitionDuration2(const std::vector<std::pair<int, int>>& activeTransitions, int transitionId) {
+short getTransitionDuration2(const std::vector<std::pair<short, short>>& activeTransitions, int transitionId) {
     for (const auto& [idx, duration] : activeTransitions) {
         if (idx == transitionId) {
             return duration;

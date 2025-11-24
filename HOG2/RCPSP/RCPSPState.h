@@ -17,7 +17,6 @@ class RCPSPState {
         // Clear STL containers explicitly (optional, as they would be destroyed automatically)
         marking.clear();
         unstartedTransitions.clear();
-        avilableTransitionIndices.clear();
         activeTransitionIndices.clear();
         startedActivitiys.clear();
         finishedActivitiys.clear();
@@ -27,9 +26,9 @@ class RCPSPState {
     }
 
     std::vector<short> marking;
-    std::vector<int> unstartedTransitions;
-    std::vector<int> avilableTransitionIndices;  // Store transition IDs
-    std::vector<std::pair<int, int>> activeTransitionIndices;  // Store transition ID and remaining duration
+    std::vector<short> unstartedTransitions;
+    //std::vector<short> avilableTransitionIndices;  // Store transition IDs
+    std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
 
    bool direction;
@@ -38,8 +37,8 @@ class RCPSPState {
   //std::vector<int> unstartedTransitions;
 
 
-  double name=0;
-  int predecesorname=0;
+  unsigned int name=0;
+  unsigned int predecesorname=0;
 
   std::map<int, int> startedActivitiys;
   std::map<int, int> finishedActivitiys;
@@ -67,7 +66,7 @@ public:
     }
     std::unordered_map<std::string, int> marking;
     std::set<int> unstartedTransitions;
-    std::vector<int> avilableTransitionIndices;  // Store transition IDs
+    std::vector<short> avilableTransitionIndices;  // Store transition IDs
     std::vector<int> avilableDeTransitionIndices;  // Store transition IDs
     std::vector<std::pair<int, int>> activeTransitionIndices;  // Store transition ID and remaining duration
 
@@ -106,11 +105,11 @@ public:
     }
 
     // --- Resource state ---
-    std::vector<std::vector<std::pair<int, int>>> marking;
-    std::vector<int> unstartedTransitions;                         // transitions not yet started
+    std::vector<std::vector<std::pair<short, short>>> marking;
+    std::vector<short> unstartedTransitions;                         // transitions not yet started
     std::map<int, int> startedActivitiys;                          // activityID -> start time
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time
-    std::vector<std::pair<int, int>> avilableTransitionIndices;  // Store transition IDs
+    //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
 
     double g = 0;
     double h = 0;

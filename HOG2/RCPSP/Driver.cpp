@@ -112,10 +112,10 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
                 std::cout << " " << transIdx;
             std::cout << std::endl;
 
-            std::cout << "available: ";
-            for (int transIdx : state.avilableTransitionIndices)
-                std::cout << " " << transIdx;
-            std::cout << std::endl << std::endl;
+            // std::cout << "available: ";
+            // for (int transIdx : state.avilableTransitionIndices)
+            //     std::cout << " " << transIdx;
+            // std::cout << std::endl << std::endl;
 
             makespan = state.g;
         }
@@ -389,9 +389,9 @@ void runBenchmark() {
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
     file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
-omp_set_num_threads(3);
-    //omp_set_num_threads(4); // 1. Set the core count.
-#pragma omp parallel for collapse(2) schedule(dynamic)
+// omp_set_num_threads(3);
+//     //omp_set_num_threads(4); // 1. Set the core count.
+// #pragma omp parallel for collapse(2) schedule(dynamic)
     for(int i = 16; i < 17; i++) {
         for(int j = 3; j < 11; j++) {
 

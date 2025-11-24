@@ -42,8 +42,8 @@ bool useCS;
 //std::vector<Transition> getAvilableTransitions(std::map<std::string, int> marking);
 std::vector<P_RCPSP::Transition> getAvilableTransitions(const std::unordered_map<std::string, int>& marking);
 double computeWorkloadLowerBoundWithMax(
-    const std::vector<int>& unfinishedTransitions,
-    const std::vector<std::pair<int, int>>& activeTransitionIndices,
+    const std::vector<short>& unfinishedTransitions,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices,
     const std::map<int, int>& earlyStartTimes,
     double criticalPathEstimate
 );
@@ -58,14 +58,14 @@ std::vector<int> getCriticalPath(const std::map<int, int>& earlyStartTimes,
 
 
 double computeSequenceLowerBoundWithMax(
-    const std::vector<int>& unfinishedTransitions,
-    const std::vector<std::pair<int, int>>& activeTransitionIndices,
+    const std::vector<short>& unfinishedTransitions,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices,
     const std::map<int, int>& earlyStartTimes,
     double criticalPathEstimate
 );
 double computeSequenceLowerBoundWithMax2(
-  const std::vector<int>& unfinishedTransitions,
-const std::vector<std::pair<int, int>>& activeTransitionIndices,
+  const std::vector<short>& unfinishedTransitions,
+const std::vector<std::pair<short, short>>& activeTransitionIndices,
  std::map<int, int>& earlyStartTimes,
  std::map<int, int>& earlyfinishTimes,
 double criticalPathEstimate,
@@ -160,7 +160,7 @@ std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking)
 
 std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::string, int>& marking);
 
-double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<int, int>>activeTransitionIndices) {
+double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pair<short, short>>activeTransitionIndices) {
   auto startS3 = std::chrono::high_resolution_clock::now();
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
@@ -177,7 +177,7 @@ double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<
       int depId = std::stoi(dep) - 1;
 
       if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
-        int duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
+        short duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
         if (duration !=-1) {
           maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
         }
@@ -211,8 +211,8 @@ double getForwardHcost(std::set<int>unstartedTransitions, std::vector<std::pair<
 
 
 
-double getForwardHcost(std::vector<int>unstartedTransitions,
-                      std::vector<std::pair<int, int>>activeTransitionIndices,
+double getForwardHcost(std::vector<short>unstartedTransitions,
+                      std::vector<std::pair<short, short>>activeTransitionIndices,
                       std::map<int, int> finishedActivities = {{0, 0}}
                       ) {
   auto startS3 = std::chrono::high_resolution_clock::now();
@@ -472,8 +472,8 @@ std::map<int, int> latefinishTimes;
 }
 
 double computeSequenceLowerBoundWithMax2(
-const std::vector<int>& unfinishedTransitions,
-const std::vector<std::pair<int, int>>& activeTransitionIndices,
+const std::vector<short>& unfinishedTransitions,
+const std::vector<std::pair<short, short>>& activeTransitionIndices,
  std::map<int, int>& earlyStartTimes,
  std::map<int, int>& earlyfinishTimes,
 double criticalPathEstimate,
@@ -1121,7 +1121,6 @@ RCPSPState::RCPSPState() : nodestatus(false) {
 
   // 6. GET AVAILABLE (Do this ONCE at the end)
   // Now that marking is fully built, calculate what can run.
-  avilableTransitionIndices = getAvilableTransitionIndices(marking);
 
   g = 0;
   name = 0;
@@ -1167,7 +1166,7 @@ RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
   g_b = 0;
   g_f = 0;
   name = 0;
-  h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
+  //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
   h_b=0;
   f=h_f;
 }
@@ -1187,7 +1186,7 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
 
   // Copy indices instead of full Transition objects
   activeTransitionIndices = predecesor.activeTransitionIndices;
-  avilableTransitionIndices = predecesor.avilableTransitionIndices;
+  //avilableTransitionIndices = predecesor.avilableTransitionIndices;
   g = predecesor.g;
 
   if (direction) {
@@ -1313,7 +1312,7 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, in
 
     }
   }
-  avilableTransitionIndices = getAvilableTransitionIndices(marking);
+  //avilableTransitionIndices = getAvilableTransitionIndices(marking);
 }
 
 
@@ -1391,7 +1390,7 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
      // auto endS1 = std::chrono::high_resolution_clock::now();
       //generateTIME += endS1-startS4;
 
-      h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
+      //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
 
     }
     f=g_f+h_f;
@@ -1450,7 +1449,7 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
       h_b=getBackwardHcost2(startedActivitiys,finishedActivitiys,activeTransitionIndices);
 
     }
-    h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
+    //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
 
     avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
     f=2*g_b+h_b-h_f;
@@ -1471,48 +1470,6 @@ int asdasd;
 }
 
 // CHANGE 1: Input is now a fast vector, not a slow map
-std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking) {
-
-
-
-  auto startS4 = std::chrono::high_resolution_clock::now();
-
-  std::vector<int> availableIndices;
-
-  // Optimization: Reserve memory to prevent re-allocations
-  // We know it can't be bigger than the total number of transitions
-  availableIndices.reserve(petri.Transitions.size());
-
-  // Loop through all transitions
-  for (int i = 0; i < petri.Transitions.size(); i++) {
-    const P_RCPSP::Transition& t = petri.Transitions[i];
-    bool available = true;
-
-    // CHANGE 2: Use the Integer indices we built in getPetri
-    // t.arcs_in_indices is vector<pair<int, int>>
-    for (const auto& arc : t.arcs_in_indices) {
-
-      // CHANGE 3: Direct Access (The Speedup)
-      // arc.first  = Place ID (0, 1, 2...)
-      // arc.second = Weight (Tokens needed)
-
-      // No .find(), no hashing, just array access!
-      if (marking[arc.first] < arc.second) {
-        available = false;
-        break;
-      }
-    }
-
-    if (available) {
-      availableIndices.push_back(i + 1);
-    }
-  }
-
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  avelableTIME += endS1-startS4;
-
-  return availableIndices;
-}
 
 std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::string, int>& marking) {
    std::vector<int> availableIndices;
@@ -1541,30 +1498,20 @@ std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::st
 
 
 
-bool RCPSPState::operator==(const RCPSPState &other) const {
-   // if (this->expanded != other.expanded) {
-   //   return false;
-   // }
-   if (this->g != other.g) {
-     return false;
-   }
-   if (this->h != other.h) {
-     return false;
-   }
-   // if (this->avilableTransition != other.avilableTransition) {
-   //   return false;
-   // }
-   // if (this->activeTransitions != other.activeTransitions) {
-   //   return false;
-   // }
-   if (this->unstartedTransitions != other.unstartedTransitions) {
-     return false;
-   }
-   if (this->marking != other.marking) {
-     return false;
-   }
-   return true;
- }
+bool RCPSPState::operator==(const RCPSPState& other) const {
+  // 1. Fast checks
+  if (name != other.name) return false;
+  if (direction != other.direction) return false;
+
+  // 2. Vector Comparison
+  // This is only safe if you GUARANTEE every vector is initialized
+  // exactly the same way in the constructor (e.g., size + 5, filled with -1).
+  if (marking != other.marking) return false;
+  if (finishedActivitiys != other.finishedActivitiys) return false;
+  if (startedActivitiys != other.startedActivitiys) return false;
+
+  return true;
+}
 bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
   // if (this->expanded != other.expanded) {
   //   return false;
@@ -1653,11 +1600,11 @@ auto startS1 = std::chrono::high_resolution_clock::now();
 
 
     // Check availability based on the clean state we just built
-    avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
+    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
   g = 0;
 }
-std::vector<std::pair<int, int>> consumeResourceList(
-    const std::vector<std::pair<int, int>>& resource,
+std::vector<std::pair<short, short>> consumeResourceList(
+    const std::vector<std::pair<short, short>>& resource,
     int amount,
     int currentTime
 ) {
@@ -1665,7 +1612,7 @@ std::vector<std::pair<int, int>> consumeResourceList(
     return resource;
 
   // Check if already sorted to avoid unnecessary sorting
-  std::vector<std::pair<int, int>> resourceCopy = resource;
+  std::vector<std::pair<short, short>> resourceCopy = resource;
 
   // Only sort if not already sorted (you could maintain sorted invariant)
   std::sort(resourceCopy.begin(), resourceCopy.end(), [](const auto& a, const auto& b) {
@@ -1765,7 +1712,7 @@ double computeEarliestFinish(int activityId,
 }
 
 //!!!i changed map3 (early finish) havent chack correctness
-double getForwardHcost_TT(std::vector<int>unstartedTransitions, std::map<int, int> finishedActivitiys
+double getForwardHcost_TT(std::vector<short>unstartedTransitions, std::map<int, int> finishedActivitiys
   //,std::string mode="defult"                     // activityID -> finish time
 ) {
   auto startS3 = std::chrono::high_resolution_clock::now();
@@ -1806,7 +1753,7 @@ double getForwardHcost_TT(std::vector<int>unstartedTransitions, std::map<int, in
 
   }
   if (useCS) {
-    std::vector<std::pair<int, int>> activeTransitionIndices;
+    std::vector<std::pair<short, short>> activeTransitionIndices;
 
     h=computeSequenceLowerBoundWithMax2(
         unstartedTransitions,
@@ -1928,7 +1875,7 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     }
 
     // 8. REQUIRED: Calculate available transitions
-    avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
+    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
 
 int lastActivityId = -1;
   int maxTime = -1;
@@ -1958,7 +1905,7 @@ int lastActivityId = -1;
 
     // Create lookup set for efficient filtering
     std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
-    std::vector<int> newUnstartedTransitions;
+    std::vector<short> newUnstartedTransitions;
     newUnstartedTransitions.reserve(unstartedTransitions.size());
 
     for (int id : unstartedTransitions) {
@@ -1990,14 +1937,14 @@ int lastActivityId = -1;
   }
 }
 
-std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
-    const std::vector<int> &unstartedTransitions,
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+    const std::vector<short> &unstartedTransitions,
     const std::map<int, int> &finishedActivities,
-    const std::vector<std::vector<std::pair<int, int>>> &marking
+    const std::vector<std::vector<std::pair<short, short>>> &marking
 ) {
-    std::vector<std::pair<int, int>> available;
+    std::vector<std::pair<short, short>> available;
 
-    for (int transId : unstartedTransitions) {
+    for (short transId : unstartedTransitions) {
 
       const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
 

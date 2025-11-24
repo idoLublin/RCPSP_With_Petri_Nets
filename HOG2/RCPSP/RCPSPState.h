@@ -23,16 +23,21 @@ class RCPSPState {
         finishedActivitiys.clear();
 
         // Any additional custom cleanup logic can go here
+
     }
+
     std::vector<short> marking;
     std::vector<int> unstartedTransitions;
     std::vector<int> avilableTransitionIndices;  // Store transition IDs
     std::vector<std::pair<int, int>> activeTransitionIndices;  // Store transition ID and remaining duration
 
-    bool direction;
+
+   bool direction;
     bool nodestatus;
   //std::vector<RCPSPState> sons;
   //std::vector<int> unstartedTransitions;
+
+
   double name=0;
   int predecesorname=0;
 

@@ -1,15 +1,52 @@
+### Build trees & binaries
 bin/
+build/
+build_*/
+build-*/
+cmake-build-*/
+cmake-build-debug/
+cmake-build-release/
 objs/
-html/
 objs_html/
+html/
+cmake_install.cmake
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+
+# Compiled objects & libraries
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.la
+*.lib
+*.exe
+*.out
+*.pdb
+*.ilk
+*.lo
+*.mod
+*.dSYM/
+
+# IDE/editor cruft
+.idea/
+.vscode/
 .DS_Store
 **/.DS_Store
 build/.DS_Store
-.idea/
-papers/FMDH/results/
+Thumbs.db
 *~
+*.swp
+*.swo
 
-*.pdb
+# Project-specific generated content
+papers/FMDH/results/
 
-cmake-build-debug/
-CMakeLists.txt
+# Python caches for tooling/scripts
+__pycache__/
+*.py[cod]

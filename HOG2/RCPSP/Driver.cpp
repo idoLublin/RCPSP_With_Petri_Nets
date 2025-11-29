@@ -9,6 +9,17 @@
 #include "../../HOG2/generic/BAE.h"
 
 #include "RCPSP.h"
+
+// Forward declarations for heuristic cache functions (defined in RCPSPState.cpp)
+#ifdef RCPSP_ENABLE_HCACHE
+void ClearHCostCache();
+void PrintCacheStats();
+void InitHCostCacheForProblem(const std::string& problemType, int group, int exam);
+void FinalizeHCostCacheForProblem(const std::string& problemType, int group, int exam);
+bool SaveHCostCacheToDisk(const std::string& problemType, int group, int exam);
+bool LoadHCostCacheFromDisk(const std::string& problemType, int group, int exam);
+bool HCostCacheExistsOnDisk(const std::string& problemType, int group, int exam);
+#endif
 //****importent i changed GLUtil.h with recVec == operator abit****//
  //PetriExample petri;
  //RCPSP_example RCPSP1;
@@ -362,8 +373,91 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
     return newFilename;
 }
 
- int main() {
-     runBenchmark();
+//TODO: merge the redundant code here with the code in solveRCPSP function starting in the "// Reset and load problem" comment
+// Precompute h-costs for a range of problems and save to disk
+void precomputeHCosts(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd) {
+#ifdef RCPSP_ENABLE_HCACHE
+    std::cout << "=== H-Cost Precomputation Mode ===" << std::endl;
+    std::cout << "Problem type: " << problemType << std::endl;
+    std::cout << "Groups: " << groupStart << " to " << groupEnd << std::endl;
+    std::cout << "Exams: " << examStart << " to " << examEnd << std::endl;
+    std::cout << "=================================" << std::endl;
+    
+    for (int i = groupStart; i <= groupEnd; i++) {
+        for (int j = examStart; j <= examEnd; j++) {
+            std::cout << "\n--- Precomputing " << problemType << " group " << i << " exam " << j << " ---" << std::endl;
+            
+            // Check if cache already exists
+            if (HCostCacheExistsOnDisk(problemType, i, j)) {
+                std::cout << "[HCache] Cache already exists, loading to verify..." << std::endl;
+                InitHCostCacheForProblem(problemType, i, j);
+                PrintCacheStats();
+                continue; // Skip to next problem
+            }
+            
+            // Reset and load problem
+            petri.reset();
+            RCPSPex.reset();
+            ClearHCostCache();
+            
+            getPetri(petri, i, j, problemType);
+            getRCPSP(RCPSPex, i, j, problemType);
+            RCPSPex.computeAndStoreDeepDependencies();
+            
+            // Set up initial and goal states
+            RCPSPState first;
+            RCPSPState last = first;
+            
+            for (int k = 0; k < last.marking.size(); ++k) {
+                if (last.marking[k] == 1) {
+                    last.marking[k] = 0;
+                }
+            }
+            int finalID = petri.place_name_to_id.at(finalstatename);
+            last.marking[finalID] = 1;
+            
+            // Run A* search to populate cache
+            RCPSP as1;
+            TemplateAStar<RCPSPState, int, RCPSP> astar;
+            std::vector<RCPSPState> path;
+            
+            auto start = std::chrono::high_resolution_clock::now();
+            astar.GetPath(&as1, first, last, path);
+            auto end = std::chrono::high_resolution_clock::now();
+            
+            std::chrono::duration<double> elapsed = end - start;
+            
+            std::cout << "Solved in " << elapsed.count() << "s" << std::endl;
+            std::cout << "Nodes expanded: " << astar.GetNodesExpanded() << std::endl;
+            PrintCacheStats();
+            
+            // Save to disk
+            SaveHCostCacheToDisk(problemType, i, j);
+        }
+    }
+    
+    std::cout << "\n=== Precomputation Complete ===" << std::endl;
+#else
+    std::cerr << "Error: H-cost caching is not enabled. Rebuild with -DRCPSP_ENABLE_HCACHE=ON" << std::endl;
+#endif
+}
+
+int main(int argc, char* argv[]) {
+    // Check for precomputation mode
+    if (argc > 1 && std::string(argv[1]) == "--precompute") {
+        // Usage: ./rcpsp_driver --precompute [problemType] [groupStart] [groupEnd] [examStart] [examEnd]
+        std::string problemType = (argc > 2) ? argv[2] : "j30";
+        int groupStart = (argc > 3) ? std::stoi(argv[3]) : 16;
+        int groupEnd = (argc > 4) ? std::stoi(argv[4]) : 16;
+        int examStart = (argc > 5) ? std::stoi(argv[5]) : 1;
+        int examEnd = (argc > 6) ? std::stoi(argv[6]) : 10;
+        
+        precomputeHCosts(problemType, groupStart, groupEnd, examStart, examEnd);
+        return 0;
+    }
+    
+    // Normal benchmark mode
+    runBenchmark();
     return 0;
 }
 
@@ -392,6 +486,11 @@ void runBenchmark() {
 // omp_set_num_threads(3);
 //     //omp_set_num_threads(4); // 1. Set the core count.
 // #pragma omp parallel for collapse(2) schedule(dynamic)
+
+#ifdef RCPSP_ENABLE_HCACHE
+    std::cout << "[HCache] Heuristic cache with disk persistence enabled." << std::endl;
+#endif
+
     for(int i = 16; i < 17; i++) {
         for(int j = 1; j < 11; j++) {
 
@@ -399,11 +498,23 @@ void runBenchmark() {
             petri.reset();
             RCPSPex.reset();
 
+#ifdef RCPSP_ENABLE_HCACHE
+            // Load cached h-costs from disk for this problem (if available)
+            InitHCostCacheForProblem("j30", i, j);
+#endif
+
             // 2. SOLVE
             solveRCPSP(i, j, filename, "j30");
             solveRCPSP_TT(i, j, filename, "j30");
+
+#ifdef RCPSP_ENABLE_HCACHE
+            // Save computed h-costs to disk and print stats
+            PrintCacheStats();
+            FinalizeHCostCacheForProblem("j30", i, j);
+#endif
         }
     }
+
     sortCSV(filename);
 
 

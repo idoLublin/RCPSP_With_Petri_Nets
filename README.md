@@ -49,3 +49,8 @@ Participate actively in code reviews to maintain code quality and consistency.
 Address all feedback provided during code reviews before merging changes.
 Code reviews should focus not only on functionality but also on maintainability, performance, and scalability.
 
+
+## Heuristic caching
+
+The `rcpsp_driver` target can cache heuristic (`h`) evaluations so repeated runs on the j30 suite (and any new instance encountered later) reuse the values collected during previous searches. The cache is enabled by default; to disable it, configure CMake with `-DRCPSP_ENABLE_HCACHE=OFF`. Re‑enable it with `-DRCPSP_ENABLE_HCACHE=ON` whenever you want the solver to populate and consult the shared cache.
+

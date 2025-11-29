@@ -1,7 +1,75 @@
-# HOG2 Compiled Objects
-HOG2/bin
-HOG2/objs
+# OS / Editor noise
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.cache/
+**/.cache/
+.idea/
+.vscode/
+*.code-workspace
+*~
+*.swp
+*.swo
+*.orig
 
-# CLion files
-cmake-build-debug
-CMakeLists.txt
+# Python caches & virtualenvs
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# CMake / build trees
+build/
+build_*/
+build-*/
+cmake-build-*/
+cmake-build-debug/
+cmake-build-release/
+build_cache/
+build_nocache/
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Makefile
+
+# Compiled artifacts
+*.o
+*.obj
+*.so
+*.dylib
+*.dll
+*.a
+*.la
+*.lib
+*.exe
+*.out
+*.app
+*.pdb
+*.ilk
+*.dSYM/
+rcpsp_driver
+
+# HOG2 specific generated files
+HOG2/bin/
+HOG2/build/
+HOG2/build_*/
+HOG2/cmake-build-*/
+HOG2/objs/
+HOG2/objs_html/
+HOG2/html/
+
+# Experiment / cache outputs
+hcost_cache/
+json_outputs_*/
+results/
+
+# Miscellaneous
+*.log
+*.tmp

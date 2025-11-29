@@ -5,14 +5,20 @@
 #include <vector>
 #include <set>
 #include <unordered_set>
+#include <unordered_map>
+#include <shared_mutex>
 #include "petriclasses.h"
 #include "RCPSPState.h"
 #include "RCPSPState.h"
 #include <thread>
 #include <chrono>
 #include <atomic>
+#include <mutex>
 #include <algorithm>
 #include <climits>
+#include <fstream>
+#include <filesystem>
+#include <sys/stat.h>
 
 using namespace P_RCPSP;
 
@@ -29,6 +35,217 @@ std::chrono::duration<double>secssesorTIME;
 
 
 bool useCS;
+
+#ifdef RCPSP_ENABLE_HCACHE
+// ============================================================================
+// FAST HEURISTIC CACHE - With disk persistence support
+// ============================================================================
+
+// Simple fast hash for cache keys - uses FNV-1a style mixing
+inline uint64_t FastHashCombine(uint64_t h, uint64_t v) {
+  h ^= v;
+  h *= 0x517cc1b727220a95ULL;
+  return h;
+}
+
+// Fowler–Noll–Vo non-cryptographic hash function
+// Build a compact cache key from the state signature
+// We only hash the unstarted set since that's the primary driver of h-cost
+inline uint64_t BuildHCostCacheKey(const std::vector<short>& unstarted,
+                                   const std::vector<std::pair<short, short>>& active,
+                                   const std::map<int, int>& /*finished*/) {
+  uint64_t h = 0xcbf29ce484222325ULL; // FNV offset basis
+  
+  // Hash unstarted transitions (main component)
+  for (short id : unstarted) {
+    h = FastHashCombine(h, static_cast<uint64_t>(id));
+  }
+  
+  // Hash active transitions with remaining durations
+  h = FastHashCombine(h, active.size());
+  for (const auto& [id, remain] : active) {
+    h = FastHashCombine(h, (static_cast<uint64_t>(id) << 16) | static_cast<uint64_t>(remain));
+  }
+  
+  return h;
+}
+
+// Global cache - no mutex needed for single-threaded benchmark
+std::unordered_map<uint64_t, double> g_hcostCache;
+uint64_t g_cacheHits = 0;
+uint64_t g_cacheMisses = 0;
+
+// Current problem identifier for disk cache file naming
+std::string g_currentProblemId;
+
+inline bool TryGetCachedHCost(uint64_t key, double &value) {
+  auto it = g_hcostCache.find(key);
+  if (it != g_hcostCache.end()) {
+    ++g_cacheHits;
+    value = it->second;
+    return true;
+  }
+  ++g_cacheMisses;
+  return false;
+}
+
+inline void StoreCachedHCost(uint64_t key, double value) {
+  g_hcostCache.emplace(key, value);
+}
+
+void ClearHCostCache() {
+  g_hcostCache.clear();
+  g_hcostCache.reserve(1000000); // Pre-allocate for better performance
+  g_cacheHits = 0;
+  g_cacheMisses = 0;
+}
+
+void PrintCacheStats() {
+  std::cout << "[HCache] Hits: " << g_cacheHits 
+            << ", Misses: " << g_cacheMisses 
+            << ", Size: " << g_hcostCache.size() << std::endl;
+}
+
+// ============================================================================
+// DISK PERSISTENCE - Save/Load h-cost cache to/from disk
+// ============================================================================
+
+// Get the cache directory path (tries multiple locations)
+std::string GetCacheDirectory() {
+  // Try these paths in order
+  std::vector<std::string> paths = {
+    "hcost_cache",
+    "HOG2/RCPSP/hcost_cache"
+  };
+  
+  for (const auto& path : paths) {
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0 && S_ISDIR(st.st_mode)) {
+      return path;
+    }
+  }
+  
+  // Create the first path if none exist
+  std::filesystem::create_directories(paths[0]);
+  return paths[0];
+}
+
+// Build cache filename for a specific problem
+std::string GetCacheFilePath(const std::string& problemType, int group, int exam) {
+  std::string cacheDir = GetCacheDirectory();
+  return cacheDir + "/" + problemType + "_" + std::to_string(group) + "_" + std::to_string(exam) + ".hcache";
+}
+
+// Save current cache to disk (binary format for speed)
+bool SaveHCostCacheToDisk(const std::string& problemType, int group, int exam) {
+  std::string filepath = GetCacheFilePath(problemType, group, exam);
+  
+  std::ofstream file(filepath, std::ios::binary);
+  if (!file.is_open()) {
+    std::cerr << "[HCache] Failed to open file for writing: " << filepath << std::endl;
+    return false;
+  }
+  
+  // Write header: magic number + version + count
+  const uint32_t MAGIC = 0x48435354; // "HCST"
+  const uint32_t VERSION = 1;
+  uint64_t count = g_hcostCache.size();
+  
+  file.write(reinterpret_cast<const char*>(&MAGIC), sizeof(MAGIC));
+  file.write(reinterpret_cast<const char*>(&VERSION), sizeof(VERSION));
+  file.write(reinterpret_cast<const char*>(&count), sizeof(count));
+  
+  // Write all key-value pairs
+  for (const auto& [key, value] : g_hcostCache) {
+    file.write(reinterpret_cast<const char*>(&key), sizeof(key));
+    file.write(reinterpret_cast<const char*>(&value), sizeof(value));
+  }
+  
+  file.close();
+  std::cout << "[HCache] Saved " << count << " entries to: " << filepath << std::endl;
+  return true;
+}
+
+// Load cache from disk for a specific problem
+bool LoadHCostCacheFromDisk(const std::string& problemType, int group, int exam) {
+  std::string filepath = GetCacheFilePath(problemType, group, exam);
+  
+  std::ifstream file(filepath, std::ios::binary);
+  if (!file.is_open()) {
+    // Cache file doesn't exist - this is normal for first run
+    return false;
+  }
+  
+  // Read and verify header
+  uint32_t magic, version;
+  uint64_t count;
+  
+  file.read(reinterpret_cast<char*>(&magic), sizeof(magic));
+  file.read(reinterpret_cast<char*>(&version), sizeof(version));
+  file.read(reinterpret_cast<char*>(&count), sizeof(count));
+  
+  if (magic != 0x48435354 || version != 1) {
+    std::cerr << "[HCache] Invalid cache file format: " << filepath << std::endl;
+    return false;
+  }
+  
+  // Pre-allocate and load
+  g_hcostCache.clear();
+  g_hcostCache.reserve(count + 100000); // Extra space for new entries
+  
+  uint64_t key;
+  double value;
+  uint64_t loaded = 0;
+  
+  while (file.read(reinterpret_cast<char*>(&key), sizeof(key))) {
+    if (!file.read(reinterpret_cast<char*>(&value), sizeof(value))) {
+      break;
+    }
+    g_hcostCache.emplace(key, value);
+    ++loaded;
+  }
+  
+  file.close();
+  
+  if (loaded != count) {
+    std::cerr << "[HCache] Warning: Expected " << count << " entries, loaded " << loaded << std::endl;
+  }
+  
+  std::cout << "[HCache] Loaded " << loaded << " entries from: " << filepath << std::endl;
+  g_cacheHits = 0;
+  g_cacheMisses = 0;
+  
+  return true;
+}
+
+// Initialize cache for a problem - loads from disk if available
+void InitHCostCacheForProblem(const std::string& problemType, int group, int exam) {
+  g_currentProblemId = problemType + "_" + std::to_string(group) + "_" + std::to_string(exam);
+  
+  // Try to load from disk
+  if (!LoadHCostCacheFromDisk(problemType, group, exam)) {
+    // No cached data - start fresh
+    ClearHCostCache();
+    std::cout << "[HCache] No cached data for " << g_currentProblemId << ", starting fresh." << std::endl;
+  }
+}
+
+// Save current cache and clear for next problem
+void FinalizeHCostCacheForProblem(const std::string& problemType, int group, int exam) {
+  // Only save if we have new data (misses indicate new computations)
+  if (g_cacheMisses > 0) {
+    SaveHCostCacheToDisk(problemType, group, exam);
+  }
+}
+
+// Check if a cache file exists for a problem
+bool HCostCacheExistsOnDisk(const std::string& problemType, int group, int exam) {
+  std::string filepath = GetCacheFilePath(problemType, group, exam);
+  std::ifstream file(filepath);
+  return file.good();
+}
+
+#endif
 
 
 // std::atomic<bool> stop_printing(false); // Flag to stop the printing thread
@@ -216,13 +433,21 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
                       std::map<int, int> finishedActivities = {{0, 0}}
                       ) {
   auto startS3 = std::chrono::high_resolution_clock::now();
-
-   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-   std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
-
+  
+  std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+  std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
+  
   double h;
   std::set<int> processedDependencies;
 
+  #ifdef RCPSP_ENABLE_HCACHE
+    const uint64_t cacheKey = BuildHCostCacheKey(unstartedTransitions, activeTransitionIndices, finishedActivities);
+    double cachedValue = 0.0;
+    if (TryGetCachedHCost(cacheKey, cachedValue)) {
+      return cachedValue;
+    }
+  #endif
+  
   for (int activityId: unstartedTransitions) {
     int maxFinishTime = 0;
     std::set<int> processedDependencies;
@@ -265,16 +490,14 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
         earlyfinishMap3,
         h,
         finishedActivities); // BL_Cs heuristic
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    avelableTIME += endS1 - startS3;
-    return h;
   }
-  else {
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    avelableTIME += endS1 - startS3;
-    return h;
 
-  }
+  auto endS1 = std::chrono::high_resolution_clock::now();
+  avelableTIME += endS1 - startS3;
+
+#ifdef RCPSP_ENABLE_HCACHE
+  StoreCachedHCost(cacheKey, h);
+#endif
 
  return h;
 

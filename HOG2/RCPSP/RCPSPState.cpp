@@ -13,7 +13,7 @@
 #include <atomic>
 #include <algorithm>
 #include <climits>
-
+#include <climits>
 using namespace P_RCPSP;
 
 

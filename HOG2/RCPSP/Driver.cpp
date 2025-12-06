@@ -56,7 +56,7 @@ inline size_t GetHCostCacheSize() { return 0; }
 #include <fstream>
 #include <vector>
 
-void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache);
+void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache, bool allowCacheLoading);
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
 std::atomic<bool> cancel_requested(false);
@@ -552,8 +552,8 @@ static void printUsage() {
               << "  --group-end <value>     Last group to process (default: 16).\n"
               << "  --exam-start <value>    First exam to process (default: 1).\n"
               << "  --exam-end <value>      Last exam to process (default: 10).\n"
-              << "  --use-cache             Enable heuristic cache (default when available).\n"
-              << "  --no-cache              Disable heuristic cache even if compiled in.\n"
+              << "  --use-cache             Enable heuristic cache (disabled by default).\n"
+              << "  --no-cache-loading      Do not load existing .hcache files from disk.\n"
               << "  -h, --help              Show this help message.\n";
 }
 
@@ -566,10 +566,11 @@ int main(int argc, char* argv[]) {
     bool precomputeMode = false;
 
 #ifdef RCPSP_ENABLE_HCACHE
-    bool cacheRequested = true;
+    bool cacheRequested = false;
 #else
     bool cacheRequested = false;
 #endif
+    bool cacheLoadingAllowed = true;
     bool runtimeCacheEnabled = false;
 
     bool parseError = false;
@@ -629,8 +630,8 @@ int main(int argc, char* argv[]) {
             ++i;
         } else if (arg == "--use-cache") {
             cacheRequested = true;
-        } else if (arg == "--no-cache") {
-            cacheRequested = false;
+        } else if (arg == "--no-cache-loading") {
+            cacheLoadingAllowed = false;
         } else {
             parseError = true;
             parseErrorMessage = "Unknown argument: " + arg;
@@ -677,15 +678,19 @@ int main(int argc, char* argv[]) {
 #endif
     }
 
-    runBenchmark(problemType, groupStart, groupEnd, examStart, examEnd, runtimeCacheEnabled);
+    runBenchmark(problemType, groupStart, groupEnd, examStart, examEnd, runtimeCacheEnabled, cacheLoadingAllowed);
     return 0;
 }
 
-
-void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache) {
+void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache, bool allowCacheLoading) {
     std::string folder = "results";
 
     std::string filename = buildResultsFilename(folder, problemType, groupStart, groupEnd, examStart, examEnd, useCache);
+
+#ifndef RCPSP_ENABLE_HCACHE
+    (void)useCache;
+    (void)allowCacheLoading;
+#endif
 
     // Create and write to file
     std::ofstream file(filename);
@@ -707,7 +712,11 @@ void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, 
 
 #ifdef RCPSP_ENABLE_HCACHE
     if (useCache) {
-        std::cout << "[HCache] Heuristic cache with disk persistence enabled." << std::endl;
+        if (allowCacheLoading) {
+            std::cout << "[HCache] Heuristic cache with disk persistence enabled (loading allowed)." << std::endl;
+        } else {
+            std::cout << "[HCache] Heuristic cache enabled without loading existing .hcache files." << std::endl;
+        }
     } else {
         std::cout << "[HCache] Heuristic cache compiled but disabled for this run." << std::endl;
     }
@@ -726,8 +735,12 @@ void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, 
 
 #ifdef RCPSP_ENABLE_HCACHE
             if (useCache) {
-                // Load cached h-costs from disk for this problem (if available)
-                InitHCostCacheForProblem(problemType, i, j);
+                if (allowCacheLoading) {
+                    // Load cached h-costs from disk for this problem (if available)
+                    InitHCostCacheForProblem(problemType, i, j);
+                } else {
+                    ClearHCostCache();
+                }
             } else {
                 ClearHCostCache();
             }

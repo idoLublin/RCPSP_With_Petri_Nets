@@ -74,11 +74,15 @@ inline uint64_t BuildHCostCacheKey(const std::vector<short>& unstarted,
 std::unordered_map<uint64_t, double> g_hcostCache;
 uint64_t g_cacheHits = 0;
 uint64_t g_cacheMisses = 0;
+bool g_hcacheEnabled = true;
 
 // Current problem identifier for disk cache file naming
 std::string g_currentProblemId;
 
 inline bool TryGetCachedHCost(uint64_t key, double &value) {
+  if (!g_hcacheEnabled) {
+    return false;
+  }
   auto it = g_hcostCache.find(key);
   if (it != g_hcostCache.end()) {
     ++g_cacheHits;
@@ -90,6 +94,9 @@ inline bool TryGetCachedHCost(uint64_t key, double &value) {
 }
 
 inline void StoreCachedHCost(uint64_t key, double value) {
+  if (!g_hcacheEnabled) {
+    return;
+  }
   g_hcostCache.emplace(key, value);
 }
 
@@ -104,6 +111,29 @@ void PrintCacheStats() {
   std::cout << "[HCache] Hits: " << g_cacheHits 
             << ", Misses: " << g_cacheMisses 
             << ", Size: " << g_hcostCache.size() << std::endl;
+}
+
+void SetHCostCacheEnabled(bool enabled) {
+  g_hcacheEnabled = enabled;
+  if (!g_hcacheEnabled) {
+    ClearHCostCache();
+  }
+}
+
+bool IsHCostCacheEnabled() {
+  return g_hcacheEnabled;
+}
+
+uint64_t GetHCostCacheHits() {
+  return g_cacheHits;
+}
+
+uint64_t GetHCostCacheMisses() {
+  return g_cacheMisses;
+}
+
+size_t GetHCostCacheSize() {
+  return g_hcostCache.size();
 }
 
 // ============================================================================
@@ -138,6 +168,9 @@ std::string GetCacheFilePath(const std::string& problemType, int group, int exam
 
 // Save current cache to disk (binary format for speed)
 bool SaveHCostCacheToDisk(const std::string& problemType, int group, int exam) {
+  if (!g_hcacheEnabled) {
+    return false;
+  }
   std::string filepath = GetCacheFilePath(problemType, group, exam);
   
   std::ofstream file(filepath, std::ios::binary);
@@ -168,6 +201,9 @@ bool SaveHCostCacheToDisk(const std::string& problemType, int group, int exam) {
 
 // Load cache from disk for a specific problem
 bool LoadHCostCacheFromDisk(const std::string& problemType, int group, int exam) {
+  if (!g_hcacheEnabled) {
+    return false;
+  }
   std::string filepath = GetCacheFilePath(problemType, group, exam);
   
   std::ifstream file(filepath, std::ios::binary);
@@ -221,6 +257,10 @@ bool LoadHCostCacheFromDisk(const std::string& problemType, int group, int exam)
 // Initialize cache for a problem - loads from disk if available
 void InitHCostCacheForProblem(const std::string& problemType, int group, int exam) {
   g_currentProblemId = problemType + "_" + std::to_string(group) + "_" + std::to_string(exam);
+  if (!g_hcacheEnabled) {
+    ClearHCostCache();
+    return;
+  }
   
   // Try to load from disk
   if (!LoadHCostCacheFromDisk(problemType, group, exam)) {
@@ -232,6 +272,9 @@ void InitHCostCacheForProblem(const std::string& problemType, int group, int exa
 
 // Save current cache and clear for next problem
 void FinalizeHCostCacheForProblem(const std::string& problemType, int group, int exam) {
+  if (!g_hcacheEnabled) {
+    return;
+  }
   // Only save if we have new data (misses indicate new computations)
   if (g_cacheMisses > 0) {
     SaveHCostCacheToDisk(problemType, group, exam);
@@ -2087,9 +2130,8 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
 
     // 7. Calculate g-score efficiently
     if (finishedActivitiys.empty()) {
-        g = 0;
-    }
-   else {
+      g = 0;
+    } else {
         for (const auto& [id, finishTime] : finishedActivitiys) {
             if (finishTime > g) {
                 g = finishTime;

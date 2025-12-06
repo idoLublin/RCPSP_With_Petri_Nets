@@ -4,7 +4,11 @@
 // Your First C++ Program
 
 #include <iostream>
- #include "RCPSPState.cpp"
+#include <algorithm>
+#include <sstream>
+#include <iomanip>
+#include <ctime>
+#include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
 
@@ -19,6 +23,24 @@ void FinalizeHCostCacheForProblem(const std::string& problemType, int group, int
 bool SaveHCostCacheToDisk(const std::string& problemType, int group, int exam);
 bool LoadHCostCacheFromDisk(const std::string& problemType, int group, int exam);
 bool HCostCacheExistsOnDisk(const std::string& problemType, int group, int exam);
+void SetHCostCacheEnabled(bool enabled);
+bool IsHCostCacheEnabled();
+uint64_t GetHCostCacheHits();
+uint64_t GetHCostCacheMisses();
+size_t GetHCostCacheSize();
+#else
+inline void ClearHCostCache() {}
+inline void PrintCacheStats() {}
+inline void InitHCostCacheForProblem(const std::string&, int, int) {}
+inline void FinalizeHCostCacheForProblem(const std::string&, int, int) {}
+inline bool SaveHCostCacheToDisk(const std::string&, int, int) { return false; }
+inline bool LoadHCostCacheFromDisk(const std::string&, int, int) { return false; }
+inline bool HCostCacheExistsOnDisk(const std::string&, int, int) { return false; }
+inline void SetHCostCacheEnabled(bool) {}
+inline bool IsHCostCacheEnabled() { return false; }
+inline uint64_t GetHCostCacheHits() { return 0; }
+inline uint64_t GetHCostCacheMisses() { return 0; }
+inline size_t GetHCostCacheSize() { return 0; }
 #endif
 //****importent i changed GLUtil.h with recVec == operator abit****//
  //PetriExample petri;
@@ -34,7 +56,7 @@ bool HCostCacheExistsOnDisk(const std::string& problemType, int group, int exam)
 #include <fstream>
 #include <vector>
 
-void runBenchmark();
+void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache);
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
 std::atomic<bool> cancel_requested(false);
@@ -106,6 +128,16 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     clock_t setupend = clock();
 
+#ifdef RCPSP_ENABLE_HCACHE
+    const bool cacheRuntimeEnabled = IsHCostCacheEnabled();
+    uint64_t cacheHitsBefore = cacheRuntimeEnabled ? GetHCostCacheHits() : 0;
+    uint64_t cacheMissesBefore = cacheRuntimeEnabled ? GetHCostCacheMisses() : 0;
+#else
+    const bool cacheRuntimeEnabled = false;
+    uint64_t cacheHitsBefore = 0;
+    uint64_t cacheMissesBefore = 0;
+#endif
+
     auto start = std::chrono::high_resolution_clock::now();
     astar.GetPath(&as1, first, last, path);
     auto end = std::chrono::high_resolution_clock::now();
@@ -137,30 +169,51 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+#ifdef RCPSP_ENABLE_HCACHE
+        uint64_t cacheHitsAfter = cacheRuntimeEnabled ? GetHCostCacheHits() : 0;
+        uint64_t cacheMissesAfter = cacheRuntimeEnabled ? GetHCostCacheMisses() : 0;
+        size_t cacheSizeAfter = cacheRuntimeEnabled ? GetHCostCacheSize() : 0;
+        uint64_t cacheHitsDelta = (cacheRuntimeEnabled && cacheHitsAfter >= cacheHitsBefore)
+                                                                    ? (cacheHitsAfter - cacheHitsBefore)
+                                                                    : 0;
+        uint64_t cacheMissesDelta = (cacheRuntimeEnabled && cacheMissesAfter >= cacheMissesBefore)
+                                                                        ? (cacheMissesAfter - cacheMissesBefore)
+                                                                        : 0;
+#else
+        size_t cacheSizeAfter = 0;
+        uint64_t cacheHitsDelta = 0;
+        uint64_t cacheMissesDelta = 0;
+#endif
+
+        auto boolToString = [](bool value) { return value ? "True" : "False"; };
+
     std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << elapsed.count() << ","
-         << (!path.empty() ? "True" : "False") << ","
-         << makespan << ","
-         << astar.GetNodesExpanded() << ","
-         << astar.GetNodesTouched() << ","
-         << path.size() << ","
-         << "TP"<< ","
-         << problemType<< ","
-         << (useCS ? "True" : "False")<< ","
-       //  << "\n";
-         << 100 * generateTIME.count() / elapsed.count() << ","
-         << generateTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * avelableTIME.count() / elapsed.count() << ","
-         << avelableTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * hashTIME.count() / elapsed.count() << ","
-         << hashTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * HTIME.count() / elapsed.count() << ","
-         << HTIME.count() / count<< ","
-        << 100 * comperTime.count() / elapsed.count() << ","
-         << comperTime.count() / astar.GetNodesTouched() << ","
-         << 100 * secssesorTIME.count() / elapsed.count() << ","
-         << secssesorTIME.count() / count<< ","
-         << "\n";
+        file << group << "," << exam << "," << elapsed.count() << ","
+                 << boolToString(!path.empty()) << ","
+                 << makespan << ","
+                 << astar.GetNodesExpanded() << ","
+                 << astar.GetNodesTouched() << ","
+                 << path.size() << ","
+                 << "TP" << ","
+                 << problemType << ","
+                 << boolToString(useCS) << ","
+                 << boolToString(cacheRuntimeEnabled) << ","
+                 << cacheHitsDelta << ","
+                 << cacheMissesDelta << ","
+                 << cacheSizeAfter << ","
+                 << 100 * generateTIME.count() / elapsed.count() << ","
+                 << generateTIME.count() / astar.GetNodesTouched() << ","
+                 << 100 * avelableTIME.count() / elapsed.count() << ","
+                 << avelableTIME.count() / astar.GetNodesTouched() << ","
+                 << 100 * hashTIME.count() / elapsed.count() << ","
+                 << hashTIME.count() / astar.GetNodesTouched() << ","
+                 << 100 * HTIME.count() / elapsed.count() << ","
+                 << HTIME.count() / count << ","
+                 << 100 * comperTime.count() / elapsed.count() << ","
+                 << comperTime.count() / astar.GetNodesTouched() << ","
+                 << 100 * secssesorTIME.count() / elapsed.count() << ","
+                 << secssesorTIME.count() / count
+                 << "\n";
 
 
 
@@ -186,6 +239,16 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
 
     std::chrono::duration<double> elapsed;
+
+#ifdef RCPSP_ENABLE_HCACHE
+    const bool cacheRuntimeEnabled = IsHCostCacheEnabled();
+    uint64_t cacheHitsBefore = cacheRuntimeEnabled ? GetHCostCacheHits() : 0;
+    uint64_t cacheMissesBefore = cacheRuntimeEnabled ? GetHCostCacheMisses() : 0;
+#else
+    const bool cacheRuntimeEnabled = false;
+    uint64_t cacheHitsBefore = 0;
+    uint64_t cacheMissesBefore = 0;
+#endif
 
     auto start = std::chrono::high_resolution_clock::now();
     astar.GetPath(&as1, first, last, path);
@@ -219,28 +282,44 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+#ifdef RCPSP_ENABLE_HCACHE
+    const size_t cacheSizeAfter = cacheRuntimeEnabled ? GetHCostCacheSize() : 0;
+    const uint64_t cacheHitsDelta = cacheRuntimeEnabled ? (GetHCostCacheHits() - cacheHitsBefore) : 0;
+    const uint64_t cacheMissesDelta = cacheRuntimeEnabled ? (GetHCostCacheMisses() - cacheMissesBefore) : 0;
+#else
+    const size_t cacheSizeAfter = 0;
+    const uint64_t cacheHitsDelta = 0;
+    const uint64_t cacheMissesDelta = 0;
+#endif
+
+    auto boolToString = [](bool value) { return value ? "True" : "False"; };
+
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
-         << (!path.empty() ? "True" : "False") << ","
+         << boolToString(!path.empty()) << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-        << "TT"<< ","
-        << problemType<< ","
-         << (useCS ? "True" : "False")<< ","
-    << 100 * generateTIME.count() / elapsed.count() << ","
-<< generateTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * avelableTIME.count() / elapsed.count() << ","
-<< avelableTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * hashTIME.count() / elapsed.count() << ","
-<< hashTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * HTIME.count() / elapsed.count() << ","
-<< HTIME.count() / count
-<< 100 * comperTime.count() / elapsed.count() << ","
-<< comperTime.count() / astar.GetNodesTouched() << ","
-<< 100 * secssesorTIME.count() / elapsed.count() << ","
-<< secssesorTIME.count() / count
+         << "TT" << ","
+         << problemType << ","
+         << boolToString(useCS) << ","
+         << boolToString(cacheRuntimeEnabled) << ","
+         << cacheHitsDelta << ","
+         << cacheMissesDelta << ","
+         << cacheSizeAfter << ","
+         << 100 * generateTIME.count() / elapsed.count() << ","
+         << generateTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * avelableTIME.count() / elapsed.count() << ","
+         << avelableTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * hashTIME.count() / elapsed.count() << ","
+         << hashTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * HTIME.count() / elapsed.count() << ","
+         << HTIME.count() / count << ","
+         << 100 * comperTime.count() / elapsed.count() << ","
+         << comperTime.count() / astar.GetNodesTouched() << ","
+         << 100 * secssesorTIME.count() / elapsed.count() << ","
+         << secssesorTIME.count() / count
          << "\n";
 
     return 0;
@@ -356,21 +435,43 @@ last.name=1;
 
 
 
-std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
-    // Ensure folder exists
+std::string buildResultsFilename(const std::string& folder,
+                                 const std::string& problemType,
+                                 int groupStart,
+                                 int groupEnd,
+                                 int examStart,
+                                 int examEnd,
+                                 bool cacheEnabled) {
     if (!fs::exists(folder)) {
         fs::create_directories(folder);
     }
 
-    int count = 1;
-    std::string newFilename;
+    auto now = std::chrono::system_clock::now();
+    std::time_t nowTimeT = std::chrono::system_clock::to_time_t(now);
+    std::tm nowTm{};
+#ifdef _WIN32
+    localtime_s(&nowTm, &nowTimeT);
+#else
+    nowTm = *std::localtime(&nowTimeT);
+#endif
 
-    do {
-        newFilename = folder + "/" + baseName + std::to_string(count) + extension;
-        count++;
-    } while (fs::exists(newFilename)); // Ensure unique filename
+    std::ostringstream prefix;
+    prefix << folder << "/results_"
+           << std::put_time(&nowTm, "%Y%m%d-%H%M%S")
+           << '_' << problemType
+           << "_g" << groupStart << '-' << groupEnd
+           << "_e" << examStart << '-' << examEnd
+           << "_cache-" << (cacheEnabled ? "on" : "off");
 
-    return newFilename;
+    std::string base = prefix.str();
+    std::string filename = base + ".csv";
+    int suffix = 1;
+    while (fs::exists(filename)) {
+        filename = base + "_" + std::to_string(suffix) + ".csv";
+        ++suffix;
+    }
+
+    return filename;
 }
 
 //TODO: merge the redundant code here with the code in solveRCPSP function starting in the "// Reset and load problem" comment
@@ -442,32 +543,149 @@ void precomputeHCosts(const std::string& problemType, int groupStart, int groupE
 #endif
 }
 
+static void printUsage() {
+    std::cout << "Usage: rcpsp_driver [options]\n"
+              << "Options:\n"
+              << "  --precompute            Run in heuristic precomputation mode.\n"
+              << "  --problem-type <type>   Problem type to solve (default: j30).\n"
+              << "  --group-start <value>   First group to process (default: 1).\n"
+              << "  --group-end <value>     Last group to process (default: 16).\n"
+              << "  --exam-start <value>    First exam to process (default: 1).\n"
+              << "  --exam-end <value>      Last exam to process (default: 10).\n"
+              << "  --use-cache             Enable heuristic cache (default when available).\n"
+              << "  --no-cache              Disable heuristic cache even if compiled in.\n"
+              << "  -h, --help              Show this help message.\n";
+}
+
 int main(int argc, char* argv[]) {
-    // Check for precomputation mode
-    if (argc > 1 && std::string(argv[1]) == "--precompute") {
-        // Usage: ./rcpsp_driver --precompute [problemType] [groupStart] [groupEnd] [examStart] [examEnd]
-        std::string problemType = (argc > 2) ? argv[2] : "j30";
-        int groupStart = (argc > 3) ? std::stoi(argv[3]) : 16;
-        int groupEnd = (argc > 4) ? std::stoi(argv[4]) : 16;
-        int examStart = (argc > 5) ? std::stoi(argv[5]) : 1;
-        int examEnd = (argc > 6) ? std::stoi(argv[6]) : 10;
-        
+    std::string problemType = "j30";
+    int groupStart = 1;
+    int groupEnd = 16;
+    int examStart = 1;
+    int examEnd = 10;
+    bool precomputeMode = false;
+
+#ifdef RCPSP_ENABLE_HCACHE
+    bool cacheRequested = true;
+#else
+    bool cacheRequested = false;
+#endif
+    bool runtimeCacheEnabled = false;
+
+    bool parseError = false;
+    std::string parseErrorMessage;
+
+    auto requireValue = [&](int index, const std::string& option) -> const char* {
+        if (index + 1 >= argc) {
+            parseError = true;
+            parseErrorMessage = "Missing value for " + option;
+            return nullptr;
+        }
+        return argv[index + 1];
+    };
+
+    auto parseIntValue = [&](const std::string& option, const char* value) -> int {
+        try {
+            return std::stoi(value);
+        } catch (...) {
+            parseError = true;
+            parseErrorMessage = "Invalid integer for " + option + ": " + value;
+            return 0;
+        }
+    };
+
+    for (int i = 1; i < argc && !parseError; ++i) {
+        std::string arg = argv[i];
+
+        if (arg == "--help" || arg == "-h") {
+            printUsage();
+            return 0;
+        } else if (arg == "--precompute" || arg == "--dry-run") {
+            precomputeMode = true;
+        } else if (arg == "--problem-type") {
+            const char* value = requireValue(i, arg);
+            if (parseError) break;
+            problemType = value;
+            ++i;
+        } else if (arg == "--group-start") {
+            const char* value = requireValue(i, arg);
+            if (parseError) break;
+            groupStart = parseIntValue(arg, value);
+            ++i;
+        } else if (arg == "--group-end") {
+            const char* value = requireValue(i, arg);
+            if (parseError) break;
+            groupEnd = parseIntValue(arg, value);
+            ++i;
+        } else if (arg == "--exam-start") {
+            const char* value = requireValue(i, arg);
+            if (parseError) break;
+            examStart = parseIntValue(arg, value);
+            ++i;
+        } else if (arg == "--exam-end") {
+            const char* value = requireValue(i, arg);
+            if (parseError) break;
+            examEnd = parseIntValue(arg, value);
+            ++i;
+        } else if (arg == "--use-cache") {
+            cacheRequested = true;
+        } else if (arg == "--no-cache") {
+            cacheRequested = false;
+        } else {
+            parseError = true;
+            parseErrorMessage = "Unknown argument: " + arg;
+        }
+    }
+
+    if (parseError) {
+        std::cerr << parseErrorMessage << std::endl;
+        printUsage();
+        return 1;
+    }
+
+#ifdef RCPSP_ENABLE_HCACHE
+    SetHCostCacheEnabled(cacheRequested);
+    runtimeCacheEnabled = IsHCostCacheEnabled();
+#else
+    if (cacheRequested) {
+        std::cerr << "[HCache] Cache support not built; ignoring --use-cache." << std::endl;
+    }
+    runtimeCacheEnabled = false;
+#endif
+
+    if (groupEnd < groupStart) {
+        std::cerr << "group-end must be greater than or equal to group-start" << std::endl;
+        return 1;
+    }
+
+    if (examEnd < examStart) {
+        std::cerr << "exam-end must be greater than or equal to exam-start" << std::endl;
+        return 1;
+    }
+
+    if (precomputeMode) {
+#ifdef RCPSP_ENABLE_HCACHE
+        if (!runtimeCacheEnabled) {
+            std::cerr << "Error: heuristic cache disabled; re-run with --use-cache." << std::endl;
+            return 1;
+        }
         precomputeHCosts(problemType, groupStart, groupEnd, examStart, examEnd);
         return 0;
+#else
+        std::cerr << "Error: heuristic cache not available; rebuild with -DRCPSP_ENABLE_HCACHE=ON." << std::endl;
+        return 1;
+#endif
     }
-    
-    // Normal benchmark mode
-    runBenchmark();
+
+    runBenchmark(problemType, groupStart, groupEnd, examStart, examEnd, runtimeCacheEnabled);
     return 0;
 }
 
 
-void runBenchmark() {
+void runBenchmark(const std::string& problemType, int groupStart, int groupEnd, int examStart, int examEnd, bool useCache) {
     std::string folder = "results";
-    std::string baseName = "output_";
-    std::string extension = ".csv";
 
-    std::string filename = getNextFilename(folder, baseName, extension);
+    std::string filename = buildResultsFilename(folder, problemType, groupStart, groupEnd, examStart, examEnd, useCache);
 
     // Create and write to file
     std::ofstream file(filename);
@@ -481,158 +699,54 @@ void runBenchmark() {
 
     // Write header
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
-    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,Cache Enabled,Cache Hits,Cache Misses,Cache Size,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
 // omp_set_num_threads(3);
 //     //omp_set_num_threads(4); // 1. Set the core count.
 // #pragma omp parallel for collapse(2) schedule(dynamic)
 
 #ifdef RCPSP_ENABLE_HCACHE
-    std::cout << "[HCache] Heuristic cache with disk persistence enabled." << std::endl;
+    if (useCache) {
+        std::cout << "[HCache] Heuristic cache with disk persistence enabled." << std::endl;
+    } else {
+        std::cout << "[HCache] Heuristic cache compiled but disabled for this run." << std::endl;
+    }
 #endif
 
-    for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
+    std::cout << "Running benchmark for " << problemType
+              << " | groups " << groupStart << "-" << groupEnd
+              << " | exams " << examStart << "-" << examEnd << std::endl;
+
+    for (int i = groupStart; i <= groupEnd; ++i) {
+        for (int j = examStart; j <= examEnd; ++j) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
             RCPSPex.reset();
 
 #ifdef RCPSP_ENABLE_HCACHE
-            // Load cached h-costs from disk for this problem (if available)
-            InitHCostCacheForProblem("j30", i, j);
+            if (useCache) {
+                // Load cached h-costs from disk for this problem (if available)
+                InitHCostCacheForProblem(problemType, i, j);
+            } else {
+                ClearHCostCache();
+            }
 #endif
 
             // 2. SOLVE
-            solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
+            solveRCPSP(i, j, filename, problemType);
+            solveRCPSP_TT(i, j, filename, problemType);
 
 #ifdef RCPSP_ENABLE_HCACHE
-            // Save computed h-costs to disk and print stats
-            PrintCacheStats();
-            FinalizeHCostCacheForProblem("j30", i, j);
+            if (useCache) {
+                PrintCacheStats();
+                FinalizeHCostCacheForProblem(problemType, i, j);
+            }
 #endif
         }
     }
 
     sortCSV(filename);
-
-
-    // solveRCPSP(-1,-1,filename,"j30");
-    //
-    // for(int i=16;i<17;i++) {
-    //      for(int j=5;j<11;j++) {
-    //      solveRCPSP(i,j,filename,"j30");
-    //      solveRCPSP_TT(i,j,filename,"j30");
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
-
-     //solveRCPSP(34, 9, filename);
-  //   solveRCPSP(34, 10, filename);
-
-
-
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=false;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=true;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-
-    useCS=false;
-    //solveRCPSP(33,9,filename,"j60");
-    //solveRCPSP(33,10,filename,"j60");
-     //for(int i=34;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-      //  solveRCPSP(i,j,filename,"j60");
-       // }
-   // }
-   // solveRCPSP(48,5,filename,"j90");
-    //solveRCPSP(48,6,filename,"j90");
-    //solveRCPSP(48,7,filename,"j90");
-    //solveRCPSP(48,8,filename,"j90");
-    //solveRCPSP(48,9,filename,"j90");
-    //solveRCPSP(48,10,filename,"j90");
-
-    //for(int i=26;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-          //  solveRCPSP(i,j,filename,"j90");
-       // }
-    //}
-
-
-    // J120 לא רץ
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP(i,j,filename,"j120");
-    //     }
-    // }
-
-   // for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j120");
-   //     }
-    //}
-
-
-    useCS=true;
-
-//    for(int i=1;i<49;i++) {
-  //      for(int j=1;j<11;j++) {
-    //        solveRCPSP(i,j,filename,"j90");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-           // solveRCPSP(i,j,filename,"j120");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
- //       for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j30");
- //       }
-   // }
-
-    // for(int i=17;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j60");
-    //     }
-    // }
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j90");
-    //     }
-    // }
-
-    //for(int i=1;i<49;i++) {
-       //for(int j=1;j<11;j++) {
-           // solveRCPSP_TT(i,j,filename,"j120");
-      //  }
-   // }
-
-
-   //  for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //     solveRCPSP(i,j,filename);
-   //     //getinitialHcost(i,j,filename);
-   //     }
-   // }
-
-
-    // for(int i=1;i<49;i++) {
-    //      for(int j=1;j<11;j++) {
-    //      solveRCPSP_TT(i,j,filename);
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
-
 }
 
 struct ResultRow {

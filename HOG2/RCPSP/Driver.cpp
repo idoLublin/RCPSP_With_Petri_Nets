@@ -19,7 +19,7 @@
 #include <atomic>
 #include <iostream>
 // #include <windows.h>
-#include <omp.h> // Include this at the top of Driver.cpp
+// #include <omp.h> // Include this at the top of Driver.cpp
 #include <fstream>
 #include <vector>
 #include <climits>

@@ -15,9 +15,9 @@
 #include <sstream>
 #include <iomanip>
 
-// #ifdef __APPLE__
-// #include "TargetConditionals.h"
-// #endif
+#ifdef __APPLE__
+#define OS_MAC
+#endif
 
 #ifdef NO_OPENGL
 #include "gl.h"

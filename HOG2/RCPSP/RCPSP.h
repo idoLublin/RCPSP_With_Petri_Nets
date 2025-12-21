@@ -215,7 +215,9 @@ double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfi
 
 
 inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) const {
- return state1.h;
+
+
+  return state1.h;
 }
 
 inline double RCPSP::GCost(const RCPSPState &state1, const RCPSPState &state2) const {

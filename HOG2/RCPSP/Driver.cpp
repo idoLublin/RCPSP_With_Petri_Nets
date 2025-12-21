@@ -366,44 +366,44 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 // --- DELETE the entire parallel/sequential loop from your main() ---
 // --- Replace main() with this simplified structure ---
 
-int main(int argc, char *argv[]) {
-    // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
-    if (argc != 3) {
-        std::cerr << "Usage: ./Driver <START_GROUP_ID>" << std::endl;
-        return 1;
-    }
-
-    int startGroup = std::stoi(argv[1]);
-    std::string outputFolder = argv[2]; // Get folder from script
-    // This single execution will process TWO groups sequentially: G, G+1.
-    // G = startGroup (e.g., 1, 3, 5...)
-    // G+1 = next group (e.g., 2, 4, 6...)
-
-    // FIX: Use the Group ID directly in the filename
-    // This guarantees Job 14 writes to "..._14.csv" and Job 15 writes to "..._15.csv"
-    std::string filename = "results/batch_group_" + std::to_string(startGroup) + ".csv";
-
-    std::ofstream file(filename);
-    if (!file.is_open()) {
-        std::cerr << "❌ Error opening file: " << filename << std::endl;
-        return 1;
-    }
-    // Process Group 'G'
-    for (int j = 1; j < 11; j++) {
-        solveRCPSP(startGroup, j, filename, "j30");
-
-        // Same for TT
-        solveRCPSP_TT(startGroup, j, filename, "j30");    }
-
-    // Process Group 'G+1'
-
-    return 0;
-}
-
-//  int main() {
-//      runBenchmark();
+// int main(int argc, char *argv[]) {
+//     // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
+//     if (argc != 3) {
+//         std::cerr << "Usage: ./Driver <START_GROUP_ID>" << std::endl;
+//         return 1;
+//     }
+//
+//     int startGroup = std::stoi(argv[1]);
+//     std::string outputFolder = argv[2]; // Get folder from script
+//     // This single execution will process TWO groups sequentially: G, G+1.
+//     // G = startGroup (e.g., 1, 3, 5...)
+//     // G+1 = next group (e.g., 2, 4, 6...)
+//
+//     // FIX: Use the Group ID directly in the filename
+//     // This guarantees Job 14 writes to "..._14.csv" and Job 15 writes to "..._15.csv"
+//     std::string filename = "results/batch_group_" + std::to_string(startGroup) + ".csv";
+//
+//     std::ofstream file(filename);
+//     if (!file.is_open()) {
+//         std::cerr << "❌ Error opening file: " << filename << std::endl;
+//         return 1;
+//     }
+//     // Process Group 'G'
+//     for (int j = 1; j < 11; j++) {
+//         solveRCPSP(startGroup, j, filename, "j30");
+//
+//         // Same for TT
+//         solveRCPSP_TT(startGroup, j, filename, "j30");    }
+//
+//     // Process Group 'G+1'
+//
 //     return 0;
 // }
+
+ int main() {
+     runBenchmark();
+    return 0;
+}
 
 
 void runBenchmark() {
@@ -430,8 +430,8 @@ void runBenchmark() {
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
-    for(int i = 1; i < 2; i++) {
-        for(int j = 1; j < 11; j++) {
+    for(int i = 7; i < 8; i++) {
+        for(int j = 9; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
@@ -439,7 +439,7 @@ void runBenchmark() {
 
             // 2. SOLVE
             solveRCPSP(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
         }
     }
     sortCSV(filename);

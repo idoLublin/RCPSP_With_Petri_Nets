@@ -16,7 +16,7 @@ class RCPSPState {
     ~RCPSPState() {
         // Clear STL containers explicitly (optional, as they would be destroyed automatically)
         marking.clear();
-        unstartedTransitions.clear();
+        unfinishedTransitions.clear();
         activeTransitionIndices.clear();
         startedActivitiys.clear();
         finishedActivitiys.clear();
@@ -26,19 +26,19 @@ class RCPSPState {
     }
 
     std::vector<short> marking;
-    std::vector<short> unstartedTransitions;
+    std::vector<short> unfinishedTransitions;
     //std::vector<short> avilableTransitionIndices;  // Store transition IDs
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
 
-   bool direction;
-    bool nodestatus;
+   // bool direction;
+   //  bool nodestatus;
   //std::vector<RCPSPState> sons;
   //std::vector<int> unstartedTransitions;
 
 
-  unsigned int name=0;
-  unsigned int predecesorname=0;
+  // unsigned int name=0;
+  // unsigned int predecesorname=0;
 
   std::map<int, int> startedActivitiys;
   std::map<int, int> finishedActivitiys;
@@ -99,14 +99,14 @@ public:
     RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
     ~RCPSPState_TT() {
         marking.clear();
-        unstartedTransitions.clear();
+        unfinishedTransitions.clear();
         startedActivitiys.clear();
         finishedActivitiys.clear();
     }
 
     // --- Resource state ---
     std::vector<std::vector<std::pair<short, short>>> marking;
-    std::vector<short> unstartedTransitions;                         // transitions not yet started
+    std::vector<short> unfinishedTransitions;
     std::map<int, int> startedActivitiys;                          // activityID -> start time
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs

@@ -648,7 +648,7 @@ void getinitialHcost(int group, int exam, const std::string &filename) {
     getRCPSP(RCPSPex, group, exam);
 
     RCPSPState first;
-    initalHcost=getForwardHcost(first.unstartedTransitions,first.activeTransitionIndices);
+    initalHcost=getForwardHcost(first.unfinishedTransitions,first.activeTransitionIndices);
 
     std::cout << "initalHcost\n";
 

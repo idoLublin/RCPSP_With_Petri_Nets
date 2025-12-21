@@ -1070,10 +1070,10 @@ double getBackwordsHcost(std::set<int>startedTransitions, std::vector<std::pair<
   return h;
   */
 }
-RCPSPState::RCPSPState() : nodestatus(false) {
+RCPSPState::RCPSPState() {
   // 1. Safety Valve
   auto startS1 = std::chrono::high_resolution_clock::now();
-  direction = true;
+  //direction = true;
   startedActivitiys[0] = 0;
 
   // 2. Initialize Marking Vector (Fast!)
@@ -1111,9 +1111,9 @@ RCPSPState::RCPSPState() : nodestatus(false) {
   }
 
   // 5. Initialize Unstarted Transitions
-  unstartedTransitions.reserve(petri.Transitions.size());
+  unfinishedTransitions.reserve(petri.Transitions.size());
   for (int i = 1; i < petri.Transitions.size(); i++) {
-    unstartedTransitions.push_back(i + 1);
+    unfinishedTransitions.push_back(i + 1);
   }
 
   auto endS1 = std::chrono::high_resolution_clock::now();
@@ -1123,7 +1123,6 @@ RCPSPState::RCPSPState() : nodestatus(false) {
   // Now that marking is fully built, calculate what can run.
 
   g = 0;
-  name = 0;
 }
 //not working
 RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
@@ -1176,10 +1175,10 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status1, i
   auto startS4 = std::chrono::high_resolution_clock::now();
 
   // Copy basic properties
-  direction = predecesor.direction;
-  name = count;
-  nodestatus = status;
-  unstartedTransitions = predecesor.unstartedTransitions;
+  // direction = predecesor.direction;
+  // name = count;
+  // nodestatus = status;
+  unfinishedTransitions = predecesor.unfinishedTransitions;
   startedActivitiys = predecesor.startedActivitiys;
   finishedActivitiys = predecesor.finishedActivitiys;
   marking = predecesor.marking;
@@ -1190,7 +1189,7 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status1, i
   g = predecesor.g;
   status=status1;
   h=predecesor.h;
-  if (direction) {
+  if (1) {
     if (status) {
       //h = predecesor.h;
 
@@ -1220,9 +1219,9 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status1, i
       finishedActivitiys[active.name] = g;
 
       // Remove from unstarted
-      unstartedTransitions.erase(
-          std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), active.name),
-          unstartedTransitions.end());
+      unfinishedTransitions.erase(
+          std::remove(unfinishedTransitions.begin(), unfinishedTransitions.end(), active.name),
+          unfinishedTransitions.end());
 
       // Update durations and remove completed transitions
       // 1. נעדכן את הזמן שנותר לכולן
@@ -1257,9 +1256,9 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status1, i
         );
 
         // הסרה מ־unstarted אם לא הוסרה כבר
-        unstartedTransitions.erase(
-            std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), id),
-            unstartedTransitions.end()
+        unfinishedTransitions.erase(
+            std::remove(unfinishedTransitions.begin(), unfinishedTransitions.end(), id),
+            unfinishedTransitions.end()
         );
       }
 
@@ -1292,9 +1291,9 @@ RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status1, i
       g += active.duration;
       finishedActivitiys[active.name] = g;
 
-      unstartedTransitions.erase(
-          std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), active.name),
-          unstartedTransitions.end());
+      unfinishedTransitions.erase(
+          std::remove(unfinishedTransitions.begin(), unfinishedTransitions.end(), active.name),
+          unfinishedTransitions.end());
 
       for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
         activeTransitionIndices[i].second -= active.duration;
@@ -1501,8 +1500,8 @@ std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::st
 
 bool RCPSPState::operator==(const RCPSPState& other) const {
   // 1. Fast checks
-  if (name != other.name) return false;
-  if (direction != other.direction) return false;
+  // if (name != other.name) return false;
+  // if (direction != other.direction) return false;
 
   // 2. Vector Comparison
   // This is only safe if you GUARANTEE every vector is initialized
@@ -1544,7 +1543,7 @@ auto startS1 = std::chrono::high_resolution_clock::now();
 
     // 1. Initialize Vectors ONCE
     marking.resize(petri.places.size()); // Vectors start empty
-    unstartedTransitions.reserve(petri.Transitions.size());
+    unfinishedTransitions.reserve(petri.Transitions.size());
 
     // -------------------------------------------------------
     // STEP A: Setup Places (Start/End nodes & Initial tokens)
@@ -1589,7 +1588,7 @@ auto startS1 = std::chrono::high_resolution_clock::now();
     // -------------------------------------------------------
     // Start from 1 (Task 2) because Task 1 (Start Dummy) is handled by initial marking
   for (int i = 0; i < petri.Transitions.size(); i++) {
-    unstartedTransitions.push_back(i + 1);
+    unfinishedTransitions.push_back(i + 1);
   }
 
     // -------------------------------------------------------
@@ -1788,7 +1787,7 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     // 1. Copy structures from previous state
     startedActivitiys = prev.startedActivitiys;
     finishedActivitiys = prev.finishedActivitiys;
-    unstartedTransitions = prev.unstartedTransitions;
+    unfinishedTransitions = prev.unfinishedTransitions;
     marking = prev.marking;
 
     // 2. Cache frequently accessed data
@@ -1858,9 +1857,9 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
   }
 
     // 6. Remove from unstarted - optimized removal
-    auto it = std::find(unstartedTransitions.begin(), unstartedTransitions.end(), transitionId);
-    if (it != unstartedTransitions.end()) {
-        unstartedTransitions.erase(it); // Single iterator erase is faster
+    auto it = std::find(unfinishedTransitions.begin(), unfinishedTransitions.end(), transitionId);
+    if (it != unfinishedTransitions.end()) {
+        unfinishedTransitions.erase(it); // Single iterator erase is faster
     }
 
     // 7. Calculate g-score efficiently

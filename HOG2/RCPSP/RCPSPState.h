@@ -99,14 +99,14 @@ public:
     RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
     ~RCPSPState_TT() {
         marking.clear();
-        unfinishedTransitions.clear();
+        // unfinishedTransitions.clear();
         startedActivitiys.clear();
         finishedActivitiys.clear();
     }
 
     // --- Resource state ---
     std::vector<std::vector<std::pair<short, short>>> marking;
-    std::vector<short> unfinishedTransitions;
+    // std::vector<short> unfinishedTransitions;
     std::map<int, int> startedActivitiys;                          // activityID -> start time
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs

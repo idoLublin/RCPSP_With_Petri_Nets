@@ -1543,7 +1543,6 @@ auto startS1 = std::chrono::high_resolution_clock::now();
 
     // 1. Initialize Vectors ONCE
     marking.resize(petri.places.size()); // Vectors start empty
-    unfinishedTransitions.reserve(petri.Transitions.size());
 
     // -------------------------------------------------------
     // STEP A: Setup Places (Start/End nodes & Initial tokens)
@@ -1587,9 +1586,9 @@ auto startS1 = std::chrono::high_resolution_clock::now();
     // STEP C: Setup Transitions
     // -------------------------------------------------------
     // Start from 1 (Task 2) because Task 1 (Start Dummy) is handled by initial marking
-  for (int i = 0; i < petri.Transitions.size(); i++) {
-    unfinishedTransitions.push_back(i + 1);
-  }
+  // for (int i = 0; i < petri.Transitions.size(); i++) {
+  //   unfinishedTransitions.push_back(i + 1);
+  // }
 
     // -------------------------------------------------------
     // Finalize
@@ -1787,7 +1786,7 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     // 1. Copy structures from previous state
     startedActivitiys = prev.startedActivitiys;
     finishedActivitiys = prev.finishedActivitiys;
-    unfinishedTransitions = prev.unfinishedTransitions;
+    //unfinishedTransitions = prev.unfinishedTransitions;
     marking = prev.marking;
 
     // 2. Cache frequently accessed data
@@ -1857,10 +1856,10 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
   }
 
     // 6. Remove from unstarted - optimized removal
-    auto it = std::find(unfinishedTransitions.begin(), unfinishedTransitions.end(), transitionId);
-    if (it != unfinishedTransitions.end()) {
-        unfinishedTransitions.erase(it); // Single iterator erase is faster
-    }
+    // auto it = std::find(unfinishedTransitions.begin(), unfinishedTransitions.end(), transitionId);
+    // if (it != unfinishedTransitions.end()) {
+    //     unfinishedTransitions.erase(it); // Single iterator erase is faster
+    // }
 
     // 7. Calculate g-score efficiently
     if (finishedActivitiys.empty()) {

@@ -508,7 +508,23 @@ inline RCPSP_TT::RCPSP_TT() {
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
   auto startS1 = std::chrono::high_resolution_clock::now();
-  std::vector<std::pair<short, short>>avilableTransitionIndices = getAvailableTransitionIndices_TT(nodeID.unfinishedTransitions, nodeID.finishedActivitiys, nodeID.marking);
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Check if this taskID is inside the finished map.
+    // If find() returns end(), the task is NOT finished, so we keep it.
+    if (nodeID.finishedActivitiys.find(taskID) == nodeID.finishedActivitiys.end()) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+  std::vector<std::pair<short, short>>avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
@@ -527,6 +543,27 @@ inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &g
 }
 inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
   // 9. Optimized independent set calculation
+  // Optimization: Reserve memory to prevent re-allocations.
+  // If you know the number of unstarted tasks (e.g., total - finished_count), use that.
+  // Otherwise, just reserve total.
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Check if this taskID is inside the finished map.
+    // If find() returns end(), the task is NOT finished, so we keep it.
+    if (state1.finishedActivitiys.find(taskID) == state1.finishedActivitiys.end()) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+
 int lastActivityId = -1;
   int maxTime = -1;
 
@@ -543,10 +580,10 @@ int lastActivityId = -1;
 
     // Pre-reserve vectors
     std::vector<int> independentSet;
-    independentSet.reserve(state1.unfinishedTransitions.size());
+    independentSet.reserve(tempUnstarted.size());
 
     // Filter independent transitions
-    for (int actIdx : state1.unfinishedTransitions) {
+    for (int actIdx : tempUnstarted) {
       const std::string& actName = RCPSPex.activities[actIdx - 1].name;
       if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end()) {
         independentSet.push_back(actIdx);
@@ -556,9 +593,9 @@ int lastActivityId = -1;
     // Create lookup set for efficient filtering
     std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
     std::vector<short> newUnstartedTransitions;
-    newUnstartedTransitions.reserve(state1.unfinishedTransitions.size());
+    newUnstartedTransitions.reserve(tempUnstarted.size());
 
-    for (int id : state1.unfinishedTransitions) {
+    for (int id : tempUnstarted) {
       if (independentLookup.find(id) == independentLookup.end()) {
         newUnstartedTransitions.push_back(id);
       }
@@ -579,11 +616,11 @@ int lastActivityId = -1;
     }
 
   // getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime;
-       return std::max(getForwardHcost_TT(state1.unfinishedTransitions,state1.finishedActivitiys) - unkTime,
+       return std::max(getForwardHcost_TT(tempUnstarted,state1.finishedActivitiys) - unkTime,
                   getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
   } else {
     // Fallback if no finished activities
-    return getForwardHcost_TT(state1.unfinishedTransitions,state1.finishedActivitiys);
+    return getForwardHcost_TT(tempUnstarted,state1.finishedActivitiys);
   }
 
 }

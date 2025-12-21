@@ -59,6 +59,18 @@ struct AStarCompareWithF {
 	}
 };
 */
+
+inline size_t getStartedSize(const RCPSPState_TT& state) {
+	return state.finishedActivitiys.size();
+}
+
+// 2. Helper for TP (Standard RCPSP)
+// specific logic: Started = Finished + Active
+inline size_t getStartedSize(const RCPSPState& state) {
+	return state.finishedActivitiys.size() + state.activeTransitionIndices.size();
+}
+
+
 std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 //ido lublin 28.4 A*
 
@@ -100,32 +112,44 @@ struct AStarCompareWithF {
 
 bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
-	auto startS1 = std::chrono::high_resolution_clock::now();
+	//auto startS1 = std::chrono::high_resolution_clock::now();
 
 		// Primary: f_score (lower f = higher priority, so i1 should come BEFORE i2 if i1.f < i2.f)
 		if (!fequal(i1.f, i2.f)) {
-			auto endS1 = std::chrono::high_resolution_clock::now();
-			comperTime += endS1 - startS1;
+			//auto endS1 = std::chrono::high_resolution_clock::now();
+			//comperTime += endS1 - startS1;
 			return fgreater(i1.f, i2.f); // i1 has lower priority if it has higher f
 		}
 
 		// Secondary: g_score (higher g = higher priority when f is equal)
 		if (!fequal(i1.g, i2.g)) {
-			auto endS1 = std::chrono::high_resolution_clock::now();
-			comperTime += endS1 - startS1;
+			//auto endS1 = std::chrono::high_resolution_clock::now();
+			//comperTime += endS1 - startS1;
 			return fless(i1.g, i2.g); // i1 has lower priority if it has lower g
 		}
 
 		// Tertiary: started_activities (more started = higher priority)
-		if (i1.data.startedActivitiys.size() != i2.data.startedActivitiys.size()) {
-			auto endS1 = std::chrono::high_resolution_clock::now();
-			comperTime += endS1 - startS1;
-			return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size(); // i1 has lower priority if fewer started
-		}
+		// if (i1.data.startedActivitiys.size() != i2.data.startedActivitiys.size()) {
+		// 	//auto endS1 = std::chrono::high_resolution_clock::now();
+		// 	//comperTime += endS1 - startS1;
+		// 	return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size(); // i1 has lower priority if fewer started
+		// }
+	// (Compiler automatically picks the correct math for TT or TP)
+	size_t start1 = getStartedSize(i1.data);
+	size_t start2 = getStartedSize(i2.data);
+
+	// 2. Tertiary Check: Compare Started Count
+	if (start1 != start2) {
+		// auto endS1 = std::chrono::high_resolution_clock::now();
+		// comperTime += endS1 - startS1;
+		return start1 < start2; // Lower started count = Lower priority
+	}
+
+
 
 		// Quaternary: finished_activities (more finished = higher priority)
-	auto endS1 = std::chrono::high_resolution_clock::now();
-	comperTime += endS1 - startS1;
+	//auto endS1 = std::chrono::high_resolution_clock::now();
+	//comperTime += endS1 - startS1;
 	return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size(); // i1 has lower priority if fewer finished
 
 	}

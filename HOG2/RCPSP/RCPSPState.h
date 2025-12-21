@@ -12,21 +12,34 @@ std::string initialstatename;
 class RCPSPState {
   public:
   RCPSPState();
-  RCPSPState(RCPSPState predecessor,P_RCPSP::Transition newTransition,bool status,int location,uint64_t &count);
+    // Add this inside your class RCPSPState definition
     ~RCPSPState() {
-        // Clear STL containers explicitly (optional, as they would be destroyed automatically)
-        marking.clear();
-        unfinishedTransitions.clear();
-        activeTransitionIndices.clear();
-        startedActivitiys.clear();
-        finishedActivitiys.clear();
+        // 1. Force release of vector memory
+        std::vector<short>().swap(marking);
+        std::vector<std::pair<short, short>>().swap(activeTransitionIndices);
 
-        // Any additional custom cleanup logic can go here
+        // 2. Force release of map memory (Swapping with empty map forces RAM release)
+        std::map<int, int>().swap(startedActivitiys);
+        std::map<int, int>().swap(finishedActivitiys);
 
+        // Note: Standard .clear() only empties the container but often keeps
+        // the RAM reserved. The .swap() trick forces it to return RAM to the OS.
     }
+  RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
+    // ~RCPSPState() {
+    //     // Clear STL containers explicitly (optional, as they would be destroyed automatically)
+    //     marking.clear();
+    //    // unfinishedTransitions.clear();
+    //     activeTransitionIndices.clear();
+    //     startedActivitiys.clear();
+    //     finishedActivitiys.clear();
+    //
+    //     // Any additional custom cleanup logic can go here
+    //
+    // }
 
     std::vector<short> marking;
-    std::vector<short> unfinishedTransitions;
+    //std::vector<short> unfinishedTransitions;
     //std::vector<short> avilableTransitionIndices;  // Store transition IDs
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
@@ -95,19 +108,30 @@ class RCPSPState_TT {
 public:
     // --- Constructors ---
     RCPSPState_TT();
+    ~RCPSPState_TT() {
+        // 1. Clear complex nested vector
+        // This is expensive to delete! It requires looping.
+        for (auto& inner_vec : marking) {
+            std::vector<std::pair<short, short>>().swap(inner_vec);
+        }
+        std::vector<std::vector<std::pair<short, short>>>().swap(marking);
+
+        // 2. Clear Map
+        std::map<int, int>().swap(finishedActivitiys);
+    }
    // RCPSPState_TT(const RCPSPState_TT& predecessor, int newTransitionId, bool applyTransition, int location, uint64_t& count);
     RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
-    ~RCPSPState_TT() {
-        marking.clear();
-        // unfinishedTransitions.clear();
-        startedActivitiys.clear();
-        finishedActivitiys.clear();
-    }
+    // ~RCPSPState_TT() {
+    //     marking.clear();
+    //     // unfinishedTransitions.clear();
+    //     //startedActivitiys.clear();
+    //     finishedActivitiys.clear();
+    // }
 
     // --- Resource state ---
     std::vector<std::vector<std::pair<short, short>>> marking;
     // std::vector<short> unfinishedTransitions;
-    std::map<int, int> startedActivitiys;                          // activityID -> start time
+   // std::map<int, int> startedActivitiys;                          // activityID -> start time
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
 

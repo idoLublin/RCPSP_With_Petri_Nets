@@ -51,13 +51,13 @@ namespace fs = std::filesystem;
 int solveRCPSP(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving: " << group<<":"<<exam << std::endl;
 
-    generateTIME= std::chrono::duration<double>(0);
-    avelableTIME= std::chrono::duration<double>(0);
-    HTIME= std::chrono::duration<double>(0);
-    hashTIME= std::chrono::duration<double>(0);
-    comperTime= std::chrono::duration<double>(0);
-    secssesorTIME= std::chrono::duration<double>(0);
-    clock_t setupTIME = clock();
+    // generateTIME= std::chrono::duration<double>(0);
+    // avelableTIME= std::chrono::duration<double>(0);
+    // HTIME= std::chrono::duration<double>(0);
+    // hashTIME= std::chrono::duration<double>(0);
+    // comperTime= std::chrono::duration<double>(0);
+    // secssesorTIME= std::chrono::duration<double>(0);
+    // clock_t setupTIME = clock();
 
     getPetri(petri, group, exam,problemType);
     getRCPSP(RCPSPex, group, exam,problemType);
@@ -192,9 +192,9 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         RCPSPState_TT state=path.back();
             //std::cout << "g: " << state.g;
 
-            for (const auto& [actId, startTime] : state.startedActivitiys) {
-                std::cout << actId << ":" << startTime << " ";
-            }
+            // for (const auto& [actId, startTime] : state.startedActivitiys) {
+            //     std::cout << actId << ":" << startTime << " ";
+            // }
 
             std::cout << std::endl;
             makespan = state.g;
@@ -438,7 +438,7 @@ void runBenchmark() {
             RCPSPex.reset();
 
             // 2. SOLVE
-            //solveRCPSP(i, j, filename, "j30");
+            solveRCPSP(i, j, filename, "j30");
             solveRCPSP_TT(i, j, filename, "j30");
         }
     }
@@ -648,7 +648,7 @@ void getinitialHcost(int group, int exam, const std::string &filename) {
     getRCPSP(RCPSPex, group, exam);
 
     RCPSPState first;
-    initalHcost=getForwardHcost(first.unfinishedTransitions,first.activeTransitionIndices);
+    //initalHcost=getForwardHcost(first.unfinishedTransitions,first.activeTransitionIndices);
 
     std::cout << "initalHcost\n";
 

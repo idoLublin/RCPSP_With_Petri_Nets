@@ -42,7 +42,7 @@ class RCPSP : public SearchEnvironment<RCPSPState,int>{
 //int test=0;
 
 inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
-  auto startS1 = std::chrono::high_resolution_clock::now();
+ // auto startS1 = std::chrono::high_resolution_clock::now();
 //test=1;
   std::size_t seed = 0;
 
@@ -55,9 +55,9 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
     seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-  auto endS1 = std::chrono::high_resolution_clock::now();
-
-  hashTIME += endS1-startS1;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  //
+  // hashTIME += endS1-startS1;
   return seed;
 
 }
@@ -66,7 +66,7 @@ std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking)
 
 
 
-  auto startS4 = std::chrono::high_resolution_clock::now();
+ // auto startS4 = std::chrono::high_resolution_clock::now();
 
   std::vector<int> availableIndices;
 
@@ -99,8 +99,8 @@ std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking)
     }
   }
 
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  avelableTIME += endS1-startS4;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  // avelableTIME += endS1-startS4;
 
   return availableIndices;
 }
@@ -112,7 +112,7 @@ inline RCPSP::RCPSP() {
 }
 
 inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
-  auto startS1 = std::chrono::high_resolution_clock::now();
+  //auto startS1 = std::chrono::high_resolution_clock::now();
 
   // --- OPTIMIZATION FIX ---
   // 1. Calculate locally (Stack allocation).
@@ -161,8 +161,8 @@ inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPStat
     neighbors.emplace_back(RCPSPState(nodeID, transition, true, i, count));
   }
 
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  secssesorTIME += endS1 - startS1;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  // secssesorTIME += endS1 - startS1;
 }
 inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) const {
   int finalID = petri.place_name_to_id.at(finalstatename);
@@ -219,7 +219,23 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
     return state1.h;//if status is 1 the h is identical to before so we dont need to change a thing
   }
   else {
-    state1.h= getForwardHcost(state1.unfinishedTransitions,state1.activeTransitionIndices,state1.finishedActivitiys);
+    std::vector<short> tempUnstarted;
+
+    // Optimization: Reserve max possible size to prevent re-allocations
+    // (Using the size logic from your original code)
+    tempUnstarted.reserve(petri.Transitions.size());
+
+    // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+      short taskID = i + 1;
+
+      // THE FIX: Check if this taskID is inside the finished map.
+      // If find() returns end(), the task is NOT finished, so we keep it.
+      if (state1.finishedActivitiys.find(taskID) == state1.finishedActivitiys.end()) {
+        tempUnstarted.push_back(taskID);
+      }
+    }
+    state1.h= getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.finishedActivitiys);
     return state1.h;
 
   }
@@ -432,7 +448,7 @@ else {
 
   uint64_t GetStateHash(const RCPSPState_bi &node) const {
 
-    auto startS1 = std::chrono::high_resolution_clock::now();
+    //auto startS1 = std::chrono::high_resolution_clock::now();
     std::size_t seed = 0;
     // Hash the marking (Petri net state)
     for (const auto& pair : node.activeTransitionIndices) {
@@ -450,8 +466,8 @@ else {
       seed ^= std::hash<int>{}(activity) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
 
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    hashTIME += endS1 - startS1;
+    // auto endS1 = std::chrono::high_resolution_clock::now();
+    // hashTIME += endS1 - startS1;
     return seed;
 
     // Hash the finished activities
@@ -507,7 +523,7 @@ inline RCPSP_TT::RCPSP_TT() {
 }
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
-  auto startS1 = std::chrono::high_resolution_clock::now();
+  //auto startS1 = std::chrono::high_resolution_clock::now();
   std::vector<short> tempUnstarted;
 
   // Optimization: Reserve max possible size to prevent re-allocations
@@ -529,8 +545,8 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
   }
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  secssesorTIME += endS1 - startS1;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  // secssesorTIME += endS1 - startS1;
 
 }
 
@@ -603,12 +619,19 @@ int lastActivityId = -1;
 
     // 10. Calculate heuristic efficiently
     int latestStart = 0;
-    for (const auto& [id, startTime] : state1.startedActivitiys) {
+    for (const auto& [id, finishTime] : state1.finishedActivitiys) {
+      // 1. Get the duration of this activity
+      // Note: Adjust indexing (id-1) if your activities vector is 0-indexed but IDs are 1-based
+      int duration = RCPSPex.activities[id - 1].duration;
+
+      // 2. Calculate Start Time
+      int startTime = finishTime - duration;
+
+      // 3. Update Max
       if (startTime > latestStart) {
         latestStart = startTime;
       }
     }
-
     int unkTime = state1.g - latestStart;
     std::map<int, int> finishedActivitiysnew=state1.finishedActivitiys;                         // activityID -> finish time
     for (int actIdx : independentSet) {
@@ -629,16 +652,16 @@ inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 }
 
 inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
-  auto startS1 = std::chrono::high_resolution_clock::now();
+ // auto startS1 = std::chrono::high_resolution_clock::now();
 
   std::size_t seed = 0;
   for (const auto& pair : node.finishedActivitiys) {
     seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-  auto endS1 = std::chrono::high_resolution_clock::now();
-
-  hashTIME += endS1-startS1;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  //
+  // hashTIME += endS1-startS1;
   return seed;
 
 }

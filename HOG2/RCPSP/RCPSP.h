@@ -215,9 +215,15 @@ double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfi
 
 
 inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) const {
+  if (state1.status) {
+    return state1.h;//if status is 1 the h is identical to before so we dont need to change a thing
+  }
+  else {
+    state1.h= getForwardHcost(state1.unstartedTransitions,state1.activeTransitionIndices,state1.finishedActivitiys);
+    return state1.h;
 
-
-  return state1.h;
+  }
+  //return state1.h;
 }
 
 inline double RCPSP::GCost(const RCPSPState &state1, const RCPSPState &state2) const {
@@ -521,10 +527,7 @@ inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &g
 }
 inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
   // 9. Optimized independent set calculation
-  return state1.h;
-
-
-  int lastActivityId = -1;
+int lastActivityId = -1;
   int maxTime = -1;
 
   // Find last finished activity by ID instead of name
@@ -575,16 +578,13 @@ inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &
       finishedActivitiysnew[actIdx] = 0;
     }
 
-   getForwardHcost_TT(state1.unstartedTransitions,state1.finishedActivitiys) - unkTime;
-      return std::max(getForwardHcost_TT(state1.unstartedTransitions,state1.finishedActivitiys) - unkTime,
-                 getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
+  // getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime;
+       return std::max(getForwardHcost_TT(state1.unstartedTransitions,state1.finishedActivitiys) - unkTime,
+                  getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
   } else {
     // Fallback if no finished activities
     return getForwardHcost_TT(state1.unstartedTransitions,state1.finishedActivitiys);
   }
-
-
-
 
 }
 inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {

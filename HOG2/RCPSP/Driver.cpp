@@ -430,8 +430,8 @@ void runBenchmark() {
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
-    for(int i = 7; i < 8; i++) {
-        for(int j = 9; j < 11; j++) {
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
@@ -439,7 +439,7 @@ void runBenchmark() {
 
             // 2. SOLVE
             solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
         }
     }
     sortCSV(filename);

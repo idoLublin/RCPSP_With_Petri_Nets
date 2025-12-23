@@ -60,6 +60,28 @@ struct AStarCompareWithF {
 };
 */
 
+
+inline size_t getStartedCount(const RCPSPState& state) {
+	size_t count = 0;
+	// Assuming you have a vector of started times, count non -1s
+	for (int t : state.startedActivitiys) {
+		if (t != -1) count++;
+	}
+	return count;
+}
+
+// Version 2: For TT (Time Ticks) - Does nothing (Returns 0)
+// Since TT doesn't track "started" in the same way, we return 0
+// effectively disabling this specific tie-breaker for TT.
+inline size_t getStartedCount(const RCPSPState_TT& state) {
+	// If you have a vector called 'activeActivitiys' in TT, you could count that instead!
+	// For now, return 0 to fix the compile error.
+	return 0;
+}
+
+
+
+
 inline size_t getStartedSize(const RCPSPState_TT& state) {
 	return state.finishedActivitiys.size();
 }
@@ -112,46 +134,38 @@ struct AStarCompareWithF {
 
 bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
-	//auto startS1 = std::chrono::high_resolution_clock::now();
+	/// 1. Primary: f_score
+	if (i1.f != i2.f) return i1.f > i2.f;
 
-		// Primary: f_score (lower f = higher priority, so i1 should come BEFORE i2 if i1.f < i2.f)
-		if (!fequal(i1.f, i2.f)) {
-			//auto endS1 = std::chrono::high_resolution_clock::now();
-			//comperTime += endS1 - startS1;
-			return fgreater(i1.f, i2.f); // i1 has lower priority if it has higher f
+	// 2. Secondary: g_score
+	if (i1.g != i2.g) return i1.g < i2.g;
+
+	// Helper lambda to count valid items (not -1)
+	auto countValid = [](const std::vector<int>& vec) {
+		int count = 0;
+		for (int v : vec) {
+			if (v != -1) count++;
+		}
+		return count;
+	};
+
+	// 3. Tertiary: Started Count
+	// You mentioned you had a helper for this, ensure it counts non -1s!
+		size_t start1 = getStartedCount(i1.data);
+		size_t start2 = getStartedCount(i2.data);
+
+		if (start1 != start2) {
+			return start1 < start2;
 		}
 
-		// Secondary: g_score (higher g = higher priority when f is equal)
-		if (!fequal(i1.g, i2.g)) {
-			//auto endS1 = std::chrono::high_resolution_clock::now();
-			//comperTime += endS1 - startS1;
-			return fless(i1.g, i2.g); // i1 has lower priority if it has lower g
-		}
+	// 4. Quaternary: Finished Count (The specific fix you asked for)
+	int finish1 = countValid(i1.data.finishedActivitiys);
+	int finish2 = countValid(i2.data.finishedActivitiys);
 
-		// Tertiary: started_activities (more started = higher priority)
-		// if (i1.data.startedActivitiys.size() != i2.data.startedActivitiys.size()) {
-		// 	//auto endS1 = std::chrono::high_resolution_clock::now();
-		// 	//comperTime += endS1 - startS1;
-		// 	return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size(); // i1 has lower priority if fewer started
-		// }
-	// (Compiler automatically picks the correct math for TT or TP)
-	size_t start1 = getStartedSize(i1.data);
-	size_t start2 = getStartedSize(i2.data);
-
-	// 2. Tertiary Check: Compare Started Count
-	if (start1 != start2) {
-		// auto endS1 = std::chrono::high_resolution_clock::now();
-		// comperTime += endS1 - startS1;
-		return start1 < start2; // Lower started count = Lower priority
-	}
-
-
-
-		// Quaternary: finished_activities (more finished = higher priority)
-	//auto endS1 = std::chrono::high_resolution_clock::now();
-	//comperTime += endS1 - startS1;
-	return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size(); // i1 has lower priority if fewer finished
-
+	// We prefer MORE finished activities.
+	// In a min-heap, "true" means i1 is worse.
+	// i1 is worse if it has FEWER finished items.
+	return finish1 < finish2;
 	}
 	 };
 /*

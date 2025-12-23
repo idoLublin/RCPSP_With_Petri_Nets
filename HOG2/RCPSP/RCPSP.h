@@ -553,13 +553,16 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
   for (int i = 0; i < petri.Transitions.size(); i++) {
     short taskID = i + 1;
 
-    // THE FIX: Check if this taskID is inside the finished map.
-    // If find() returns end(), the task is NOT finished, so we keep it.
-    if (nodeID.finishedActivitiys.find(taskID) == nodeID.finishedActivitiys.end()) {
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of .find() == .end(), we check if the value is -1.
+    if (nodeID.finishedActivitiys[taskID] == -1) {
       tempUnstarted.push_back(taskID);
     }
   }
-  std::vector<std::pair<short, short>>avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
+
+  // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+  // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
@@ -570,7 +573,15 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
 }
 
 inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &goal) const {
-  if (node.finishedActivitiys.size() ==petri.Transitions.size())
+  int actualFinishedCount = 0;
+  for (int t : node.finishedActivitiys) {
+    if (t != -1) {
+      actualFinishedCount++;
+    }
+  }
+
+  // Compare against the total number of required transitions
+  return actualFinishedCount == petri.Transitions.size();  if (node.finishedActivitiys.size() ==petri.Transitions.size())
     return true;
   else
     return false;
@@ -585,15 +596,16 @@ inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 
   // Optimization: Reserve max possible size to prevent re-allocations
   // (Using the size logic from your original code)
+  // Optimization: Pre-allocate memory to avoid reallocations during push_back
   tempUnstarted.reserve(petri.Transitions.size());
 
-  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
   for (int i = 0; i < petri.Transitions.size(); i++) {
     short taskID = i + 1;
 
-    // THE FIX: Check if this taskID is inside the finished map.
-    // If find() returns end(), the task is NOT finished, so we keep it.
-    if (state1.finishedActivitiys.find(taskID) == state1.finishedActivitiys.end()) {
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of map.find(), check if the value at this index is -1.
+    // -1 indicates the task has not finished yet.
+    if (state1.finishedActivitiys[taskID] == -1) {
       tempUnstarted.push_back(taskID);
     }
   }
@@ -603,10 +615,15 @@ int lastActivityId = -1;
   int maxTime = -1;
 
   // Find last finished activity by ID instead of name
-  for (const auto& [id, time] : state1.finishedActivitiys) {
-    if (time > maxTime) {
-      maxTime = time;
-      lastActivityId = id;
+  for (int id = 0; id < state1.finishedActivitiys.size(); ++id) {
+    int time = state1.finishedActivitiys[id];
+
+    // THE FIX: Only process tasks that actually finished (time != -1)
+    if (time != -1) {
+      if (time > maxTime) {
+        maxTime = time;
+        lastActivityId = id;
+      }
     }
   }
 
@@ -638,33 +655,46 @@ int lastActivityId = -1;
 
     // 10. Calculate heuristic efficiently
     int latestStart = 0;
-    for (const auto& [id, finishTime] : state1.finishedActivitiys) {
-      // 1. Get the duration of this activity
-      // Note: Adjust indexing (id-1) if your activities vector is 0-indexed but IDs are 1-based
-      int duration = RCPSPex.activities[id - 1].duration;
 
-      // 2. Calculate Start Time
-      int startTime = finishTime - duration;
+    // FIX: Iterate through vector indices
+    for (int id = 0; id < state1.finishedActivitiys.size(); ++id) {
+      int finishTime = state1.finishedActivitiys[id];
 
-      // 3. Update Max
-      if (startTime > latestStart) {
-        latestStart = startTime;
+      // Check if valid finish time exists
+      if (finishTime != -1) {
+        // 1. Get the duration of this activity
+        // Note: 'id' is 1-based, so subtract 1 to access the static activities vector
+        int duration = RCPSPex.activities[id - 1].duration;
+
+        // 2. Calculate Start Time
+        int startTime = finishTime - duration;
+
+        // 3. Update Max
+        if (startTime > latestStart) {
+          latestStart = startTime;
+        }
       }
     }
+
     int unkTime = state1.g - latestStart;
-    std::map<int, int> finishedActivitiysnew=state1.finishedActivitiys;                         // activityID -> finish time
+
+    // FIX: Copy the vector (std::vector copy is deep by default)
+    std::vector<int> finishedActivitiysnew = state1.finishedActivitiys;
+
     for (int actIdx : independentSet) {
+      // FIX: Direct index access
       finishedActivitiysnew[actIdx] = 0;
     }
 
-  // getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime;
-       return std::max(getForwardHcost_TT(tempUnstarted,state1.finishedActivitiys) - unkTime,
-                  getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
+    // return std::max(getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys) - unkTime,
+    //            getForwardHcost_TT(newUnstartedTransitions, finishedActivitiysnew));
+    return std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
+           getForwardHcost_TT(newUnstartedTransitions));
   } else {
     // Fallback if no finished activities
-    return getForwardHcost_TT(tempUnstarted,state1.finishedActivitiys);
+    return getForwardHcost_TT(tempUnstarted);
+    // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
   }
-
 }
 inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
   return state2.g-state1.g;//+state1.g
@@ -674,9 +704,17 @@ inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
  // auto startS1 = std::chrono::high_resolution_clock::now();
 
   std::size_t seed = 0;
-  for (const auto& pair : node.finishedActivitiys) {
-    seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  for (int id = 0; id < node.finishedActivitiys.size(); ++id) {
+    int time = node.finishedActivitiys[id];
+
+    // Only hash if the activity is actually finished (equivalent to existing in the map)
+    if (time != -1) {
+      // Hash the ID (formerly pair.first)
+      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+      // Hash the Time (formerly pair.second)
+      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();
   //

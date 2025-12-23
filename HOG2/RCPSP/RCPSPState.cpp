@@ -1487,6 +1487,7 @@ auto startS1 = std::chrono::high_resolution_clock::now();
 
     // 1. Initialize Vectors ONCE
     marking.resize(petri.places.size()); // Vectors start empty
+    finishedActivitiys.assign(petri.Transitions.size() + 1, -1);
 
     // -------------------------------------------------------
     // STEP A: Setup Places (Start/End nodes & Initial tokens)
@@ -1655,7 +1656,9 @@ double computeEarliestFinish(int activityId,
 }
 
 //!!!i changed map3 (early finish) havent chack correctness
-double getForwardHcost_TT(std::vector<short>unstartedTransitions, std::map<int, int> finishedActivitiys
+double getForwardHcost_TT(std::vector<short>unstartedTransitions
+    //, std::map<int, int> finishedActivitiys
+   // , std::vector<int>  finishedActivitiys
   //,std::string mode="defult"                     // activityID -> finish time
 ) {
   //auto startS3 = std::chrono::high_resolution_clock::now();
@@ -1809,12 +1812,17 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     if (finishedActivitiys.empty()) {
         g = 0;
     }
-   else {
-        for (const auto& [id, finishTime] : finishedActivitiys) {
-            if (finishTime > g) {
-                g = finishTime;
+    else {
+        // Iterate directly over the values in the vector
+        for (int finishTime : finishedActivitiys) {
+            // Check if the slot is valid (-1 means unused)
+            if (finishTime != -1) {
+                if (finishTime > g) {
+                    g = finishTime;
+                }
             }
         }
+    }
     }
 
     // 8. REQUIRED: Calculate available transitions
@@ -1878,11 +1886,12 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
 //     // Fallback if no finished activities
 //    // h= getForwardHcost_TT(unstartedTransitions,finishedActivitiys);
 //   }
-}
+
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::map<int, int> &finishedActivities,
+    //const std::map<int, int> &finishedActivities,
+    const     std::vector<int> &finishedActivitiys,
     const std::vector<std::vector<std::pair<short, short>>> &marking
 ) {
     std::vector<std::pair<short, short>> available;
@@ -1907,13 +1916,17 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
         for (const std::string &predStr : RCPSPex.backword_dependencies[transId - 1]) {
             int predId = std::stoi(predStr);
-            auto it = finishedActivities.find(predId);
-          if (it == finishedActivities.end()) {
+
+            // THE FIX: Direct Vector Access (O(1))
+            // Get the time directly. If it is -1, it means "not finished".
+            int finishTime = finishedActivitiys[predId];
+
+            if (finishTime == -1) {
                 allPredsFinished = false;
                 break;
             }
-          else {
-                maxPredFinishTime = std::max(maxPredFinishTime, it->second);
+            else {
+                maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
             }
         }
 

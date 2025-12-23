@@ -96,17 +96,17 @@ class RCPSPState_TT {
 public:
     // --- Constructors ---
     RCPSPState_TT();
-    ~RCPSPState_TT() {
-        // 1. Clear complex nested vector
-        // This is expensive to delete! It requires looping.
-        for (auto& inner_vec : marking) {
-            std::vector<std::pair<short, short>>().swap(inner_vec);
-        }
-        std::vector<std::vector<std::pair<short, short>>>().swap(marking);
-
-        // 2. Clear Map
-        std::map<int, int>().swap(finishedActivitiys);
-    }
+    // ~RCPSPState_TT() {
+    //     // 1. Clear complex nested vector
+    //     // This is expensive to delete! It requires looping.
+    //     for (auto& inner_vec : marking) {
+    //         std::vector<std::pair<short, short>>().swap(inner_vec);
+    //     }
+    //     std::vector<std::vector<std::pair<short, short>>>().swap(marking);
+    //
+    //     // 2. Clear Map
+    //     std::map<int, int>().swap(finishedActivitiys);
+    // }
    // RCPSPState_TT(const RCPSPState_TT& predecessor, int newTransitionId, bool applyTransition, int location, uint64_t& count);
     RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
     // ~RCPSPState_TT() {
@@ -120,7 +120,8 @@ public:
     std::vector<std::vector<std::pair<short, short>>> marking;
     // std::vector<short> unfinishedTransitions;
    // std::map<int, int> startedActivitiys;                          // activityID -> start time
-    std::map<int, int> finishedActivitiys;                         // activityID -> finish time
+    // std::map<int, int> finishedActivitiys;                         // activityID -> finish time
+    std::vector<int> finishedActivitiys;
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
 
     short g = 0;

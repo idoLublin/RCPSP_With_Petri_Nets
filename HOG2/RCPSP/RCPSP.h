@@ -46,14 +46,30 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
 //test=1;
   std::size_t seed = 0;
 
-  for (const auto& pair : node.startedActivitiys) {
-    seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // 1. Hash Started Activities
+  for (int id = 0; id < node.startedActivitiys.size(); ++id) {
+    int time = node.startedActivitiys[id];
+
+    // Only hash if the activity exists (equivalent to iterating the map)
+    if (time != -1) {
+      // Hash the ID (formerly pair.first)
+      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      // Hash the Time (formerly pair.second)
+      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
   }
 
-  for (const auto& pair : node.finishedActivitiys) {
-    seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // 2. Hash Finished Activities
+  for (int id = 0; id < node.finishedActivitiys.size(); ++id) {
+    int time = node.finishedActivitiys[id];
+
+    // Only hash if the activity exists
+    if (time != -1) {
+      // Hash the ID (formerly pair.first)
+      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      // Hash the Time (formerly pair.second)
+      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();
   //
@@ -227,17 +243,20 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
 
     // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
     for (int i = 0; i < petri.Transitions.size(); i++) {
-      short taskID = i + 1;
+      short taskID = i + 1; // Preserving your 1-based logic
 
-      // THE FIX: Check if this taskID is inside the finished map.
-      // If find() returns end(), the task is NOT finished, so we keep it.
-      if (state1.finishedActivitiys.find(taskID) == state1.finishedActivitiys.end()) {
+      // THE FIX: Direct vector access (O(1) speed)
+      // Check if value is -1 (meaning "not finished")
+      if (state1.finishedActivitiys[taskID] == -1) {
         tempUnstarted.push_back(taskID);
       }
     }
-    state1.h= getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.finishedActivitiys);
-    return state1.h;
 
+    // NOTE: You must update the definition of getForwardHcost
+    // to accept 'const std::vector<int>&' instead of 'std::map...'
+    //state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices, state1.finishedActivitiys);
+    state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+    return state1.h;
   }
   //return state1.h;
 }

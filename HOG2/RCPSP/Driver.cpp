@@ -407,7 +407,7 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 
 
 void runBenchmark() {
-    std::string folder = "results";
+    std::string folder = "new_results";
     std::string baseName = "output_";
     std::string extension = ".csv";
 

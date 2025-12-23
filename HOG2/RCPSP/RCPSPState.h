@@ -13,34 +13,18 @@ class RCPSPState {
   public:
   RCPSPState();
     // Add this inside your class RCPSPState definition
-    ~RCPSPState() {
-        // 1. Force release of vector memory
-        std::vector<short>().swap(marking);
-        std::vector<std::pair<short, short>>().swap(activeTransitionIndices);
-
-        // 2. Force release of map memory (Swapping with empty map forces RAM release)
-        std::map<int, int>().swap(startedActivitiys);
-        std::map<int, int>().swap(finishedActivitiys);
-
-        // Note: Standard .clear() only empties the container but often keeps
-        // the RAM reserved. The .swap() trick forces it to return RAM to the OS.
-    }
-  RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
     // ~RCPSPState() {
-    //     // Clear STL containers explicitly (optional, as they would be destroyed automatically)
-    //     marking.clear();
-    //    // unfinishedTransitions.clear();
-    //     activeTransitionIndices.clear();
-    //     startedActivitiys.clear();
-    //     finishedActivitiys.clear();
+    //     std::vector<short>().swap(marking);
+    //     std::vector<std::pair<short, short>>().swap(activeTransitionIndices);
     //
-    //     // Any additional custom cleanup logic can go here
+    //     std::map<int, int>().swap(startedActivitiys);
+    //     std::map<int, int>().swap(finishedActivitiys);
     //
     // }
+  RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
+
 
     std::vector<short> marking;
-    //std::vector<short> unfinishedTransitions;
-    //std::vector<short> avilableTransitionIndices;  // Store transition IDs
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
 
@@ -53,11 +37,15 @@ class RCPSPState {
   // unsigned int name=0;
   // unsigned int predecesorname=0;
 
-  std::map<int, int> startedActivitiys;
-  std::map<int, int> finishedActivitiys;
+  // std::map<int, int> startedActivitiys;
+  // std::map<int, int> finishedActivitiys;
+
+    std::vector<int> startedActivitiys;
+    std::vector<int> finishedActivitiys;
+
     bool status;
-  double g=0;
-  mutable double h;
+  short g=0;
+  mutable short h;
 
   bool operator==(const RCPSPState& other) const;
 };
@@ -135,7 +123,7 @@ public:
     std::map<int, int> finishedActivitiys;                         // activityID -> finish time
     //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
 
-    double g = 0;
+    short g = 0;
     //double h = 0;
 
     // --- Comparison ---

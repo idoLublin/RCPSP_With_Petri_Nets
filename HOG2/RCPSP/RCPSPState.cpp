@@ -1884,7 +1884,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::array<short, 128> &finishedActivitiys,  // Changed from vector to array
+    const std::array<short, 128> &finishedActivitiys,
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
     const std::vector<std::pair<short, short>> &activity_nodes
 ) {

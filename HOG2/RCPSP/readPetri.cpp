@@ -49,6 +49,8 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         return;
     }
 
+
+
     json j;
     try {
         input_file >> j;
@@ -129,6 +131,7 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         petriExample.Transitions.push_back(tran);
     }
 }
+
 void getRCPSP(P_RCPSP::RCPSP_example& rcpsp_example,int group,int exam, const std::string &instanceType = "j30") {
     // Open the file for reading
     rcpsp_example.reset();
@@ -210,15 +213,18 @@ int size= j.size();
         return a.first < b.first;
     });
 
-    // Print the sorted keys and their associated values
+    // Print the sorted keys and their associated values - CONVERT STRINGS TO INTS
     for (const auto& [key, value] : sorted32) {
-        //std::cout << "Key: " << key << " -> Values: ";
         for (const auto& val : value) {
-            //std::cout << val << " ";
-            rcpsp_example.backword_dependencies[key-1].push_back(val);
+            // Handle both string and int from JSON
+            if (val.is_string()) {
+                rcpsp_example.backword_dependencies[key-1].push_back(std::stoi(val.get<std::string>()));
+            } else if (val.is_number_integer()) {
+                rcpsp_example.backword_dependencies[key-1].push_back(val.get<int>());
+            }
         }
-        //std::cout << std::endl;
     }
+
     std::vector<std::pair<int, json>> sorted33;
     for (const auto& item : j[j.size()-3].items()) {
         sorted33.push_back({std::stoi(item.key()), item.value()});
@@ -229,17 +235,18 @@ int size= j.size();
         return a.first < b.first;
     });
 
-    // Print the sorted keys and their associated values
+    // Print the sorted keys and their associated values - CONVERT STRINGS TO INTS
     for (const auto& [key, value] : sorted33) {
-       // std::cout << "Key: " << key << " -> Values: ";
         for (const auto& val : value) {
-            //std::cout << val << " ";
-
-            rcpsp_example.dependencies[key-1].push_back(val);
-
+            // Handle both string and int from JSON
+            if (val.is_string()) {
+                rcpsp_example.dependencies[key-1].push_back(std::stoi(val.get<std::string>()));
+            } else if (val.is_number_integer()) {
+                rcpsp_example.dependencies[key-1].push_back(val.get<int>());
+            }
         }
-        //std::cout << std::endl;
     }
+
     // Close the file after reading
     //std::cout << "Current size of dependencies: " << rcpsp_example.dependencies.size() << std::endl;
 

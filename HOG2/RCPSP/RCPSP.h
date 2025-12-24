@@ -202,25 +202,25 @@ double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfi
   int maxFinishTime = 0;
 
   // Process all dependencies
-  for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-    int depId = std::stoi(dep) - 1;
-
-    // Recursively compute the early finish time of the dependency if not already computed
-    if (earlyfinishMap.find(depId + 1) == earlyfinishMap.end()) {
-      calculateEarlyFinishRecursive(depId + 1, earlyfinishMap, unstartedTransitions, activeTransitions, RCPSPex);
-    }
-
-    if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
-      int duration = getTransitionDuration2(activeTransitions, std::stoi(dep));
-      if (duration != -1) {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + duration);
-      } else {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + RCPSPex.activities[depId].duration);
-      }
-    } else {
-      maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1]);
-    }
-  }
+  // for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
+  //   int depId = std::stoi(dep) - 1;
+  //
+  //   // Recursively compute the early finish time of the dependency if not already computed
+  //   if (earlyfinishMap.find(depId + 1) == earlyfinishMap.end()) {
+  //     calculateEarlyFinishRecursive(depId + 1, earlyfinishMap, unstartedTransitions, activeTransitions, RCPSPex);
+  //   }
+  //
+  //   if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+  //     int duration = getTransitionDuration2(activeTransitions, std::stoi(dep));
+  //     if (duration != -1) {
+  //       maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + duration);
+  //     } else {
+  //       maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1] + RCPSPex.activities[depId].duration);
+  //     }
+  //   } else {
+  //     maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId + 1]);
+  //   }
+  // }
 
   // Store and return the result
   earlyfinishMap[activityId] = maxFinishTime;
@@ -386,28 +386,28 @@ return false;
       int maxFinishTime = 0;
       std::set<int> processedDependencies;
 
-      for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-        int depId = std::stoi(dep) - 1;
-        // if (processedDependencies.count(depId) > 0) continue;
-        // processedDependencies.insert(depId);
-        if (std::find(state1.unstartedTransitions.begin(), state1.unstartedTransitions.end(), depId + 1) != state1.unstartedTransitions.end()) {
-          //maby state1 or state2
-         // int duration = getTransitionDuration2(state1.activeTransitionIndices, std::stoi(dep));
-         // if (duration !=-1) {
-            //maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + duration);
-            //if (RCPSPex.activities[depId].duration !=duration) {
-            //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
-            //}
-         // }
-          // else {
-          //   maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + RCPSPex.activities[depId].duration);
-          //
-          // }
-        }
-        else {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1]);
-        }
-      }
+      // for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
+      //   int depId = std::stoi(dep) - 1;
+      //   // if (processedDependencies.count(depId) > 0) continue;
+      //   // processedDependencies.insert(depId);
+      //   if (std::find(state1.unstartedTransitions.begin(), state1.unstartedTransitions.end(), depId + 1) != state1.unstartedTransitions.end()) {
+      //     //maby state1 or state2
+      //    // int duration = getTransitionDuration2(state1.activeTransitionIndices, std::stoi(dep));
+      //    // if (duration !=-1) {
+      //       //maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + duration);
+      //       //if (RCPSPex.activities[depId].duration !=duration) {
+      //       //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
+      //       //}
+      //    // }
+      //     // else {
+      //     //   maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1] + RCPSPex.activities[depId].duration);
+      //     //
+      //     // }
+      //   }
+      //   else {
+      //     maxFinishTime = std::max(maxFinishTime, earlyfinishMap[depId+1]);
+      //   }
+      // }
 
       earlyfinishMap[activityId] = maxFinishTime;
       //std::cout <<activityId<<":"<< earlyfinishMap[activityId]+RCPSPex.activities[activityId-1].duration << std::endl;

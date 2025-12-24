@@ -38,8 +38,10 @@ class RCPSP_example{
         activities.push_back(activity);
     }
    //skip on activity name duration as it can be acssesd with acvivity[num].duration
-    std::vector<std::vector<std::string>> dependencies;
-    std::vector<std::vector<std::string>> backword_dependencies;
+    //std::vector<std::vector<std::string>> dependencies;
+    //std::vector<std::vector<std::string>> backword_dependencies;
+    std::vector<std::vector<int>> backword_dependencies;
+    std::vector<std::vector<int>> dependencies;
 
     std::vector<std::pair<std::string, int>> resources;
     std::set<std::pair<std::string, std::string>> deep_dependencies;
@@ -99,10 +101,10 @@ class RCPSP_example{
             return false;
 
         int idx = it->second;
-        for (const std::string& dep : dependencies[idx]) {
-            if (dfs(dep, target, name_to_index, visited))
-                return true;
-        }
+        // for (const std::string& dep : dependencies[idx]) {
+        //     if (dfs(dep, target, name_to_index, visited))
+        //         return true;
+        // }
 
         return false;
     }

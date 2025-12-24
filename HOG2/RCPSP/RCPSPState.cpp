@@ -1727,9 +1727,7 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
  //return h;
 
 }
-
 RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int firingTime) {
-    // Copy from previous state
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
@@ -1739,13 +1737,11 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     const int duration = act.duration;
     const int activityFinishTime = firingTime + duration;
 
-    // Add output tokens
+    // Add output tokens (NO SORTING HERE)
     for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
         if (placeID < 4) {
-            // Resource node (0-3)
             resource_nodes[placeID].push_back({outAmount, firingTime + transition.duration});
         } else {
-            // Activity node (subtract 4 to get activity index)
             int activity_idx = placeID - 4;
             activity_nodes[activity_idx] = {outAmount, firingTime + transition.duration};
         }
@@ -1753,11 +1749,10 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
 
     finishedActivitiys[transitionId] = activityFinishTime;
 
-    // Consume resources
+    // Consume resources (NO SORTING HERE)
     for (const auto& [resName, demand] : act.resource_demands) {
         if (demand > 0) {
             int resID = petri.place_name_to_id.at(resName);
-            // resID should be 0-3 if resources are first
             resource_nodes[resID] = consumeResourceList(resource_nodes[resID], demand, firingTime);
         }
     }
@@ -1770,8 +1765,6 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
         }
     }
 }
-
-
 
 // std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 //     const std::vector<short> &unstartedTransitions,
@@ -1891,7 +1884,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::array<short, 128> &finishedActivitiys,
+    const std::array<short, 128> &finishedActivitiys,  // Changed from vector to array
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
     const std::vector<std::pair<short, short>> &activity_nodes
 ) {
@@ -1931,20 +1924,27 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
 
+        // Sort resources only once per transition check
+        std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
+        bool resources_sorted[4] = {false, false, false, false};
+
         for (const auto &[res, demand] : act.resource_demands) {
-            // Get resource ID (should be 0-3)
             int resID = petri.place_name_to_id.at(res);
 
-            // Check if resource has any tokens
             if (resource_nodes[resID].empty()) {
                 resourcesOK = false;
                 break;
             }
 
-            // Make a local copy to sort
-            auto tokens = resource_nodes[resID];
-            std::sort(tokens.begin(), tokens.end(),
-                      [](const auto &a, const auto &b) { return a.second < b.second; });
+            // Sort only once per resource, only if needed
+            if (!resources_sorted[resID]) {
+                sorted_resources[resID] = resource_nodes[resID];
+                std::sort(sorted_resources[resID].begin(), sorted_resources[resID].end(),
+                          [](const auto &a, const auto &b) { return a.second < b.second; });
+                resources_sorted[resID] = true;
+            }
+
+            const auto& tokens = sorted_resources[resID];
 
             int totalAvailable = 0;
             int resourceReadyTime = -1;
@@ -1986,6 +1986,9 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
     return available;
 }
+
+
+
 bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
   return true;
 }

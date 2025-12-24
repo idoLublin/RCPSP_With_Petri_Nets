@@ -648,7 +648,7 @@ double computeCoreTimeLowerBoundWithMax(
 
     for (const auto& [res, cap] : RCPSPex.resources) {
         capacityMap[res] = cap;
-        minCapacity = std::min(minCapacity, cap);
+        //minCapacity = std::min(minCapacity, cap);
     }
 
     for (int id : unstartedTransitions) {
@@ -1080,8 +1080,8 @@ RCPSPState::RCPSPState() {
   // 2. Initialize Marking Vector (Fast!)
   marking.resize(petri.places.size(), 0);
   // Allocating 'size + 1' allows you to use index 'N' without crashing.
-  startedActivitiys.assign(petri.Transitions.size() + 1, -1);
-  finishedActivitiys.assign(petri.Transitions.size() + 1, -1);
+startedActivitiys.fill(-1);
+finishedActivitiys.fill(-1);
   // 3. LOOP 1: Setup Places
   for (int i = 0; i < petri.places.size(); i++) {
 
@@ -1174,7 +1174,7 @@ RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
 }
 
 
-RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& active, bool status1, int location, uint64_t &count) {
+RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& active, bool status1, short location, uint64_t &count) {
 
     // 1. FAST COPY (Vectors are contiguous, so this is basically a memcpy)
     startedActivitiys = predecesor.startedActivitiys;
@@ -1687,22 +1687,22 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
 
     return h;  // Added return statement
 }
-RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int firingTime) {
+RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, short transitionId, short firingTime) {
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
 
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];
-    const int duration = act.duration;
-    const int activityFinishTime = firingTime + duration;
+    const short duration = act.duration;
+    const short activityFinishTime = firingTime + duration;
 
     // Add output tokens (NO SORTING HERE)
     for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
         if (placeID < 4) {
             resource_nodes[placeID].push_back({outAmount, firingTime + transition.duration});
         } else {
-            int activity_idx = placeID - 4;
+            short activity_idx = placeID - 4;
             activity_nodes[activity_idx] = {outAmount, firingTime + transition.duration};
         }
     }
@@ -1712,14 +1712,14 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int fi
     // Consume resources (NO SORTING HERE)
     for (const auto& [resName, demand] : act.resource_demands) {
         if (demand > 0) {
-            int resID = petri.place_name_to_id.at(resName);
+            short resID = petri.place_name_to_id.at(resName);
             resource_nodes[resID] = consumeResourceList(resource_nodes[resID], demand, firingTime);
         }
     }
 
     // Calculate g
     g = 0;
-    for (int finishTime : finishedActivitiys) {
+    for (short finishTime : finishedActivitiys) {
         if (finishTime > g) {
             g = finishTime;
         }

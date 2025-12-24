@@ -181,7 +181,7 @@ inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPStat
   // secssesorTIME += endS1 - startS1;
 }
 inline bool RCPSP::GoalTest(const RCPSPState &node, const RCPSPState &goal) const {
-  int finalID = petri.place_name_to_id.at(finalstatename);
+  short finalID = petri.place_name_to_id.at(finalstatename);
 
   // 2. Check the Vector at that index
   if (node.marking[finalID] == 1) {

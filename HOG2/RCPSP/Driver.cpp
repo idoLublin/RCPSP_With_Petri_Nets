@@ -439,11 +439,11 @@ void runBenchmark() {
             RCPSPex.reset();
 
             // 2. SOLVE
-          //  solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
+            solveRCPSP(i, j, filename, "j30");
+          //  solveRCPSP_TT(i, j, filename, "j30");
         }
     }
-    solveRCPSP_TT(9, 1, filename, "j30");
+    solveRCPSP(9, 1, filename, "j30");
 
     sortCSV(filename);
 

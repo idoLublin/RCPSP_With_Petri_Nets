@@ -13,12 +13,12 @@ std::string initialstatename;
 class RCPSPState {
   public:
   RCPSPState();
-     RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
+     RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,short location,uint64_t &count);
     std::vector<short> marking;
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
-    std::vector<short> startedActivitiys;
-    std::vector<short> finishedActivitiys;
+    std::array<short, 128> startedActivitiys;   // Was vector
+    std::array<short, 128> finishedActivitiys;  // Was vector
 
     bool status;
   short g=0;
@@ -35,7 +35,7 @@ public:
     short g = 0;
 
     RCPSPState_TT();
-    RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
+    RCPSPState_TT(const RCPSPState_TT& prev, short ID, short firingTime);
     bool operator==(const RCPSPState_TT& other) const;
 };
 

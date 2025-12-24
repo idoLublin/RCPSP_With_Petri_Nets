@@ -141,7 +141,7 @@ bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosed
 	if (i1.g != i2.g) return i1.g < i2.g;
 
 	// Helper lambda to count valid items (not -1)
-	auto countValid = [](const std::vector<int>& vec) {
+	auto countValid = [](const std::vector<short>& vec) {
 		int count = 0;
 		for (int v : vec) {
 			if (v != -1) count++;

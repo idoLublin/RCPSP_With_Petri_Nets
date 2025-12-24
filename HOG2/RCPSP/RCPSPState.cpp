@@ -47,11 +47,11 @@ double computeWorkloadLowerBoundWithMax(
     const std::map<int, int>& earlyStartTimes,
     double criticalPathEstimate
 );
-std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
-    const std::vector<int> &unstartedTransitions,
-    const std::map<int, int> &finishedActivities,
-    const std::vector<std::vector<std::pair<int, int>>>&marking
-);
+// std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
+//     const std::vector<int> &unstartedTransitions,
+//     const std::map<int, int> &finishedActivities,
+//     const std::vector<std::vector<std::pair<int, int>>>&marking
+// );
 std::vector<int> getCriticalPath(const std::map<int, int>& earlyStartTimes,
                                  int lastActivityId,
                                  const std::vector<std::vector<std::string>>& backword_dependencies);
@@ -1482,16 +1482,21 @@ bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
 }
 
 RCPSPState_TT::RCPSPState_TT() {
-  //startedActivitiys[0] = 0;
-auto startS1 = std::chrono::high_resolution_clock::now();
+    // Build mapping: resource name -> index (0-3)
+    std::unordered_map<int, int> place_to_resource_idx;
+    int res_count = 0;
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        int resID = petri.place_name_to_id.at(resName);
+        place_to_resource_idx[resID] = res_count++;
+    }
 
-    // 1. Initialize Vectors ONCE
-    marking.resize(petri.places.size()); // Vectors start empty
+    // Count activity nodes
+    int num_activities = petri.places.size() - res_count;
+    activity_nodes.resize(num_activities);
+
     finishedActivitiys.assign(petri.Transitions.size() + 1, -1);
 
-    // -------------------------------------------------------
-    // STEP A: Setup Places (Start/End nodes & Initial tokens)
-    // -------------------------------------------------------
+    int activity_counter = 0;
     for (int i = 0; i < petri.places.size(); ++i) {
         const auto& place = petri.places[i];
 
@@ -1499,54 +1504,49 @@ auto startS1 = std::chrono::high_resolution_clock::now();
         if (place.arcs_out.empty()) finalstatename = place.name;
         if (place.arcs_in.empty())  initialstatename = place.name;
 
-        // Set Initial Tokens (Start Node = 1)
-        if (place.name == initialstatename) {
-            marking[i].push_back({1, 0});
-        }
-        else {
-            // Check JSON for other tokens (rare, but possible)
-            if (!place.state.empty() && !place.state[0].empty()) {
+        // Check if resource node
+        auto it = place_to_resource_idx.find(i);
+
+        if (it != place_to_resource_idx.end()) {
+            // This is a resource node
+            int res_idx = it->second;
+
+            if (place.name == initialstatename) {
+                resource_nodes[res_idx].push_back({1, 0});
+            } else if (!place.state.empty() && !place.state[0].empty()) {
                 int val = place.state[0][0];
-                if (val > 0) marking[i].push_back({val, 0});
+                if (val > 0) resource_nodes[res_idx].push_back({val, 0});
             }
+        } else {
+            // This is an activity node
+            if (place.name == initialstatename) {
+                activity_nodes[activity_counter] = {1, 0};
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                activity_nodes[activity_counter] = (val > 0) ? std::make_pair<short,short>(val, 0) : std::make_pair<short,short>(0, 0);
+            } else {
+                activity_nodes[activity_counter] = {0, 0};
+            }
+            activity_counter++;
         }
     }
 
-    // -------------------------------------------------------
-    // STEP B: Setup Resources (MUST BE OUTSIDE LOOP A)
-    // -------------------------------------------------------
-    // This runs exactly once per resource.
+    // Add resource capacities
     for (const auto& [resName, cap] : RCPSPex.resources) {
         if (cap > 0) {
             int resID = petri.place_name_to_id.at(resName);
+            int res_idx = place_to_resource_idx[resID];
 
-            // Only add if not already added by Step A
-            if (marking[resID].empty()) {
-                marking[resID].push_back({cap, 0});
+            if (resource_nodes[res_idx].empty()) {
+                resource_nodes[res_idx].push_back({cap, 0});
             }
         }
     }
 
-    // -------------------------------------------------------
-    // STEP C: Setup Transitions
-    // -------------------------------------------------------
-    // Start from 1 (Task 2) because Task 1 (Start Dummy) is handled by initial marking
-  // for (int i = 0; i < petri.Transitions.size(); i++) {
-  //   unfinishedTransitions.push_back(i + 1);
-  // }
-
-    // -------------------------------------------------------
-    // Finalize
-    // -------------------------------------------------------
-    // auto endS1 = std::chrono::high_resolution_clock::now();
-    // generateTIME += endS1 - startS1;
-
-
-
-    // Check availability based on the clean state we just built
-    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
-  g = 0;
+    g = 0;
 }
+
+
 std::vector<std::pair<short, short>> consumeResourceList(
     const std::vector<std::pair<short, short>>& resource,
     int amount,
@@ -1730,183 +1730,182 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
 }
 
 RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int firingTime) {
-    // 1. Copy structures from previous state
-    //startedActivitiys = prev.startedActivitiys;
+    // Copy from previous state
     finishedActivitiys = prev.finishedActivitiys;
-    //unfinishedTransitions = prev.unfinishedTransitions;
-    marking = prev.marking;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
 
-    // 2. Cache frequently accessed data
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];
     const int duration = act.duration;
     const int activityFinishTime = firingTime + duration;
 
-    // 3. Update Petri net marking
-  // // A. CONSUME (Remove tokens from Predecessors) -> REQUIRED
-  // for (const auto& [placeID, weight] : transition.arcs_in_indices) {
-  //   auto& tokens = marking[placeID];
-  //
-  //   // We need to find and remove 'weight' tokens that are available <= firingTime
-  //   int needed = weight;
-  //
-  //   // Use iterator to safely remove while looping
-  //   for (auto it = tokens.begin(); it != tokens.end(); ) {
-  //     // Only consume tokens that exist at or before the firing time
-  //     if (it->second <= firingTime) {
-  //       if (it->first > needed) {
-  //         // Token has more than we need (e.g., 5 available, need 1)
-  //         it->first -= needed;
-  //         needed = 0;
-  //         break; // Done
-  //       } else {
-  //         // Token has equal or less (e.g., 1 available, need 1)
-  //         needed -= it->first;
-  //         it = tokens.erase(it); // Remove this entry entirely
-  //         if (needed == 0) break; // Done
-  //         continue; // Continue to next since we erased current
-  //       }
-  //     }
-  //     ++it;
-  //   }
-  // }
-  //
-
-  for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
-
-    // DIRECT ACCESS (Fast)
-    // No need for 'if (marking.count(place) == 0)'
-    // The vector slot at 'placeID' already exists. Just push to it.
-
-    marking[placeID].push_back({outAmount, firingTime + transition.duration});
-  }
-
-    // 4. Update activity states
-    //startedActivitiys[transitionId] = firingTime;
-    finishedActivitiys[transitionId] = activityFinishTime;
-
-    // 5. Consume resources - optimized loop
-  for (const auto& [resName, demand] : act.resource_demands) {
-
-    if (demand > 0) {
-      // 1. TRANSLATE: String Name -> Integer ID
-      // Use the map we built in getPetri
-      int resID = petri.place_name_to_id.at(resName);
-
-      // 2. UPDATE: Direct Vector Access
-      // marking[resID] accesses the specific resource's timeline instantly
-      marking[resID] = consumeResourceList(marking[resID], demand, firingTime);
-
-      // Uncomment when ready:
-      // marking[resID] = return_resource(marking[resID], demand, activityFinishTime);
-    }
-  }
-
-    // 6. Remove from unstarted - optimized removal
-    // auto it = std::find(unfinishedTransitions.begin(), unfinishedTransitions.end(), transitionId);
-    // if (it != unfinishedTransitions.end()) {
-    //     unfinishedTransitions.erase(it); // Single iterator erase is faster
-    // }
-
-    // 7. Calculate g-score efficiently
-    if (finishedActivitiys.empty()) {
-        g = 0;
-    }
-    else {
-        // Iterate directly over the values in the vector
-        for (int finishTime : finishedActivitiys) {
-            // Check if the slot is valid (-1 means unused)
-            if (finishTime != -1) {
-                if (finishTime > g) {
-                    g = finishTime;
-                }
-            }
+    // Add output tokens
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        if (placeID < 4) {
+            // Resource node (0-3)
+            resource_nodes[placeID].push_back({outAmount, firingTime + transition.duration});
+        } else {
+            // Activity node (subtract 4 to get activity index)
+            int activity_idx = placeID - 4;
+            activity_nodes[activity_idx] = {outAmount, firingTime + transition.duration};
         }
     }
+
+    finishedActivitiys[transitionId] = activityFinishTime;
+
+    // Consume resources
+    for (const auto& [resName, demand] : act.resource_demands) {
+        if (demand > 0) {
+            int resID = petri.place_name_to_id.at(resName);
+            // resID should be 0-3 if resources are first
+            resource_nodes[resID] = consumeResourceList(resource_nodes[resID], demand, firingTime);
+        }
     }
 
-    // 8. REQUIRED: Calculate available transitions
-    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
+    // Calculate g
+    g = 0;
+    for (int finishTime : finishedActivitiys) {
+        if (finishTime > g) {
+            g = finishTime;
+        }
+    }
+}
 
-// int lastActivityId = -1;
-//   int maxTime = -1;
+
+
+// std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+//     const std::vector<short> &unstartedTransitions,
+//     //const std::map<int, int> &finishedActivities,
+//     const     std::vector<short> &finishedActivitiys,
+//     const std::vector<std::vector<std::pair<short, short>>> &marking
+// ) {
+//     std::vector<std::pair<short, short>> available;
 //
-//   // Find last finished activity by ID instead of name
-//   for (const auto& [id, time] : finishedActivitiys) {
-//     if (time > maxTime) {
-//       maxTime = time;
-//       lastActivityId = id;
-//     }
-//   }
+//     for (short transId : unstartedTransitions) {
 //
-//   if (lastActivityId != -1) {
-//     const std::string& lastActivityName = RCPSPex.activities[lastActivityId - 1].name;
+//       const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
 //
-//     // Pre-reserve vectors
-//     std::vector<int> independentSet;
-//     independentSet.reserve(unstartedTransitions.size());
+//       // DEBUG: Check if Task 2 (usually the first real task) has dependencies
+//       if (transId == 2 && dependencies.empty()) {
+//         std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+//         exit(1); // Stop immediately so you see this
+//       }
 //
-//     // Filter independent transitions
-//     for (int actIdx : unstartedTransitions) {
-//       const std::string& actName = RCPSPex.activities[actIdx - 1].name;
-//       if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end()) {
-//         independentSet.push_back(actIdx);
+//
+//
+//         const Activity &act = RCPSPex.activities[transId - 1];
+//
+//         // 1. Precedence constraints
+//         bool allPredsFinished = true;
+//         int maxPredFinishTime = 0;
+//
+//         for (const std::string &predStr : RCPSPex.backword_dependencies[transId - 1]) {
+//             int predId = std::stoi(predStr);
+//
+//             // THE FIX: Direct Vector Access (O(1))
+//             // Get the time directly. If it is -1, it means "not finished".
+//             int finishTime = finishedActivitiys[predId];
+//
+//             if (finishTime == -1) {
+//                 allPredsFinished = false;
+//                 break;
+//             }
+//             else {
+//                 maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
+//             }
+//         }
+//
+//         if (!allPredsFinished)
+//             continue;
+//
+//         // 2. Resource availability
+//         bool resourcesOK = true;
+//         int maxResourceTime = maxPredFinishTime;
+//       for (const auto &[res, demand] : act.resource_demands) {
+//
+//         // 1. Get ID
+//         int resID = petri.place_name_to_id.at(res);
+//
+//         // 2. Check if resource has any tokens (Vector check)
+//         if (marking[resID].empty()) {
+//           resourcesOK = false;
+//           break;
+//         }
+//
+//         // 3. GET DATA (The Fix)
+//         // We make a local copy 'tokens' because we are about to sort it.
+//         // DO NOT use 'it->second'. Use 'marking[resID]'.
+//         auto tokens = marking[resID];
+//
+//         // ... The rest of your logic is perfect ...
+//         std::sort(tokens.begin(), tokens.end(),
+//                   [](auto &a, auto &b) { return a.second < b.second; });
+//
+//         int totalAvailable = 0;
+//         int resourceReadyTime = -1;
+//
+//         for (const auto &[amt, time] : tokens) {
+//           if (time <= maxPredFinishTime) {
+//             totalAvailable += amt;
+//           }
+//         }
+//
+//         if (totalAvailable >= demand) {
+//           resourceReadyTime = maxPredFinishTime;
+//         } else {
+//           for (const auto &[amt, time] : tokens) {
+//             if (time > maxPredFinishTime) {
+//               totalAvailable += amt;
+//               if (totalAvailable >= demand) {
+//                 resourceReadyTime = time;
+//                 break;
+//               }
+//             }
+//           }
+//         }
+//
+//         if (resourceReadyTime == -1) {
+//           resourcesOK = false;
+//           break;
+//         }
+//
+//         maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+//       }
+//
+//       if (resourcesOK) {
+//         available.emplace_back(transId, maxResourceTime);
 //       }
 //     }
 //
-//     // Create lookup set for efficient filtering
-//     std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
-//     std::vector<short> newUnstartedTransitions;
-//     newUnstartedTransitions.reserve(unstartedTransitions.size());
-//
-//     for (int id : unstartedTransitions) {
-//       if (independentLookup.find(id) == independentLookup.end()) {
-//         newUnstartedTransitions.push_back(id);
-//       }
-//     }
-//
-//     // 10. Calculate heuristic efficiently
-//     int latestStart = 0;
-//     for (const auto& [id, startTime] : startedActivitiys) {
-//       if (startTime > latestStart) {
-//         latestStart = startTime;
-//       }
-//     }
-//
-//     int unkTime = g - latestStart;
-//     std::map<int, int> finishedActivitiysnew=finishedActivitiys;                         // activityID -> finish time
-//     for (int actIdx : independentSet) {
-//       finishedActivitiysnew[actIdx] = 0;
-//     }
-//
-//   // getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime;
-//       // h= std::max(getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime,
-//       //            getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
-//   } else {
-//     // Fallback if no finished activities
-//    // h= getForwardHcost_TT(unstartedTransitions,finishedActivitiys);
-//   }
+//     return available;
+// }
 
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    //const std::map<int, int> &finishedActivities,
-    const     std::vector<int> &finishedActivitiys,
-    const std::vector<std::vector<std::pair<short, short>>> &marking
+    const std::vector<short> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
+);
+
+
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+    const std::vector<short> &unstartedTransitions,
+    const std::vector<short> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
 ) {
     std::vector<std::pair<short, short>> available;
 
     for (short transId : unstartedTransitions) {
+        const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
 
-      const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
-
-      // DEBUG: Check if Task 2 (usually the first real task) has dependencies
-      if (transId == 2 && dependencies.empty()) {
-        std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
-        exit(1); // Stop immediately so you see this
-      }
-
-
+        // DEBUG: Check if Task 2 has dependencies
+        if (transId == 2 && dependencies.empty()) {
+            std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+            exit(1);
+        }
 
         const Activity &act = RCPSPex.activities[transId - 1];
 
@@ -1916,16 +1915,12 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
         for (const std::string &predStr : RCPSPex.backword_dependencies[transId - 1]) {
             int predId = std::stoi(predStr);
-
-            // THE FIX: Direct Vector Access (O(1))
-            // Get the time directly. If it is -1, it means "not finished".
             int finishTime = finishedActivitiys[predId];
 
             if (finishTime == -1) {
                 allPredsFinished = false;
                 break;
-            }
-            else {
+            } else {
                 maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
             }
         }
@@ -1936,66 +1931,62 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
         // 2. Resource availability
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
-      for (const auto &[res, demand] : act.resource_demands) {
 
-        // 1. Get ID
-        int resID = petri.place_name_to_id.at(res);
+        for (const auto &[res, demand] : act.resource_demands) {
+            // Get resource ID (should be 0-3)
+            int resID = petri.place_name_to_id.at(res);
 
-        // 2. Check if resource has any tokens (Vector check)
-        if (marking[resID].empty()) {
-          resourcesOK = false;
-          break;
-        }
-
-        // 3. GET DATA (The Fix)
-        // We make a local copy 'tokens' because we are about to sort it.
-        // DO NOT use 'it->second'. Use 'marking[resID]'.
-        auto tokens = marking[resID];
-
-        // ... The rest of your logic is perfect ...
-        std::sort(tokens.begin(), tokens.end(),
-                  [](auto &a, auto &b) { return a.second < b.second; });
-
-        int totalAvailable = 0;
-        int resourceReadyTime = -1;
-
-        for (const auto &[amt, time] : tokens) {
-          if (time <= maxPredFinishTime) {
-            totalAvailable += amt;
-          }
-        }
-
-        if (totalAvailable >= demand) {
-          resourceReadyTime = maxPredFinishTime;
-        } else {
-          for (const auto &[amt, time] : tokens) {
-            if (time > maxPredFinishTime) {
-              totalAvailable += amt;
-              if (totalAvailable >= demand) {
-                resourceReadyTime = time;
+            // Check if resource has any tokens
+            if (resource_nodes[resID].empty()) {
+                resourcesOK = false;
                 break;
-              }
             }
-          }
+
+            // Make a local copy to sort
+            auto tokens = resource_nodes[resID];
+            std::sort(tokens.begin(), tokens.end(),
+                      [](const auto &a, const auto &b) { return a.second < b.second; });
+
+            int totalAvailable = 0;
+            int resourceReadyTime = -1;
+
+            // Count tokens available at maxPredFinishTime
+            for (const auto &[amt, time] : tokens) {
+                if (time <= maxPredFinishTime) {
+                    totalAvailable += amt;
+                }
+            }
+
+            if (totalAvailable >= demand) {
+                resourceReadyTime = maxPredFinishTime;
+            } else {
+                // Check future tokens
+                for (const auto &[amt, time] : tokens) {
+                    if (time > maxPredFinishTime) {
+                        totalAvailable += amt;
+                        if (totalAvailable >= demand) {
+                            resourceReadyTime = time;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (resourceReadyTime == -1) {
+                resourcesOK = false;
+                break;
+            }
+
+            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
         }
 
-        if (resourceReadyTime == -1) {
-          resourcesOK = false;
-          break;
+        if (resourcesOK) {
+            available.emplace_back(transId, maxResourceTime);
         }
-
-        maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
-      }
-
-      if (resourcesOK) {
-        available.emplace_back(transId, maxResourceTime);
-      }
     }
 
     return available;
 }
-
-
 bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
   return true;
 }

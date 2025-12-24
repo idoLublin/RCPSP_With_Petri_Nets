@@ -205,9 +205,9 @@ public:
   };
 
     std::vector<Place> places;  // Vector of Place objects
-    std::vector<Transition_dict> Transitions_dict;  // Vector of Place objects
+   // std::vector<Transition_dict> Transitions_dict;  // Vector of Place objects
     int place_len;
-    std::vector<Place_dict> places_dict;  // Vector of Place objects
+    //std::vector<Place_dict> places_dict;  // Vector of Place objects
     std::vector<Transition> Transitions;  // Vector of Place objects
     std::unordered_map<std::string, int> place_name_to_id;
 
@@ -219,20 +219,20 @@ public:
     }
 
 
-    void addPlace_dict(const Place_dict& place_dict) {
-        places_dict.push_back(place_dict);
-    }
+    // void addPlace_dict(const Place_dict& place_dict) {
+    //     places_dict.push_back(place_dict);
+    // }
     void addTransition(const Transition& transition) {
         Transitions.push_back(transition);
     }
-    void addTransition_dist(const Transition_dict& transition_dict) {
-        Transitions_dict.push_back(transition_dict);
-    }
+    // void addTransition_dist(const Transition_dict& transition_dict) {
+    //     Transitions_dict.push_back(transition_dict);
+    // }
     void reset() {
         places.clear();
-        places_dict.clear();
+        //places_dict.clear();
         Transitions.clear();
-        Transitions_dict.clear();
+    //    Transitions_dict.clear();
         place_len = 0;
     }
 

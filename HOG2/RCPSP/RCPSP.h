@@ -562,7 +562,10 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
 
   // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
   // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
-  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys,nodeID.resource_nodes, nodeID.activity_nodes);
+
+  //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
@@ -679,7 +682,7 @@ int lastActivityId = -1;
     int unkTime = state1.g - latestStart;
 
     // FIX: Copy the vector (std::vector copy is deep by default)
-    std::vector<int> finishedActivitiysnew = state1.finishedActivitiys;
+    std::vector<short> finishedActivitiysnew = state1.finishedActivitiys;
 
     for (int actIdx : independentSet) {
       // FIX: Direct index access

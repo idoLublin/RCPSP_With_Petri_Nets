@@ -7,41 +7,18 @@
 #include "readPetri.cpp"
 #ifndef RCPSPSTATE_H
 #define RCPSPSTATE_H
+
 std::string finalstatename;
 std::string initialstatename;
 class RCPSPState {
   public:
   RCPSPState();
-    // Add this inside your class RCPSPState definition
-    // ~RCPSPState() {
-    //     std::vector<short>().swap(marking);
-    //     std::vector<std::pair<short, short>>().swap(activeTransitionIndices);
-    //
-    //     std::map<int, int>().swap(startedActivitiys);
-    //     std::map<int, int>().swap(finishedActivitiys);
-    //
-    // }
-  RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
-
-
+     RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,int location,uint64_t &count);
     std::vector<short> marking;
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
-
-   // bool direction;
-   //  bool nodestatus;
-  //std::vector<RCPSPState> sons;
-  //std::vector<int> unstartedTransitions;
-
-
-  // unsigned int name=0;
-  // unsigned int predecesorname=0;
-
-  // std::map<int, int> startedActivitiys;
-  // std::map<int, int> finishedActivitiys;
-
-    std::vector<int> startedActivitiys;
-    std::vector<int> finishedActivitiys;
+    std::vector<short> startedActivitiys;
+    std::vector<short> finishedActivitiys;
 
     bool status;
   short g=0;
@@ -49,6 +26,23 @@ class RCPSPState {
 
   bool operator==(const RCPSPState& other) const;
 };
+
+class RCPSPState_TT {
+public:
+    std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
+    std::vector<std::pair<short, short>> activity_nodes;
+    std::vector<short> finishedActivitiys;
+    short g = 0;
+
+    RCPSPState_TT();
+    RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
+    bool operator==(const RCPSPState_TT& other) const;
+};
+
+
+
+
+int computeEarlyFinishTime(int activityId);
 
 class RCPSPState_bi {
 public:
@@ -90,50 +84,4 @@ public:
     //int checkEnd();
     bool operator==(const RCPSPState_bi& other) const;
 };
-std::vector<std::string> resourceNames = {"R1", "R2", "R3", "R4"};
-
-class RCPSPState_TT {
-public:
-    // --- Constructors ---
-    RCPSPState_TT();
-    // ~RCPSPState_TT() {
-    //     // 1. Clear complex nested vector
-    //     // This is expensive to delete! It requires looping.
-    //     for (auto& inner_vec : marking) {
-    //         std::vector<std::pair<short, short>>().swap(inner_vec);
-    //     }
-    //     std::vector<std::vector<std::pair<short, short>>>().swap(marking);
-    //
-    //     // 2. Clear Map
-    //     std::map<int, int>().swap(finishedActivitiys);
-    // }
-   // RCPSPState_TT(const RCPSPState_TT& predecessor, int newTransitionId, bool applyTransition, int location, uint64_t& count);
-    RCPSPState_TT(const RCPSPState_TT& prev, int ID, int firingTime);
-    // ~RCPSPState_TT() {
-    //     marking.clear();
-    //     // unfinishedTransitions.clear();
-    //     //startedActivitiys.clear();
-    //     finishedActivitiys.clear();
-    // }
-
-    // --- Resource state ---
-    std::vector<std::vector<std::pair<short, short>>> marking;
-    // std::vector<short> unfinishedTransitions;
-   // std::map<int, int> startedActivitiys;                          // activityID -> start time
-    // std::map<int, int> finishedActivitiys;                         // activityID -> finish time
-    std::vector<int> finishedActivitiys;
-    //std::vector<std::pair<short, short>> avilableTransitionIndices;  // Store transition IDs
-
-    short g = 0;
-    //double h = 0;
-
-    // --- Comparison ---
-    bool operator==(const RCPSPState_TT& other) const;
-};
-
-
-
-
-int computeEarlyFinishTime(int activityId);
-
 #endif // RCPSPSTATE_H

@@ -61,22 +61,18 @@ struct AStarCompareWithF {
 */
 
 
+// Version 1: For regular RCPSPState
 inline size_t getStartedCount(const RCPSPState& state) {
 	size_t count = 0;
-	// Assuming you have a vector of started times, count non -1s
 	for (int t : state.startedActivitiys) {
 		if (t != -1) count++;
 	}
 	return count;
 }
 
-// Version 2: For TT (Time Ticks) - Does nothing (Returns 0)
-// Since TT doesn't track "started" in the same way, we return 0
-// effectively disabling this specific tie-breaker for TT.
+// Version 2: For RCPSPState_TT
 inline size_t getStartedCount(const RCPSPState_TT& state) {
-	// If you have a vector called 'activeActivitiys' in TT, you could count that instead!
-	// For now, return 0 to fix the compile error.
-	return 0;
+	return 0;  // TT doesn't track started activities
 }
 
 
@@ -99,58 +95,55 @@ std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now()
 template <class state>
 
 struct AStarCompareWithF {
+	// 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
+	// 	{
+	// 		//auto startSCF = std::chrono::high_resolution_clock::now();
+	// 		if (fequal(i1.f, i2.f)) {
+	// 			if (fequal(i1.g, i2.g)) {
+	// 				// בדיקת כמות ה-finished_activities
+	// 				if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
+	// 					//auto endSCF = std::chrono::high_resolution_clock::now();
+	//
+	// 					//comperTime += endSCF-startSCF;
+	// 					return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
+	// 				}
+	// 				// בדיקת כמות ה-started_activities
+	// 				//auto endSCF = std::chrono::high_resolution_clock::now();
+	//
+	// 				//comperTime += endSCF-startSCF;
+	// 				return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
+	// 			}
+	// 			//auto endSCF = std::chrono::high_resolution_clock::now();
+	//
+	// 			//comperTime += endSCF-startSCF;
+	// 			return fless(i1.g, i2.g); // g גבוה יותר עדיף//change 10.6
+	// 		}
+	// 		//auto endSCF = std::chrono::high_resolution_clock::now();
+	//
+	// 		//comperTime += endSCF-startSCF;
+	// 		return fgreater(i1.f, i2.f); // f קטן יותר עדיף
+	// 	}
+	//
+	// };
 
-
-// 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
-// 	{
-// 		//auto startSCF = std::chrono::high_resolution_clock::now();
-// 		if (fequal(i1.f, i2.f)) {
-// 			if (fequal(i1.g, i2.g)) {
-// 				// בדיקת כמות ה-finished_activities
-// 				if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
-// 					//auto endSCF = std::chrono::high_resolution_clock::now();
-//
-// 					//comperTime += endSCF-startSCF;
-// 					return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
-// 				}
-// 				// בדיקת כמות ה-started_activities
-// 				//auto endSCF = std::chrono::high_resolution_clock::now();
-//
-// 				//comperTime += endSCF-startSCF;
-// 				return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
-// 			}
-// 			//auto endSCF = std::chrono::high_resolution_clock::now();
-//
-// 			//comperTime += endSCF-startSCF;
-// 			return fless(i1.g, i2.g); // g גבוה יותר עדיף//change 10.6
-// 		}
-// 		//auto endSCF = std::chrono::high_resolution_clock::now();
-//
-// 		//comperTime += endSCF-startSCF;
-// 		return fgreater(i1.f, i2.f); // f קטן יותר עדיף
-// 	}
-//
-// };
-
-bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
+	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
-	/// 1. Primary: f_score
-	if (i1.f != i2.f) return i1.f > i2.f;
+		/// 1. Primary: f_score
+		if (i1.f != i2.f) return i1.f > i2.f;
 
-	// 2. Secondary: g_score
-	if (i1.g != i2.g) return i1.g < i2.g;
+		// 2. Secondary: g_score
+		if (i1.g != i2.g) return i1.g < i2.g;
 
-	// Helper lambda to count valid items (not -1)
-	auto countValid = [](const std::vector<short>& vec) {
-		int count = 0;
-		for (int v : vec) {
-			if (v != -1) count++;
-		}
-		return count;
-	};
+		// Helper lambda to count valid items (not -1) - works with both vector and array
+		auto countValid = [](const auto& container) {
+			int count = 0;
+			for (int v : container) {
+				if (v != -1) count++;
+			}
+			return count;
+		};
 
-	// 3. Tertiary: Started Count
-	// You mentioned you had a helper for this, ensure it counts non -1s!
+		// 3. Tertiary: Started Count
 		size_t start1 = getStartedCount(i1.data);
 		size_t start2 = getStartedCount(i2.data);
 
@@ -158,16 +151,13 @@ bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosed
 			return start1 < start2;
 		}
 
-	// 4. Quaternary: Finished Count (The specific fix you asked for)
-	int finish1 = countValid(i1.data.finishedActivitiys);
-	int finish2 = countValid(i2.data.finishedActivitiys);
+		// 4. Quaternary: Finished Count
+		int finish1 = countValid(i1.data.finishedActivitiys);
+		int finish2 = countValid(i2.data.finishedActivitiys);
 
-	// We prefer MORE finished activities.
-	// In a min-heap, "true" means i1 is worse.
-	// i1 is worse if it has FEWER finished items.
-	return finish1 < finish2;
+		return finish1 < finish2;
 	}
-	 };
+};
 /*
 struct AStarCompareWithF {
 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const

@@ -31,7 +31,7 @@ class RCPSPState_TT {
 public:
     std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
     std::vector<std::pair<short, short>> activity_nodes;
-    std::vector<short> finishedActivitiys;
+    std::array<short, 128> finishedActivitiys;  // Changed from vector
     short g = 0;
 
     RCPSPState_TT();

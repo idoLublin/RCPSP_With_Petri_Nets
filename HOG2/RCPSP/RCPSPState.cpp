@@ -1494,8 +1494,7 @@ RCPSPState_TT::RCPSPState_TT() {
     int num_activities = petri.places.size() - res_count;
     activity_nodes.resize(num_activities);
 
-    finishedActivitiys.assign(petri.Transitions.size() + 1, -1);
-
+    finishedActivitiys.fill(-1);
     int activity_counter = 0;
     for (int i = 0; i < petri.places.size(); ++i) {
         const auto& place = petri.places[i];
@@ -1892,7 +1891,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::vector<short> &finishedActivitiys,
+    const std::array<short, 128> &finishedActivitiys,
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
     const std::vector<std::pair<short, short>> &activity_nodes
 ) {

@@ -682,7 +682,7 @@ int lastActivityId = -1;
     int unkTime = state1.g - latestStart;
 
     // FIX: Copy the vector (std::vector copy is deep by default)
-    std::vector<short> finishedActivitiysnew = state1.finishedActivitiys;
+    std::array<short, 128> finishedActivitiysnew = state1.finishedActivitiys;
 
     for (int actIdx : independentSet) {
       // FIX: Direct index access
@@ -704,26 +704,19 @@ inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 }
 
 inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
- // auto startS1 = std::chrono::high_resolution_clock::now();
-
   std::size_t seed = 0;
-  for (int id = 0; id < node.finishedActivitiys.size(); ++id) {
+
+  // Fixed-size loop - compiler can optimize better
+  for (int id = 0; id < 128; ++id) {
     int time = node.finishedActivitiys[id];
 
-    // Only hash if the activity is actually finished (equivalent to existing in the map)
     if (time != -1) {
-      // Hash the ID (formerly pair.first)
       seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-
-      // Hash the Time (formerly pair.second)
       seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
   }
-  // auto endS1 = std::chrono::high_resolution_clock::now();
-  //
-  // hashTIME += endS1-startS1;
-  return seed;
 
+  return seed;
 }
 
 

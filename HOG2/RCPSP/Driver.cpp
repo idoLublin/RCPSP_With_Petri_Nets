@@ -1,67 +1,204 @@
 //
 // Created by idol on 29/12/2024.
 //
-// Your First C++ Program
+// RCPSP Solver Driver - Configurable via command-line flags
 
 #include <iostream>
- #include "RCPSPState.cpp"
+#include <fstream>
+#include <vector>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <climits>
+#include <cstdlib>
+#include <sstream>
+#include <algorithm>
+#include <filesystem>
+
+#include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
-
 #include "RCPSP.h"
-//****importent i changed GLUtil.h with recVec == operator abit****//
- //PetriExample petri;
- //RCPSP_example RCPSP1;
-#include <iostream>
-#include <vector>
-#include <thread>
-#include <chrono>
-#include <atomic>
-#include <iostream>
-// #include <windows.h>
-// #include <omp.h> // Include this at the top of Driver.cpp
-#include <fstream>
-#include <vector>
-#include <climits>
-void runBenchmark();
-void runSolvedProblems();
-void sortCSV(const std::string& filename);
-std::atomic<bool> cancel_requested(false);
 
-std::atomic<bool> stop_printing1(false); // Flag to stop the printing thread
-
-// void printNetworkSize1() {
-//     while (!stop_printing1) {
-//         std::this_thread::sleep_for(std::chrono::seconds(60*5)); // Wait for a second
-//     }
-// }
-int solveRCPSP();
-int solveRCPSP_TT();
-int solveRCPSP_Bi();
-#include <iostream>
-#include <fstream>
-#include <future>
-#include <chrono>
-#include <vector>
-#include <thread>
-#include <thread>
-#include <atomic>
 namespace fs = std::filesystem;
 
-int solveRCPSP(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
+// ============================================================================
+// Configuration Structure
+// ============================================================================
+struct Config {
+    // Problem range
+    int groupStart = 1;
+    int groupEnd = 1;
+    int examStart = 1;
+    int examEnd = 10;
+    
+    // Problem set type: j30, j60, j90, j120
+    std::string problemType = "j30";
+    
+    // Solving methods: "tp", "tt", "all"
+    std::string method = "all";
+    
+    // Output configuration
+    std::string outputFolder = "results";
+    std::string outputFile = "";  // If empty, auto-generate
+    
+    // Algorithm options
+    bool useCS = true;
+    bool sortResults = true;
+    bool writeHeader = true;
+    
+    // Display help
+    bool showHelp = false;
+};
 
-    generateTIME= std::chrono::duration<double>(0);
-    avelableTIME= std::chrono::duration<double>(0);
-    HTIME= std::chrono::duration<double>(0);
-    hashTIME= std::chrono::duration<double>(0);
-    comperTime= std::chrono::duration<double>(0);
-    secssesorTIME= std::chrono::duration<double>(0);
-    clock_t setupTIME = clock();
+// Forward declarations
+void runSolver(const Config& config);
+void sortCSV(const std::string& filename);
+int solveRCPSP(int group, int exam, const std::string& filename, const std::string& problemType);
+int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::string& problemType);
 
-    getPetri(petri, group, exam,problemType);
-    getRCPSP(RCPSPex, group, exam,problemType);
+// ============================================================================
+// Helper Functions
+// ============================================================================
+void printUsage(const char* programName) {
+    std::cout << "Usage: " << programName << " [OPTIONS]\n\n"
+              << "RCPSP Solver - Configurable Problem Solver\n\n"
+              << "Options:\n"
+              << "  --group-start N    Starting group number (default: 1)\n"
+              << "  --group-end N      Ending group number (default: 1)\n"
+              << "  --exam-start N     Starting exam number (default: 1)\n"
+              << "  --exam-end N       Ending exam number (default: 10)\n"
+              << "  --problem-type T   Problem type: j30, j60, j90, j120 (default: j30)\n"
+              << "  --method M         Solving method: tp, tt, all (default: all)\n"
+              << "  --output-folder F  Output folder path (default: results)\n"
+              << "  --output-file F    Output filename (default: auto-generated)\n"
+              << "  --use-cs           Enable CS optimization (default: true)\n"
+              << "  --no-cs            Disable CS optimization\n"
+              << "  --no-sort          Disable result sorting\n"
+              << "  --no-header        Don't write CSV header\n"
+              << "  --help, -h         Show this help message\n\n"
+              << "Environment Variables (used as defaults if flags not provided):\n"
+              << "  RCPSP_GROUP_START, RCPSP_GROUP_END\n"
+              << "  RCPSP_EXAM_START, RCPSP_EXAM_END\n"
+              << "  RCPSP_PROBLEM_TYPE, RCPSP_METHOD\n"
+              << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE\n"
+              << "  RCPSP_USE_CS (0 or 1)\n\n"
+              << "Examples:\n"
+              << "  " << programName << " --group-start 1 --group-end 5 --method tp\n"
+              << "  " << programName << " --problem-type j60 --output-file my_results.csv\n"
+              << "  RCPSP_METHOD=tt " << programName << "\n";
+}
 
+std::string getEnvOrDefault(const char* envVar, const std::string& defaultVal) {
+    const char* val = std::getenv(envVar);
+    return val ? std::string(val) : defaultVal;
+}
+
+int getEnvOrDefault(const char* envVar, int defaultVal) {
+    const char* val = std::getenv(envVar);
+    if (val) {
+        try { return std::stoi(val); } catch (...) {}
+    }
+    return defaultVal;
+}
+
+bool getEnvOrDefault(const char* envVar, bool defaultVal) {
+    const char* val = std::getenv(envVar);
+    if (val) {
+        std::string s(val);
+        return s == "1" || s == "true" || s == "yes";
+    }
+    return defaultVal;
+}
+
+Config parseArgs(int argc, char* argv[]) {
+    Config config;
+    
+    // First, apply environment variable defaults
+    config.groupStart = getEnvOrDefault("RCPSP_GROUP_START", config.groupStart);
+    config.groupEnd = getEnvOrDefault("RCPSP_GROUP_END", config.groupEnd);
+    config.examStart = getEnvOrDefault("RCPSP_EXAM_START", config.examStart);
+    config.examEnd = getEnvOrDefault("RCPSP_EXAM_END", config.examEnd);
+    config.problemType = getEnvOrDefault("RCPSP_PROBLEM_TYPE", config.problemType);
+    config.method = getEnvOrDefault("RCPSP_METHOD", config.method);
+    config.outputFolder = getEnvOrDefault("RCPSP_OUTPUT_FOLDER", config.outputFolder);
+    config.outputFile = getEnvOrDefault("RCPSP_OUTPUT_FILE", config.outputFile);
+    config.useCS = getEnvOrDefault("RCPSP_USE_CS", config.useCS);
+    
+    // Parse command-line arguments (override env vars)
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        
+        if (arg == "--help" || arg == "-h") {
+            config.showHelp = true;
+        } else if (arg == "--group-start" && i + 1 < argc) {
+            config.groupStart = std::stoi(argv[++i]);
+        } else if (arg == "--group-end" && i + 1 < argc) {
+            config.groupEnd = std::stoi(argv[++i]);
+        } else if (arg == "--exam-start" && i + 1 < argc) {
+            config.examStart = std::stoi(argv[++i]);
+        } else if (arg == "--exam-end" && i + 1 < argc) {
+            config.examEnd = std::stoi(argv[++i]);
+        } else if (arg == "--problem-type" && i + 1 < argc) {
+            config.problemType = argv[++i];
+        } else if (arg == "--method" && i + 1 < argc) {
+            config.method = argv[++i];
+        } else if (arg == "--output-folder" && i + 1 < argc) {
+            config.outputFolder = argv[++i];
+        } else if (arg == "--output-file" && i + 1 < argc) {
+            config.outputFile = argv[++i];
+        } else if (arg == "--use-cs") {
+            config.useCS = true;
+        } else if (arg == "--no-cs") {
+            config.useCS = false;
+        } else if (arg == "--no-sort") {
+            config.sortResults = false;
+        } else if (arg == "--no-header") {
+            config.writeHeader = false;
+        } else {
+            std::cerr << "Unknown option: " << arg << "\n";
+            std::cerr << "Use --help for usage information.\n";
+        }
+    }
+    
+    return config;
+}
+
+std::string generateOutputFilename(const Config& config) {
+    if (!config.outputFile.empty()) {
+        return config.outputFolder + "/" + config.outputFile;
+    }
+    
+    // Ensure folder exists
+    if (!fs::exists(config.outputFolder)) {
+        fs::create_directories(config.outputFolder);
+    }
+    
+    // Generate unique filename
+    std::string baseName = "output_" + config.problemType + "_" + config.method + "_";
+    int count = 1;
+    std::string filename;
+    do {
+        filename = config.outputFolder + "/" + baseName + std::to_string(count) + ".csv";
+        count++;
+    } while (fs::exists(filename));
+    
+    return filename;
+}
+
+int solveRCPSP(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving (TP): " << group << ":" << exam << std::endl;
+
+    // Reset timing variables
+    generateTIME = std::chrono::duration<double>(0);
+    avelableTIME = std::chrono::duration<double>(0);
+    HTIME = std::chrono::duration<double>(0);
+    hashTIME = std::chrono::duration<double>(0);
+    comperTime = std::chrono::duration<double>(0);
+    secssesorTIME = std::chrono::duration<double>(0);
+
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
     RCPSPex.computeAndStoreDeepDependencies();
 
     RCPSPState first;
@@ -74,27 +211,14 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         }
     }
 
-    // 2. Set the Goal State
-    // Use the map we built to translate "FinalStateName" -> Integer ID
-    // Then set that specific index to 1.
+    // Set the Goal State using place name to ID mapping
     int finalID = petri.place_name_to_id.at(finalstatename);
     last.marking[finalID] = 1;
 
     RCPSP as1;
     TemplateAStar<RCPSPState, int, RCPSP> astar;
     std::vector<RCPSPState> path;
-
-
-    bool finished = false;
-    bool timeout_occurred = false;
     std::chrono::duration<double> elapsed;
-
-
-    clock_t setupend = clock();
-
-
-
-
 
     auto start = std::chrono::high_resolution_clock::now();
     astar.GetPath(&as1, first, last, path);
@@ -113,11 +237,6 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
                 std::cout << " " << transIdx;
             std::cout << std::endl;
 
-            // std::cout << "available: ";
-            // for (int transIdx : state.avilableTransitionIndices)
-            //     std::cout << " " << transIdx;
-            // std::cout << std::endl << std::endl;
-
             makespan = state.g;
         }
     } else {
@@ -134,10 +253,9 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-         << "TP"<< ","
-         << problemType<< ","
-         << (useCS ? "True" : "False")<< ","
-       //  << "\n";
+         << "TP" << ","
+         << problemType << ","
+         << (useCS ? "True" : "False") << ","
          << 100 * generateTIME.count() / elapsed.count() << ","
          << generateTIME.count() / astar.GetNodesTouched() << ","
          << 100 * avelableTIME.count() / elapsed.count() << ","
@@ -145,41 +263,32 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << 100 * hashTIME.count() / elapsed.count() << ","
          << hashTIME.count() / astar.GetNodesTouched() << ","
          << 100 * HTIME.count() / elapsed.count() << ","
-         << HTIME.count() / count<< ","
-        << 100 * comperTime.count() / elapsed.count() << ","
+         << HTIME.count() / count << ","
+         << 100 * comperTime.count() / elapsed.count() << ","
          << comperTime.count() / astar.GetNodesTouched() << ","
          << 100 * secssesorTIME.count() / elapsed.count() << ","
-         << secssesorTIME.count() / count<< ","
+         << secssesorTIME.count() / count
          << "\n";
-
-
-
-
 
     return 0;
 }
-    int solveRCPSP_TT(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
-    count=0;
-    getPetri(petri, group, exam,problemType);
-    getRCPSP(RCPSPex, group, exam,problemType);
+int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving (TT): " << group << ":" << exam << std::endl;
+    count = 0;
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
 
     RCPSPState_TT first;
     RCPSPState_TT last = first;
 
-
-
     RCPSP_TT as1;
-
     TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
     std::vector<RCPSPState_TT> path;
-
 
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
     astar.GetPath(&as1, first, last, path);
-
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
 
@@ -187,22 +296,16 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     if (!path.empty()) {
         std::cout << "Path found!" << std::endl;
+        RCPSPState_TT state = path.back();
 
-        //for (const auto& state : path) {
-        RCPSPState_TT state=path.back();
-            //std::cout << "g: " << state.g;
+        for (const auto& [actId, startTime] : state.startedActivitiys) {
+            std::cout << actId << ":" << startTime << " ";
+        }
 
-            for (const auto& [actId, startTime] : state.startedActivitiys) {
-                std::cout << actId << ":" << startTime << " ";
-            }
-
-            std::cout << std::endl;
-            makespan = state.g;
-        //}
-
+        std::cout << std::endl;
+        makespan = state.g;
         std::cout << "\nFinal makespan: " << makespan << std::endl;
-    }
-     else {
+    } else {
         std::cout << "Path not found or timeout occurred.\n";
     }
 
@@ -216,95 +319,78 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-        << "TT"<< ","
-        << problemType<< ","
-         << (useCS ? "True" : "False")<< ","
-    << 100 * generateTIME.count() / elapsed.count() << ","
-<< generateTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * avelableTIME.count() / elapsed.count() << ","
-<< avelableTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * hashTIME.count() / elapsed.count() << ","
-<< hashTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * HTIME.count() / elapsed.count() << ","
-<< HTIME.count() / count
-<< 100 * comperTime.count() / elapsed.count() << ","
-<< comperTime.count() / astar.GetNodesTouched() << ","
-<< 100 * secssesorTIME.count() / elapsed.count() << ","
-<< secssesorTIME.count() / count
+         << "TT" << ","
+         << problemType << ","
+         << (useCS ? "True" : "False") << ","
+         << 100 * generateTIME.count() / elapsed.count() << ","
+         << generateTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * avelableTIME.count() / elapsed.count() << ","
+         << avelableTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * hashTIME.count() / elapsed.count() << ","
+         << hashTIME.count() / astar.GetNodesTouched() << ","
+         << 100 * HTIME.count() / elapsed.count() << ","
+         << HTIME.count() / count << ","
+         << 100 * comperTime.count() / elapsed.count() << ","
+         << comperTime.count() / astar.GetNodesTouched() << ","
+         << 100 * secssesorTIME.count() / elapsed.count() << ","
+         << secssesorTIME.count() / count
          << "\n";
 
     return 0;
 }
-//not working
+// NOTE: Bidirectional search - currently not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
-
-  //  generateTIME= std::chrono::duration<double>(0);
-    //avelableTIME= std::chrono::duration<double>(0);
-   // hashTIME= std::chrono::duration<double>(0);
-  //  comperTime= std::chrono::duration<double>(0);
-    //secssesorTIME= std::chrono::duration<double>(0);
-    count=0;
+    std::cout << "started solving (Bi): " << group << ":" << exam << std::endl;
+    count = 0;
 
     getPetri(petri, group, exam);
     getRCPSP(RCPSPex, group, exam);
 
     RCPSPState_bi first;
-    first.direction=true;
-    count=2;
+    first.direction = true;
+    count = 2;
     RCPSPState_bi last = first;
-    last.direction=false;
+    last.direction = false;
     last.h_b = first.h_f;
     last.h_f = 0;
-last.name=1;
+    last.name = 1;
+
     for (auto& pair : last.marking) {
-        //set only to to 4 diffrent resources
-        if (pair.first=="R1"){continue;}
-        if (pair.first=="R2"){continue;}
-        if (pair.first=="R3"){continue;}
-        if (pair.first=="R4"){continue;}
+        // Skip resource places
+        if (pair.first == "R1" || pair.first == "R2" || 
+            pair.first == "R3" || pair.first == "R4") {
+            continue;
+        }
         if (pair.second == 1) { pair.second = 0; }
         if (pair.first == finalstatename) { pair.second = 1; }
     }
-    last.avilableDeTransitionIndices=getAvilableDetransitionIndices(last.marking);
-    //last.avilableTransitionIndices=getAvilableTransitionIndices(last.marking);
-    for (int i=1;i<petri.Transitions.size()+1;i++) {
+
+    last.avilableDeTransitionIndices = getAvilableDetransitionIndices(last.marking);
+    for (int i = 1; i < petri.Transitions.size() + 1; i++) {
         last.finishedActivitiys.insert(i);
         last.startedActivitiys.insert(i);
     }
     last.unstartedTransitions.clear();
+
     std::vector<RCPSPState_bi> path;
     ForwardRCPSPHeuristic H_F;
     BackwardRCPSPHeuristic H_B;
     RCPSP_BiGreedy bs1;
-
-
     BAE<RCPSPState_bi, int, RCPSP_BiGreedy> Bi_RCPSP;
 
-
-
     bool finished = false;
-    bool timeout_occurred = false;
     std::chrono::duration<double> elapsed;
 
-    // Create a flag for thread completion
-
     auto start = std::chrono::high_resolution_clock::now();
-    Bi_RCPSP.GetPath(&bs1, first, last,&H_F,&H_B ,path);
-
-
-
-    // Record end time and calculate elapsed time
+    Bi_RCPSP.GetPath(&bs1, first, last, &H_F, &H_B, path);
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
 
-
-    // Output results
     double max_f = 0;
     double max_b = 0;
 
     if (!path.empty()) {
-        finished=true;
+        finished = true;
         std::cout << "Path found!" << std::endl;
         for (const auto& state : path) {
             std::cout << "g_f: " << state.g_f << std::endl;
@@ -320,8 +406,8 @@ last.name=1;
                 std::cout << " " << transIdx;
             std::cout << std::endl << std::endl;
 
-            max_f = std::max(max_f,state.g_f);
-            max_b = std::max(max_b,state.g_b);
+            max_f = std::max(max_f, state.g_f);
+            max_b = std::max(max_b, state.g_b);
         }
     } else {
         std::cout << "Path not found or timeout occurred.\n";
@@ -329,245 +415,104 @@ last.name=1;
 
     std::cout << "Nodes Expanded: " << Bi_RCPSP.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << Bi_RCPSP.GetNodesTouched() << std::endl;
-    // Save to file
+
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
          << (finished ? "True" : "False") << ","
-         << max_f+max_b << ","
-         << Bi_RCPSP.GetNodesExpanded() << ","
-        //  << ","<<100*generateTIME.count()/elapsed.count()<< ","<<generateTIME.count()
-         //    << ","<<100*avelableTIME.count()/elapsed.count()<< ","<<avelableTIME.count()
-          //       << ","<<100*hashTIME.count()/elapsed.count()<< ","<<hashTIME.count()<<
-                    // ","<<100*comperTime.count()/elapsed.count()<< ","<<comperTime.count()/astar.GetNodesTouched()<<
-             "\n";
+         << max_f + max_b << ","
+         << Bi_RCPSP.GetNodesExpanded()
+         << "\n";
 
     return 0;
 }
 
+// ============================================================================
+// CSV Header
+// ============================================================================
+const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,UseCS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)";
 
-
-std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
-    // Ensure folder exists
-    if (!fs::exists(folder)) {
-        fs::create_directories(folder);
-    }
-
-    int count = 1;
-    std::string newFilename;
-
-    do {
-        newFilename = folder + "/" + baseName + std::to_string(count) + extension;
-        count++;
-    } while (fs::exists(newFilename)); // Ensure unique filename
-
-    return newFilename;
-}
-
-// --- DELETE the entire parallel/sequential loop from your main() ---
-// --- Replace main() with this simplified structure ---
-
-int main(int argc, char *argv[]) {
-    // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
-    if (argc != 3) {
-        std::cerr << "Usage: ./Driver <START_GROUP_ID>" << std::endl;
-        return 1;
-    }
-
-    int startGroup = std::stoi(argv[1]);
-    std::string outputFolder = argv[2]; // Get folder from script
-    // This single execution will process TWO groups sequentially: G, G+1.
-    // G = startGroup (e.g., 1, 3, 5...)
-    // G+1 = next group (e.g., 2, 4, 6...)
-
-    // FIX: Use the Group ID directly in the filename
-    // This guarantees Job 14 writes to "..._14.csv" and Job 15 writes to "..._15.csv"
-    std::string filename = "results/batch_group_" + std::to_string(startGroup) + ".csv";
-
+// ============================================================================
+// Main Solver Runner
+// ============================================================================
+void runSolver(const Config& config) {
+    std::string filename = generateOutputFilename(config);
+    
+    std::cout << "============================================\n";
+    std::cout << "RCPSP Solver Configuration:\n";
+    std::cout << "  Groups: " << config.groupStart << " - " << config.groupEnd << "\n";
+    std::cout << "  Exams: " << config.examStart << " - " << config.examEnd << "\n";
+    std::cout << "  Problem Type: " << config.problemType << "\n";
+    std::cout << "  Method: " << config.method << "\n";
+    std::cout << "  Output: " << filename << "\n";
+    std::cout << "  Use CS: " << (config.useCS ? "Yes" : "No") << "\n";
+    std::cout << "============================================\n\n";
+    
+    // Set global useCS flag
+    useCS = config.useCS;
+    
+    // Open output file
     std::ofstream file(filename);
     if (!file.is_open()) {
-        std::cerr << "❌ Error opening file: " << filename << std::endl;
-        return 1;
-    }
-    // Process Group 'G'
-    for (int j = 1; j < 11; j++) {
-        solveRCPSP(startGroup, j, filename, "j30");
-
-        // Same for TT
-        solveRCPSP_TT(startGroup, j, filename, "j30");    }
-
-    // Process Group 'G+1'
-
-    return 0;
-}
-
-//  int main() {
-//      runBenchmark();
-//     return 0;
-// }
-
-
-void runBenchmark() {
-    std::string folder = "results";
-    std::string baseName = "output_";
-    std::string extension = ".csv";
-
-    std::string filename = getNextFilename(folder, baseName, extension);
-
-    // Create and write to file
-    std::ofstream file(filename);
-    // Open file stream
-
-    // Check if file is open
-    if (!file.is_open()) {
-        std::cerr << "Error opening file!" << std::endl;
+        std::cerr << "Error: Cannot open output file: " << filename << std::endl;
         return;
     }
-
-    // Write header
-    //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
-    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
-    //file << "group,exam,initialHcost" << std::endl;
- //omp_set_num_threads(10);
-     //omp_set_num_threads(2); // 1. Set the core count.
-     //#pragma omp parallel for collapse(2) schedule(dynamic)
-    for(int i = 1; i < 2; i++) {
-        for(int j = 1; j < 11; j++) {
-
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    
+    // Write header if requested
+    if (config.writeHeader) {
+        file << CSV_HEADER << std::endl;
+    }
+    file.close();
+    
+    // Main solving loop
+    for (int group = config.groupStart; group <= config.groupEnd; group++) {
+        for (int exam = config.examStart; exam <= config.examEnd; exam++) {
+            // Reset state before each problem
             petri.reset();
             RCPSPex.reset();
-
-            // 2. SOLVE
-            solveRCPSP(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
+            
+            // Run TP method if selected
+            if (config.method == "tp" || config.method == "all") {
+                solveRCPSP(group, exam, filename, config.problemType);
+            }
+            
+            // Run TT method if selected
+            if (config.method == "tt" || config.method == "all") {
+                solveRCPSP_TT(group, exam, filename, config.problemType);
+            }
         }
     }
-    sortCSV(filename);
-
-
-    // solveRCPSP(-1,-1,filename,"j30");
-    //
-    // for(int i=16;i<17;i++) {
-    //      for(int j=5;j<11;j++) {
-    //      solveRCPSP(i,j,filename,"j30");
-    //      solveRCPSP_TT(i,j,filename,"j30");
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
-
-     //solveRCPSP(34, 9, filename);
-  //   solveRCPSP(34, 10, filename);
-
-
-
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=false;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=true;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-
-    useCS=false;
-    //solveRCPSP(33,9,filename,"j60");
-    //solveRCPSP(33,10,filename,"j60");
-     //for(int i=34;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-      //  solveRCPSP(i,j,filename,"j60");
-       // }
-   // }
-   // solveRCPSP(48,5,filename,"j90");
-    //solveRCPSP(48,6,filename,"j90");
-    //solveRCPSP(48,7,filename,"j90");
-    //solveRCPSP(48,8,filename,"j90");
-    //solveRCPSP(48,9,filename,"j90");
-    //solveRCPSP(48,10,filename,"j90");
-
-    //for(int i=26;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-          //  solveRCPSP(i,j,filename,"j90");
-       // }
-    //}
-
-
-    // J120 לא רץ
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP(i,j,filename,"j120");
-    //     }
-    // }
-
-   // for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j120");
-   //     }
-    //}
-
-
-    useCS=true;
-
-//    for(int i=1;i<49;i++) {
-  //      for(int j=1;j<11;j++) {
-    //        solveRCPSP(i,j,filename,"j90");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-           // solveRCPSP(i,j,filename,"j120");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
- //       for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j30");
- //       }
-   // }
-
-    // for(int i=17;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j60");
-    //     }
-    // }
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j90");
-    //     }
-    // }
-
-    //for(int i=1;i<49;i++) {
-       //for(int j=1;j<11;j++) {
-           // solveRCPSP_TT(i,j,filename,"j120");
-      //  }
-   // }
-
-
-   //  for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //     solveRCPSP(i,j,filename);
-   //     //getinitialHcost(i,j,filename);
-   //     }
-   // }
-
-
-    // for(int i=1;i<49;i++) {
-    //      for(int j=1;j<11;j++) {
-    //      solveRCPSP_TT(i,j,filename);
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
-
+    
+    // Sort results if requested
+    if (config.sortResults) {
+        sortCSV(filename);
+    }
+    
+    std::cout << "\n✅ Completed! Results saved to: " << filename << std::endl;
 }
 
+// ============================================================================
+// Main Entry Point
+// ============================================================================
+int main(int argc, char *argv[]) {
+    Config config = parseArgs(argc, argv);
+    
+    if (config.showHelp) {
+        printUsage(argv[0]);
+        return 0;
+    }
+    
+    runSolver(config);
+    return 0;
+}
+
+// ============================================================================
+// Result Sorting
+// ============================================================================
 struct ResultRow {
     std::string fullLine;
-    // Sorting Keys
-    std::string petriType; // TP/TT
-    std::string setType;   // j30
-    int setSize;           // 30 (for sorting)
+    std::string petriType;
+    std::string setType;
+    int setSize;
     int group;
     int exam;
 };
@@ -635,27 +580,3 @@ void sortCSV(const std::string& filename) {
 
     std::cout << "✅ Sorted " << rows.size() << " rows." << std::endl;
 }
-
-
-
-
-void getinitialHcost(int i, int i1, const std::string & string);
-void getinitialHcost(int group, int exam, const std::string &filename) {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
-    count=0;
-    double initalHcost=0;
-    getPetri(petri, group, exam);
-    getRCPSP(RCPSPex, group, exam);
-
-    RCPSPState first;
-    initalHcost=getForwardHcost(first.unstartedTransitions,first.activeTransitionIndices);
-
-    std::cout << "initalHcost\n";
-
-
-
-    std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << initalHcost<<std::endl;
-
-}
-

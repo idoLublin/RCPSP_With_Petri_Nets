@@ -2,19 +2,19 @@
     "tasks": [
         {
             "type": "cppbuild",
-            "label": "C/C++: clang build active file (Debug)",
+            "label": "C/C++: clang build Driver (Debug)",
             "command": "/usr/bin/clang++",
             "args": [
                 "-std=c++17",
                 "-fcolor-diagnostics",
                 "-fansi-escape-codes",
                 "-g",
-                "${file}",
+                "${workspaceFolder}/HOG2/RCPSP/Driver.cpp",
                 "-o",
-                "${fileDirname}/${fileBasenameNoExtension}"
+                "${workspaceFolder}/build/Driver"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${workspaceFolder}/build"
             },
             "problemMatcher": [
                 "$gcc"
@@ -24,7 +24,7 @@
         },
         {
             "type": "cppbuild",
-            "label": "C/C++: clang build active file (Release)",
+            "label": "C/C++: clang build Driver (Release)",
             "command": "/usr/bin/clang++",
             "args": [
                 "-std=c++17",
@@ -34,12 +34,12 @@
                 "-flto",
                 "-fcolor-diagnostics",
                 "-fansi-escape-codes",
-                "${file}",
+                "${workspaceFolder}/HOG2/RCPSP/Driver.cpp",
                 "-o",
-                "${fileDirname}/${fileBasenameNoExtension}"
+                "${workspaceFolder}/build/Driver"
             ],
             "options": {
-                "cwd": "${fileDirname}"
+                "cwd": "${workspaceFolder}/build"
             },
             "problemMatcher": [
                 "$gcc"

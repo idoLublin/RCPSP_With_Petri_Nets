@@ -14,6 +14,8 @@
 #include <sstream>
 #include <algorithm>
 #include <filesystem>
+#include <iomanip>
+#include <ctime>
 
 #include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
@@ -25,6 +27,9 @@ namespace fs = std::filesystem;
 // ============================================================================
 // Configuration Structure
 // ============================================================================
+// Path to repository root (relative to executable location in build/)
+const std::string REPO_ROOT = "../";
+
 struct Config {
     // Problem range
     int groupStart = 1;
@@ -38,8 +43,8 @@ struct Config {
     // Solving methods: "tp", "tt", "all"
     std::string method = "all";
     
-    // Output configuration
-    std::string outputFolder = "results";
+    // Output configuration (relative to repo root)
+    std::string outputFolder = "data";
     std::string outputFile = "";  // If empty, auto-generate
     
     // Algorithm options
@@ -70,8 +75,9 @@ void printUsage(const char* programName) {
               << "  --exam-end N       Ending exam number (default: 10)\n"
               << "  --problem-type T   Problem type: j30, j60, j90, j120 (default: j30)\n"
               << "  --method M         Solving method: tp, tt, all (default: all)\n"
-              << "  --output-folder F  Output folder path (default: results)\n"
+              << "  --output-folder F  Output folder path (default: data)\n"
               << "  --output-file F    Output filename (default: auto-generated)\n"
+              << "                     Auto format: YYYY-MM-DD_jXX_gN-M_eN-M_method.csv\n"
               << "  --use-cs           Enable CS optimization (default: true)\n"
               << "  --no-cs            Disable CS optimization\n"
               << "  --no-sort          Disable result sorting\n"
@@ -165,23 +171,52 @@ Config parseArgs(int argc, char* argv[]) {
 }
 
 std::string generateOutputFilename(const Config& config) {
-    if (!config.outputFile.empty()) {
-        return config.outputFolder + "/" + config.outputFile;
-    }
+    // Build full path relative to repo root
+    std::string fullOutputFolder = REPO_ROOT + config.outputFolder;
     
     // Ensure folder exists
-    if (!fs::exists(config.outputFolder)) {
-        fs::create_directories(config.outputFolder);
+    if (!fs::exists(fullOutputFolder)) {
+        fs::create_directories(fullOutputFolder);
     }
     
-    // Generate unique filename
-    std::string baseName = "output_" + config.problemType + "_" + config.method + "_";
-    int count = 1;
-    std::string filename;
-    do {
-        filename = config.outputFolder + "/" + baseName + std::to_string(count) + ".csv";
-        count++;
-    } while (fs::exists(filename));
+    if (!config.outputFile.empty()) {
+        return fullOutputFolder + "/" + config.outputFile;
+    }
+    
+    // Generate filename with date and ranges
+    // Format: YYYY-MM-DD_j30_g1-48_e1-10_all.csv
+    auto now = std::chrono::system_clock::now();
+    auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm tm = *std::localtime(&time);
+    
+    std::ostringstream oss;
+    oss << std::put_time(&tm, "%Y-%m-%d") << "_"
+        << config.problemType << "_"
+        << "g" << config.groupStart;
+    
+    if (config.groupStart != config.groupEnd) {
+        oss << "-" << config.groupEnd;
+    }
+    
+    oss << "_e" << config.examStart;
+    
+    if (config.examStart != config.examEnd) {
+        oss << "-" << config.examEnd;
+    }
+    
+    oss << "_" << config.method;
+    
+    std::string baseName = oss.str();
+    std::string filename = fullOutputFolder + "/" + baseName + ".csv";
+    
+    // If file exists, add a counter
+    if (fs::exists(filename)) {
+        int count = 1;
+        do {
+            filename = fullOutputFolder + "/" + baseName + "_" + std::to_string(count) + ".csv";
+            count++;
+        } while (fs::exists(filename));
+    }
     
     return filename;
 }

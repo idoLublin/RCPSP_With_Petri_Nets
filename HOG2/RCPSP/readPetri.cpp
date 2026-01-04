@@ -25,27 +25,35 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         subFolder = instanceType + std::to_string(group) + "_" + std::to_string(exam);
     }
 
-    // 2. Define the two possible paths
-    // Option A: "json_outputs_j30/j3016_1/petri.json" (Console)
+    // Define the possible paths for different execution contexts
+    // Option A: Running from HOG2/RCPSP/ (Console in that dir)
     std::string path1 = "json_outputs_" + instanceType + "/" + subFolder + "/petri.json";
 
-    // Option B: "HOG2/RCPSP/json_outputs_j30/j3016_1/petri.json" (Green Button)
+    // Option B: Running from repo root (Green Button / CMake)
     std::string path2 = "HOG2/RCPSP/" + path1;
 
-    // 3. Try to open Option A
+    // Option C: Running from build/ directory (executable in build/)
+    std::string path3 = "../HOG2/RCPSP/" + path1;
+
+    // Try to open each path in order
     std::ifstream input_file(path1);
 
-    // 4. If A failed, try Option B
     if (!input_file.is_open()) {
-        input_file.clear(); // Reset error flags
+        input_file.clear();
         input_file.open(path2);
     }
 
-    // 5. Final Check
+    if (!input_file.is_open()) {
+        input_file.clear();
+        input_file.open(path3);
+    }
+
+    // Final Check
     if (!input_file.is_open()) {
         std::cerr << "❌ Failed to open file!" << std::endl;
         std::cerr << "   Tried: " << path1 << std::endl;
         std::cerr << "   Tried: " << path2 << std::endl;
+        std::cerr << "   Tried: " << path3 << std::endl;
         return;
     }
 
@@ -161,27 +169,35 @@ void getRCPSP(P_RCPSP::RCPSP_example& rcpsp_example,int group,int exam, const st
         subFolder = instanceType + std::to_string(group) + "_" + std::to_string(exam);
     }
 
-    // 2. Define the two possible paths
-    // Option A: "json_outputs_j30/j3016_1/petri.json" (Console)
+    // Define the possible paths for different execution contexts
+    // Option A: Running from HOG2/RCPSP/ (Console in that dir)
     std::string path1 = "json_outputs_" + instanceType + "/" + subFolder + "/rcpsp.json";
 
-    // Option B: "HOG2/RCPSP/json_outputs_j30/j3016_1/petri.json" (Green Button)
+    // Option B: Running from repo root (Green Button / CMake)
     std::string path2 = "HOG2/RCPSP/" + path1;
 
-    // 3. Try to open Option A
+    // Option C: Running from build/ directory (executable in build/)
+    std::string path3 = "../HOG2/RCPSP/" + path1;
+
+    // Try to open each path in order
     std::ifstream input_file(path1);
 
-    // 4. If A failed, try Option B
     if (!input_file.is_open()) {
-        input_file.clear(); // Reset error flags
+        input_file.clear();
         input_file.open(path2);
     }
 
-    // 5. Final Check
+    if (!input_file.is_open()) {
+        input_file.clear();
+        input_file.open(path3);
+    }
+
+    // Final Check
     if (!input_file.is_open()) {
         std::cerr << "❌ Failed to open file!" << std::endl;
         std::cerr << "   Tried: " << path1 << std::endl;
         std::cerr << "   Tried: " << path2 << std::endl;
+        std::cerr << "   Tried: " << path3 << std::endl;
         return;
     }
 

@@ -13,18 +13,21 @@
 namespace P_RCPSP {
 class Activity {
 public:
-    int duration;
-    int early_finish;
-    int early_start;
-    int late_finish;
-    int late_start;
+    short duration;
+    // int early_finish;
+    // int early_start;
+    // int late_finish;
+    // int late_start;
     std::string name;
-    std::map<std::string, int> resource_demands; // For resources like 'R1': 3
-    Activity(): duration(0), early_finish(0), early_start(0), late_finish(0), late_start(0) {
+    std::map<std::string, short> resource_demands; // For resources like 'R1': 3
+    Activity(): duration(0)//, early_finish(0), early_start(0), late_finish(0), late_start(0)
+    {
     };
     // Constructor
-    Activity(int dur, const std::string& n, const std::map<std::string, int>& resources)
-        : duration(dur), name(n), resource_demands(resources), early_finish(0), early_start(0), late_finish(0), late_start(0) {}
+    Activity(short dur, const std::string& n, const std::map<std::string, short>& resources)
+        : duration(dur), name(n), resource_demands(resources)
+    //, early_finish(0), early_start(0), late_finish(0), late_start(0)
+    {}
     ~Activity() = default;
 };
 
@@ -40,14 +43,14 @@ class RCPSP_example{
    //skip on activity name duration as it can be acssesd with acvivity[num].duration
     //std::vector<std::vector<std::string>> dependencies;
     //std::vector<std::vector<std::string>> backword_dependencies;
-    std::vector<std::vector<int>> backword_dependencies;
-    std::vector<std::vector<int>> dependencies;
+    std::vector<std::vector<short>> backword_dependencies;
+    std::vector<std::vector<short>> dependencies;
 
-    std::vector<std::pair<std::string, int>> resources;
+    std::vector<std::pair<std::string, short>> resources;
     std::set<std::pair<std::string, std::string>> deep_dependencies;
 
     // Function to add a single resource to the vector
-    void addResource(const std::string& name, int value) {
+    void addResource(const std::string& name, short value) {
         resources.push_back({name, value});  // Push as a pair
     }
     ~RCPSP_example() = default;
@@ -116,18 +119,18 @@ class RCPSP_example{
 class Place {
 public:
     std::string name;
-    std::unordered_map<std::string, int> arcs_in;
-    std::unordered_map<std::string, int> arcs_out;
-    std::vector<std::vector<int>> state;
-    int duration;             // TODO delete
+    std::unordered_map<std::string, short> arcs_in;
+    std::unordered_map<std::string, short> arcs_out;
+    std::vector<std::vector<short>> state;
+    short duration;             // TODO delete
 
     ~Place() {};
     // Constructor
     Place(const std::string& placeName,
-          const std::unordered_map<std::string, int>& inputArcs = {},
-          const std::unordered_map<std::string, int>& outputArcs = {},
-          const std::vector<std::vector<int>>& initialState = {},
-          int initialDuration = 0)
+          const std::unordered_map<std::string, short>& inputArcs = {},
+          const std::unordered_map<std::string, short>& outputArcs = {},
+          const std::vector<std::vector<short>>& initialState = {},
+          short initialDuration = 0)
         : name(placeName), arcs_in(inputArcs), arcs_out(outputArcs), state(initialState), duration(initialDuration) {}
 
 };
@@ -150,13 +153,13 @@ public:
 };
 class Transition {
 public:
-    std::vector<std::pair<int, int>> arcs_in_indices;
-    std::vector<std::pair<int, int>> arcs_out_indices;
-    int duration;                       // Duration of the place
-    int name;                   // Name of the place
+    std::vector<std::pair<short, short>> arcs_in_indices;
+    std::vector<std::pair<short, short>> arcs_out_indices;
+    short duration;                       // Duration of the place
+    short name;                   // Name of the place
     // Constructor
     ~Transition() {};
-    Transition(int Name, int Duration) : name(Name), duration(Duration) {}
+    Transition(short Name, short Duration) : name(Name), duration(Duration) {}
 
     bool operator==(const Transition& other) const {
         return name == other.name &&
@@ -165,7 +168,7 @@ public:
                duration == other.duration;
     }
 };
-int getTransitionDuration(const std::vector<Transition>& transitions, const int& name) {
+int getTransitionDuration(const std::vector<Transition>& transitions, const short& name) {
     auto it = std::find_if(transitions.begin(), transitions.end(),
                            [&name](const Transition& t) { return t.name == name; });
 
@@ -174,7 +177,7 @@ int getTransitionDuration(const std::vector<Transition>& transitions, const int&
     }
     return -1;  // Return -1 or any other value to indicate not found
 }
-short getTransitionDuration2(const std::vector<std::pair<short, short>>& activeTransitions, int transitionId) {
+short getTransitionDuration2(const std::vector<std::pair<short, short>>& activeTransitions, short transitionId) {
     for (const auto& [idx, duration] : activeTransitions) {
         if (idx == transitionId) {
             return duration;

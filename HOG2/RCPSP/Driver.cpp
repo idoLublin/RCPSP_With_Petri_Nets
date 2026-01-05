@@ -138,18 +138,18 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << problemType<< ","
          << (useCS ? "True" : "False")<< ","
        //  << "\n";
-         << 100 * generateTIME.count() / elapsed.count() << ","
-         << generateTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * avelableTIME.count() / elapsed.count() << ","
-         << avelableTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * hashTIME.count() / elapsed.count() << ","
-         << hashTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * HTIME.count() / elapsed.count() << ","
-         << HTIME.count() / count<< ","
-        << 100 * comperTime.count() / elapsed.count() << ","
-         << comperTime.count() / astar.GetNodesTouched() << ","
-         << 100 * secssesorTIME.count() / elapsed.count() << ","
-         << secssesorTIME.count() / count<< ","
+        //  << 100 * generateTIME.count() / elapsed.count() << ","
+        //  << generateTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * avelableTIME.count() / elapsed.count() << ","
+        //  << avelableTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * hashTIME.count() / elapsed.count() << ","
+        //  << hashTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * HTIME.count() / elapsed.count() << ","
+        //  << HTIME.count() / count<< ","
+        // << 100 * comperTime.count() / elapsed.count() << ","
+        //  << comperTime.count() / astar.GetNodesTouched() << ","
+        //  << 100 * secssesorTIME.count() / elapsed.count() << ","
+        //  << secssesorTIME.count() / count<< ","
          << "\n";
 
 
@@ -218,19 +218,19 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << path.size() << ","
         << "TT"<< ","
         << problemType<< ","
-         << (useCS ? "True" : "False")<< ","
-    << 100 * generateTIME.count() / elapsed.count() << ","
-<< generateTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * avelableTIME.count() / elapsed.count() << ","
-<< avelableTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * hashTIME.count() / elapsed.count() << ","
-<< hashTIME.count() / astar.GetNodesTouched() << ","
-<< 100 * HTIME.count() / elapsed.count() << ","
-<< HTIME.count() / count
-<< 100 * comperTime.count() / elapsed.count() << ","
-<< comperTime.count() / astar.GetNodesTouched() << ","
-<< 100 * secssesorTIME.count() / elapsed.count() << ","
-<< secssesorTIME.count() / count
+//          << (useCS ? "True" : "False")<< ","
+//     << 100 * generateTIME.count() / elapsed.count() << ","
+// << generateTIME.count() / astar.GetNodesTouched() << ","
+// << 100 * avelableTIME.count() / elapsed.count() << ","
+// << avelableTIME.count() / astar.GetNodesTouched() << ","
+// << 100 * hashTIME.count() / elapsed.count() << ","
+// << hashTIME.count() / astar.GetNodesTouched() << ","
+// << 100 * HTIME.count() / elapsed.count() << ","
+// << HTIME.count() / count
+// << 100 * comperTime.count() / elapsed.count() << ","
+// << comperTime.count() / astar.GetNodesTouched() << ","
+// << 100 * secssesorTIME.count() / elapsed.count() << ","
+// << secssesorTIME.count() / count
          << "\n";
 
     return 0;
@@ -430,6 +430,7 @@ void runBenchmark() {
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
+    solveRCPSP_TT(9, 1, filename, "j30");
 
     for(int i = 16; i < 17; i++) {
         for(int j = 1; j < 11; j++) {
@@ -439,13 +440,44 @@ void runBenchmark() {
             RCPSPex.reset();
 
             // 2. SOLVE
-            solveRCPSP(i, j, filename, "j30");
-          //  solveRCPSP_TT(i, j, filename, "j30");
+    //        solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
         }
     }
-    solveRCPSP(9, 1, filename, "j30");
+    for(int i = 16; i < 17; i++) {
+        for(int j = 10; j >0; j--) {
 
-    sortCSV(filename);
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            //        solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
+        }
+    }
+
+
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
+
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            //        solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
+        }
+    }
+    solveRCPSP_TT(9, 1, filename, "j30");
+
+    // solveRCPSP(9, 1, filename, "j30");
+
+
+   // solveRCPSP_TT(9, 1, filename, "j30");
+
+   // sortCSV(filename);
 
 
     // solveRCPSP(-1,-1,filename,"j30");
@@ -661,4 +693,39 @@ void getinitialHcost(int group, int exam, const std::string &filename) {
     file << group << "," << exam << "," << initalHcost<<std::endl;
 
 }
+
+void solver_group(int startGroup,const std::string& filename) {
+    for (int j = 1; j < 11; j++) {
+        //solveRCPSP(startGroup, j, filename, "j30");
+        solveRCPSP_TT(startGroup, j, filename, "j30");
+
+    }
+}
+// int main(int argc, char *argv[]) {
+//     // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
+//     int startGroup = std::stoi(argv[1]);
+//     std::string outputFolder = argv[2]; // <--- Get the absolute path
+//
+//     // Construct filename: "/home/.../results_job_123/results_group_5.
+//
+//
+//
+//
+//     std::string filename = outputFolder + "/results_group_" + std::to_string(startGroup) + ".csv";
+//
+//     std::ofstream file(filename);
+//     solver_group(startGroup,filename);
+//     solver_group(startGroup+1,filename);
+//     solver_group(startGroup+2,filename);
+//     solver_group(startGroup+3,filename);
+//     solver_group(startGroup+4,filename);
+//     solver_group(startGroup+5,filename);
+//     solver_group(startGroup+6,filename);
+//     solver_group(startGroup+7,filename);
+// }
+
+
+
+
+
 

@@ -17,13 +17,13 @@
 using namespace P_RCPSP;
 
 
-std::chrono::duration<double> generateTIME;
-std::chrono::duration<double> avelableTIME;
-std::chrono::duration<double> HTIME;
-std::chrono::duration<double>hashTIME;
-
-std::chrono::duration<double> comperTime;
-std::chrono::duration<double>secssesorTIME;
+// std::chrono::duration<double> generateTIME;
+// std::chrono::duration<double> avelableTIME;
+// std::chrono::duration<double> HTIME;
+// std::chrono::duration<double>hashTIME;
+//
+// std::chrono::duration<double> comperTime;
+// std::chrono::duration<double>secssesorTIME;
 
 
 

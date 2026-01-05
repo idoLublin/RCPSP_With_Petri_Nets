@@ -71,25 +71,25 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         petriExample.place_name_to_id[pName] = petriExample.places.size();
 
         // 1. Load State
-        std::vector<std::vector<int>> state;
+        std::vector<std::vector<short>> state;
         if (j[i].contains("state") && j[i]["state"].is_array()) {
-            state = j[i]["state"].get<std::vector<std::vector<int>>>();
+            state = j[i]["state"].get<std::vector<std::vector<short>>>();
         } else {
             state.push_back({0});
         }
 
         // 2. LOAD ARCS (The Fix!)
         // We must load these so .empty() works correctly later
-        std::unordered_map<std::string, int> arcsIn;
-        std::unordered_map<std::string, int> arcsOut;
+        std::unordered_map<std::string, short> arcsIn;
+        std::unordered_map<std::string, short> arcsOut;
 
         if (j[i]["arcs_in"].is_object()) {
             // Use unordered_map here too
-            arcsIn = j[i]["arcs_in"].get<std::unordered_map<std::string, int>>();
+            arcsIn = j[i]["arcs_in"].get<std::unordered_map<std::string, short>>();
         }
         if (j[i]["arcs_out"].is_object()) {
             // Use unordered_map here too
-            arcsOut = j[i]["arcs_out"].get<std::unordered_map<std::string, int>>();
+            arcsOut = j[i]["arcs_out"].get<std::unordered_map<std::string, short>>();
         }
 
         // 3. Create Place with REAL arcs

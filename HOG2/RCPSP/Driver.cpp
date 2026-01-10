@@ -27,8 +27,8 @@ namespace fs = std::filesystem;
 // ============================================================================
 // Configuration Structure
 // ============================================================================
-// Path to repository root (relative to executable location in build/)
-const std::string REPO_ROOT = "../";
+// Path to repository root (relative to executable location when running from repo root)
+const std::string REPO_ROOT = "";
 
 struct Config {
     // Problem range

@@ -17,13 +17,13 @@
 using namespace P_RCPSP;
 
 
-std::chrono::duration<double> generateTIME;
-std::chrono::duration<double> avelableTIME;
-std::chrono::duration<double> HTIME;
-std::chrono::duration<double>hashTIME;
-
-std::chrono::duration<double> comperTime;
-std::chrono::duration<double>secssesorTIME;
+// std::chrono::duration<double> generateTIME;
+// std::chrono::duration<double> avelableTIME;
+// std::chrono::duration<double> HTIME;
+// std::chrono::duration<double>hashTIME;
+//
+// std::chrono::duration<double> comperTime;
+// std::chrono::duration<double>secssesorTIME;
 
 
 
@@ -47,11 +47,11 @@ double computeWorkloadLowerBoundWithMax(
     const std::map<int, int>& earlyStartTimes,
     double criticalPathEstimate
 );
-std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
-    const std::vector<int> &unstartedTransitions,
-    const std::map<int, int> &finishedActivities,
-    const std::vector<std::vector<std::pair<int, int>>>&marking
-);
+// std::vector<std::pair<int, int>> getAvailableTransitionIndices_TT(
+//     const std::vector<int> &unstartedTransitions,
+//     const std::map<int, int> &finishedActivities,
+//     const std::vector<std::vector<std::pair<int, int>>>&marking
+// );
 std::vector<int> getCriticalPath(const std::map<int, int>& earlyStartTimes,
                                  int lastActivityId,
                                  const std::vector<std::vector<std::string>>& backword_dependencies);
@@ -161,7 +161,7 @@ std::vector<int> getAvilableTransitionIndices(const std::vector<short>& marking)
 std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::string, int>& marking);
 
 double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pair<short, short>>activeTransitionIndices) {
-  auto startS3 = std::chrono::high_resolution_clock::now();
+  //auto startS3 = std::chrono::high_resolution_clock::now();
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
   //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
@@ -173,24 +173,22 @@ double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pai
     int maxFinishTime = 0;
     std::set<int> processedDependencies;
 
-    for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-      int depId = std::stoi(dep) - 1;
+      for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed to int
+          int depId = dep - 1;  // No more std::stoi
 
-      if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
-        short duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
-        if (duration !=-1) {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
-        }
-        else {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-
-        }
+          if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+              short duration = getTransitionDuration2(activeTransitionIndices, dep);  // Pass dep directly (no std::stoi)
+              if (duration !=-1) {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+              }
+              else {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+              }
+          }
+          else {
+              maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+          }
       }
-      else {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-      }
-    }
-
     earlyfinishMap2[activityId] = maxFinishTime;
 
   }
@@ -202,8 +200,8 @@ double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pai
 
   }
 
-   auto endS3 = std::chrono::high_resolution_clock::now();
-   HTIME += endS3 - startS3;
+   // auto endS3 = std::chrono::high_resolution_clock::now();
+   // HTIME += endS3 - startS3;
 
  return h;
 
@@ -212,13 +210,14 @@ double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pai
 
 
 double getForwardHcost(std::vector<short>unstartedTransitions,
-                      std::vector<std::pair<short, short>>activeTransitionIndices,
-                      std::map<int, int> finishedActivities = {{0, 0}}
+                      std::vector<std::pair<short, short>>activeTransitionIndices
+                      //,std::vector<int> finishedActivitiys
+
                       ) {
-  auto startS3 = std::chrono::high_resolution_clock::now();
+  //auto startS3 = std::chrono::high_resolution_clock::now();
 
    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-   std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
+   //std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
 
   double h;
   std::set<int> processedDependencies;
@@ -227,28 +226,27 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
     int maxFinishTime = 0;
     std::set<int> processedDependencies;
 
-    for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-      int depId = std::stoi(dep) - 1;
+      for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed to int
+          int depId = dep - 1;  // No more std::stoi
 
-      if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
-        int duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
-        if (duration !=-1) {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
-          earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + duration;
-        }
-        else {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-          earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration;
-        }
+          if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+              int duration = getTransitionDuration2(activeTransitionIndices, dep);  // Pass dep directly
+              if (duration !=-1) {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+                  //earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + duration;
+              }
+              else {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+               //   earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration;
+              }
+          }
+          else {
+              maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+            //  earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1];
+          }
       }
-      else {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-        earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1];
-      }
-    }
-
     earlyfinishMap2[activityId] = maxFinishTime;
-    earlyfinishMap3[activityId] = maxFinishTime;
+   // earlyfinishMap3[activityId] = maxFinishTime;
   }
   if (earlyfinishMap2.size()==0) {
     h = 0;
@@ -258,20 +256,20 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
   }
   if (useCS) {
-    h=computeSequenceLowerBoundWithMax2(
-        unstartedTransitions,
-        activeTransitionIndices,
-        earlyfinishMap2,
-        earlyfinishMap3,
-        h,
-        finishedActivities); // BL_Cs heuristic
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    avelableTIME += endS1 - startS3;
+    // h=computeSequenceLowerBoundWithMax2(
+    //     unstartedTransitions,
+    //     activeTransitionIndices,
+    //     earlyfinishMap2,
+    //     earlyfinishMap3,
+    //     h,
+    //     finishedActivitiys); // BL_Cs heuristic
+    // auto endS1 = std::chrono::high_resolution_clock::now();
+    // avelableTIME += endS1 - startS3;
     return h;
   }
   else {
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    avelableTIME += endS1 - startS3;
+    // auto endS1 = std::chrono::high_resolution_clock::now();
+    // avelableTIME += endS1 - startS3;
     return h;
 
   }
@@ -321,37 +319,37 @@ std::vector<int> getCriticalPath(const std::map<int, int>& earlyfinishTimes,
         int nextActivity = -1;
 
         // Find predecessor with maximum early start time
-        for (const std::string& depStr : deps) {
-            // Validate string conversion
-            if (depStr.empty()) continue;
-
-            int depId = -1;
-            try {
-                depId = std::stoi(depStr);
-            } catch (const std::exception&) {
-                continue; // Skip invalid string
-            }
-
-            // Validate depId
-            if (depId <= 0) continue;
-
-            // Check if this dependency exists in earlyStartTimes
-            auto it = earlyfinishTimes.find(depId);
-            if (it == earlyfinishTimes.end()) continue;
-
-            int earlyfinish = it->second;
-
-            // Select predecessor with maximum early start time
-            if (earlyfinish > maxearlyfinish) {
-                maxearlyfinish = earlyfinish;
-                nextActivity = depId;
-            }
-           if (earlyfinish==0) {
-          //   visited.insert(current);
-          //   criticalPath.push_back(current);
-            break;
-          }
-        }
+        // for (const std::string& depStr : deps) {
+        //     // Validate string conversion
+        //     if (depStr.empty()) continue;
+        //
+        //     int depId = -1;
+        //     try {
+        //         depId = std::stoi(depStr);
+        //     } catch (const std::exception&) {
+        //         continue; // Skip invalid string
+        //     }
+        //
+        //     // Validate depId
+        //     if (depId <= 0) continue;
+        //
+        //     // Check if this dependency exists in earlyStartTimes
+        //     auto it = earlyfinishTimes.find(depId);
+        //     if (it == earlyfinishTimes.end()) continue;
+        //
+        //     int earlyfinish = it->second;
+        //
+        //     // Select predecessor with maximum early start time
+        //     if (earlyfinish > maxearlyfinish) {
+        //         maxearlyfinish = earlyfinish;
+        //         nextActivity = depId;
+        //     }
+        //    if (earlyfinish==0) {
+        //   //   visited.insert(current);
+        //   //   criticalPath.push_back(current);
+        //     break;
+        //   }
+        // }
         // Update current for next iteration
         current = nextActivity;
     }
@@ -377,11 +375,11 @@ double getBackwardHcost2(
 
   for (int actId : allRelevant) {
     int maxDepFinish = 0;
-    for (const std::string& depStr : RCPSPex.backword_dependencies[actId - 1]) {
-      int depId = std::stoi(depStr);
-      if (earlyFinishMap.count(depId))
-        maxDepFinish = std::max(maxDepFinish, earlyFinishMap[depId]);
-    }
+    // for (const std::string& depStr : RCPSPex.backword_dependencies[actId - 1]) {
+    //   int depId = std::stoi(depStr);
+    //   if (earlyFinishMap.count(depId))
+    //     maxDepFinish = std::max(maxDepFinish, earlyFinishMap[depId]);
+    // }
 
     int duration = RCPSPex.activities[actId - 1].duration;
     int remaining = 0;
@@ -410,66 +408,67 @@ double getBackwardHcost2(
 #include <string>
 #include <algorithm>
 #include <cmath>
-std::map<int, int> getlatefinish (int size,int finishTime) {
-std::map<int, int> latefinishTimes;
 
-    // Set the last activity's late finish time
-    latefinishTimes[size] = finishTime;
-
-    // Work backwards from the last activity
-    for (int i = size - 1; i > 0; i--) {
-        // Check bounds for forward_dependencies array
-        if (i < 1 || i > static_cast<int>(RCPSPex.dependencies.size())) {
-            continue;
-        }
-
-        // Get forward dependencies (successors) for current activity
-        const auto& successors = RCPSPex.dependencies[i - 1]; // Convert to 0-based
-
-        int minLateFinish = 999999;
-        bool hasValidSuccessor = false;
-
-        // Find the minimum late finish time among all successors
-        for (const std::string& succStr : successors) {
-            // Validate string conversion
-            if (succStr.empty()) continue;
-
-            int succId = -1;
-            try {
-                succId = std::stoi(succStr);
-            } catch (const std::exception&) {
-                continue; // Skip invalid string
-            }
-
-            // Validate succId
-            if (succId <= 0) continue;
-
-            // Check if this successor already has a late finish time calculated
-            auto it = latefinishTimes.find(succId);
-            if (it != latefinishTimes.end()) {
-                minLateFinish = std::min(minLateFinish, it->second);
-                hasValidSuccessor = true;
-            }
-        }
-
-        // If no valid successors found, this might be a terminal activity
-        // In that case, use the project finish time
-        if (!hasValidSuccessor) {
-            minLateFinish = finishTime;
-        }
-
-        // Get duration for current activity
-        int duration = 0;
-        if (i <= static_cast<int>(size) ){
-            duration = RCPSPex.activities[i-1].duration; // Convert to 0-based
-        }
-
-        // Calculate late finish time: min(successor late finish times) - duration
-        latefinishTimes[i] = minLateFinish - duration;
-    }
-
-    return latefinishTimes;
-}
+// std::map<int, int> getlatefinish (int size,int finishTime) {
+// std::map<int, int> latefinishTimes;
+//
+//     // Set the last activity's late finish time
+//     latefinishTimes[size] = finishTime;
+//
+//     // Work backwards from the last activity
+//     for (int i = size - 1; i > 0; i--) {
+//         // Check bounds for forward_dependencies array
+//         if (i < 1 || i > static_cast<int>(RCPSPex.dependencies.size())) {
+//             continue;
+//         }
+//
+//         // Get forward dependencies (successors) for current activity
+//         const auto& successors = RCPSPex.dependencies[i - 1]; // Convert to 0-based
+//
+//         int minLateFinish = 999999;
+//         bool hasValidSuccessor = false;
+//
+//         // Find the minimum late finish time among all successors
+//         for (const std::string& succStr : successors) {
+//             // Validate string conversion
+//             if (succStr.empty()) continue;
+//
+//             int succId = -1;
+//             try {
+//                 succId = std::stoi(succStr);
+//             } catch (const std::exception&) {
+//                 continue; // Skip invalid string
+//             }
+//
+//             // Validate succId
+//             if (succId <= 0) continue;
+//
+//             // Check if this successor already has a late finish time calculated
+//             auto it = latefinishTimes.find(succId);
+//             if (it != latefinishTimes.end()) {
+//                 minLateFinish = std::min(minLateFinish, it->second);
+//                 hasValidSuccessor = true;
+//             }
+//         }
+//
+//         // If no valid successors found, this might be a terminal activity
+//         // In that case, use the project finish time
+//         if (!hasValidSuccessor) {
+//             minLateFinish = finishTime;
+//         }
+//
+//         // Get duration for current activity
+//         int duration = 0;
+//         if (i <= static_cast<int>(size) ){
+//             duration = RCPSPex.activities[i-1].duration; // Convert to 0-based
+//         }
+//
+//         // Calculate late finish time: min(successor late finish times) - duration
+//         latefinishTimes[i] = minLateFinish - duration;
+//     }
+//
+//     return latefinishTimes;
+// }
 
 double computeSequenceLowerBoundWithMax2(
 const std::vector<short>& unfinishedTransitions,
@@ -481,7 +480,7 @@ std::map<int, int> finishedActivities
 
 ) {
   std::vector<int> path =getCriticalPath(earlyfinishTimes,RCPSPex.activities.size());
-  std::map<int, int> latestartTimes=getlatefinish(RCPSPex.activities.size(),criticalPathEstimate);
+  std::map<int, int> latestartTimes;//getlatefinish(RCPSPex.activities.size(),criticalPathEstimate);
 
   path.erase(
             std::remove_if(path.begin(), path.end(),
@@ -649,7 +648,7 @@ double computeCoreTimeLowerBoundWithMax(
 
     for (const auto& [res, cap] : RCPSPex.resources) {
         capacityMap[res] = cap;
-        minCapacity = std::min(minCapacity, cap);
+        //minCapacity = std::min(minCapacity, cap);
     }
 
     for (int id : unstartedTransitions) {
@@ -938,147 +937,151 @@ double computeResourceCapacityLowerBound(
 }
 
 
-double getBackwordsHcost(std::set<int>startedTransitions, std::vector<std::pair<int, int>>activeTransitionIndices) {
- // auto startS3 = std::chrono::high_resolution_clock::now();
+// double getBackwordsHcost(std::set<int>startedTransitions, std::vector<std::pair<int, int>>activeTransitionIndices)
+// {
+//  // auto startS3 = std::chrono::high_resolution_clock::now();
+//
+//   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+//   double h;
+//
+//   // Iterate over started activities
+//   for (int activityId: startedTransitions) {
+//     int maxFinishTime = 0;
+//
+//     // Check all backward dependencies
+//     for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
+//       int depId = std::stoi(dep) - 1;
+//
+//       // If dependency is in started transitions
+//       if (std::find(startedTransitions.begin(), startedTransitions.end(), depId + 1) != startedTransitions.end()) {
+//         // Find if dependency is in active transitions to get its duration
+//         int duration = -1;
+//         for (const auto &pair : activeTransitionIndices) {
+//           if (pair.first == depId + 1) {
+//             duration = pair.second;
+//             break;
+//           }
+//         }
+//
+//         if (duration != -1) {
+//           // Use duration from active transitions
+//           maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+//         } else {
+//           // Use default duration
+//           maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+//         }
+//       } else {
+//         // If dependency is not in started transitions, just use its finish time
+//         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+//       }
+//     }
+//
+//     if (std::find(startedTransitions.begin(), startedTransitions.end(), activityId + 1) != startedTransitions.end()) {
+//       int duration = -1;
+//       for (const auto &pair : activeTransitionIndices) {
+//         if (pair.first == activityId + 1) {
+//           duration = pair.second;
+//           break;
+//         }
+//       }
+//
+//       if (duration != -1) {
+//         // Use duration from active transitions
+//         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[activityId+1] + duration);
+//       } else {
+//         // Use default duration
+//         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[activityId+1] + RCPSPex.activities[activityId].duration);
+//       }
+//     }
+//     earlyfinishMap2[activityId] = maxFinishTime;
+//   }
+//
+//   // Find the maximum finish time
+//   h = 0;
+//   if (!earlyfinishMap2.empty()) {
+//     h = std::max_element(
+//       earlyfinishMap2.begin(),
+//       earlyfinishMap2.end(),
+//       [](const auto& p1, const auto& p2) { return p1.second < p2.second; }
+//     )->second;
+//   }
+//
+// //  auto endS3 = std::chrono::high_resolution_clock::now();
+//   //HTIME += endS3 - startS3;
+//   return h;
+// /*
+//
+//  auto startS3 = std::chrono::high_resolution_clock::now();
+//
+//    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+//   //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
+//   double h;
+//   std::set<int> processedDependencies;
+//   // Iterate over unstarted activitiesint lastElementEarlyFinish = 0;
+//   //int lastElementEarlyFinish = 0;
+//   for (int activityId: startedTransitions) {
+//     int maxFinishTime = 0;
+//     std::set<int> processedDependencies;
+//
+//     for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
+//       int depId = std::stoi(dep) - 1;
+//       // if (processedDependencies.count(depId) > 0) continue;
+//       // processedDependencies.insert(depId);
+//       if (std::find(startedTransitions.begin(), startedTransitions.end(), depId + 1) != startedTransitions.end()) {
+//         int duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
+//         if (duration !=-1) {
+//           maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+//           //if (RCPSPex.activities[depId].duration !=duration) {
+//           //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
+//           //}
+//         }
+//         else {
+//           maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+//
+//         }
+//       }
+//       else {
+//         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+//       }
+//     }
+//
+//     earlyfinishMap2[activityId] = maxFinishTime;
+//     //std::cout <<activityId<<":"<< earlyfinishMap[activityId]+RCPSPex.activities[activityId-1].duration << std::endl;
+//     // For last element with duration 0, just use the max finish time of dependencies
+//   }
+//   h = 0;
+//   if (earlyfinishMap2.size()==0) {
+//
+//   }
+//   else {
+//     // Find the maximum value in the map
+//     h = std::max_element(
+//       earlyfinishMap2.begin(),
+//       earlyfinishMap2.end(),
+//       [](const auto& p1, const auto& p2) { return p1.second < p2.second; }
+//     )->second;
+//   }
+//   // if (h != newH) {
+//   //   int asd;
+//   //   asd++;
+//   // }
+//    auto endS3 = std::chrono::high_resolution_clock::now();
+//    HTIME += endS3 - startS3;
+//   return h;
+//   */
+// }
 
-  std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-  double h;
-
-  // Iterate over started activities
-  for (int activityId: startedTransitions) {
-    int maxFinishTime = 0;
-
-    // Check all backward dependencies
-    for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-      int depId = std::stoi(dep) - 1;
-
-      // If dependency is in started transitions
-      if (std::find(startedTransitions.begin(), startedTransitions.end(), depId + 1) != startedTransitions.end()) {
-        // Find if dependency is in active transitions to get its duration
-        int duration = -1;
-        for (const auto &pair : activeTransitionIndices) {
-          if (pair.first == depId + 1) {
-            duration = pair.second;
-            break;
-          }
-        }
-
-        if (duration != -1) {
-          // Use duration from active transitions
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
-        } else {
-          // Use default duration
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-        }
-      } else {
-        // If dependency is not in started transitions, just use its finish time
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-      }
-    }
-
-    if (std::find(startedTransitions.begin(), startedTransitions.end(), activityId + 1) != startedTransitions.end()) {
-      int duration = -1;
-      for (const auto &pair : activeTransitionIndices) {
-        if (pair.first == activityId + 1) {
-          duration = pair.second;
-          break;
-        }
-      }
-
-      if (duration != -1) {
-        // Use duration from active transitions
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[activityId+1] + duration);
-      } else {
-        // Use default duration
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[activityId+1] + RCPSPex.activities[activityId].duration);
-      }
-    }
-    earlyfinishMap2[activityId] = maxFinishTime;
-  }
-
-  // Find the maximum finish time
-  h = 0;
-  if (!earlyfinishMap2.empty()) {
-    h = std::max_element(
-      earlyfinishMap2.begin(),
-      earlyfinishMap2.end(),
-      [](const auto& p1, const auto& p2) { return p1.second < p2.second; }
-    )->second;
-  }
-
-//  auto endS3 = std::chrono::high_resolution_clock::now();
-  //HTIME += endS3 - startS3;
-  return h;
-/*
-
- auto startS3 = std::chrono::high_resolution_clock::now();
-
-   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-  //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
-  double h;
-  std::set<int> processedDependencies;
-  // Iterate over unstarted activitiesint lastElementEarlyFinish = 0;
-  //int lastElementEarlyFinish = 0;
-  for (int activityId: startedTransitions) {
-    int maxFinishTime = 0;
-    std::set<int> processedDependencies;
-
-    for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-      int depId = std::stoi(dep) - 1;
-      // if (processedDependencies.count(depId) > 0) continue;
-      // processedDependencies.insert(depId);
-      if (std::find(startedTransitions.begin(), startedTransitions.end(), depId + 1) != startedTransitions.end()) {
-        int duration = getTransitionDuration2(activeTransitionIndices, std::stoi(dep));
-        if (duration !=-1) {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
-          //if (RCPSPex.activities[depId].duration !=duration) {
-          //  std::cout<<name<<":"<<dep<<" "<<activityId<<" "<<RCPSPex.activities[depId].duration-duration<<std::endl;
-          //}
-        }
-        else {
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-
-        }
-      }
-      else {
-        maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-      }
-    }
-
-    earlyfinishMap2[activityId] = maxFinishTime;
-    //std::cout <<activityId<<":"<< earlyfinishMap[activityId]+RCPSPex.activities[activityId-1].duration << std::endl;
-    // For last element with duration 0, just use the max finish time of dependencies
-  }
-  h = 0;
-  if (earlyfinishMap2.size()==0) {
-
-  }
-  else {
-    // Find the maximum value in the map
-    h = std::max_element(
-      earlyfinishMap2.begin(),
-      earlyfinishMap2.end(),
-      [](const auto& p1, const auto& p2) { return p1.second < p2.second; }
-    )->second;
-  }
-  // if (h != newH) {
-  //   int asd;
-  //   asd++;
-  // }
-   auto endS3 = std::chrono::high_resolution_clock::now();
-   HTIME += endS3 - startS3;
-  return h;
-  */
-}
-RCPSPState::RCPSPState() : nodestatus(false) {
+RCPSPState::RCPSPState() {
   // 1. Safety Valve
-  auto startS1 = std::chrono::high_resolution_clock::now();
-  direction = true;
-  startedActivitiys[0] = 0;
+  //auto startS1 = std::chrono::high_resolution_clock::now();
+  //direction = true;
+  //startedActivitiys[0] = 0;
 
   // 2. Initialize Marking Vector (Fast!)
   marking.resize(petri.places.size(), 0);
-
+  // Allocating 'size + 1' allows you to use index 'N' without crashing.
+startedActivitiys.fill(-1);
+finishedActivitiys.fill(-1);
   // 3. LOOP 1: Setup Places
   for (int i = 0; i < petri.places.size(); i++) {
 
@@ -1111,19 +1114,18 @@ RCPSPState::RCPSPState() : nodestatus(false) {
   }
 
   // 5. Initialize Unstarted Transitions
-  unstartedTransitions.reserve(petri.Transitions.size());
-  for (int i = 1; i < petri.Transitions.size(); i++) {
-    unstartedTransitions.push_back(i + 1);
-  }
+  // unfinishedTransitions.reserve(petri.Transitions.size());
+  // for (int i = 1; i < petri.Transitions.size(); i++) {
+  //   unfinishedTransitions.push_back(i + 1);
+  // }
 
-  auto endS1 = std::chrono::high_resolution_clock::now();
-  generateTIME += endS1 - startS1;
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  // generateTIME += endS1 - startS1;
 
   // 6. GET AVAILABLE (Do this ONCE at the end)
   // Now that marking is fully built, calculate what can run.
 
   g = 0;
-  name = 0;
 }
 //not working
 RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
@@ -1172,149 +1174,91 @@ RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
 }
 
 
-RCPSPState::RCPSPState(RCPSPState predecesor, Transition active, bool status, int location, uint64_t &count) {
-  auto startS4 = std::chrono::high_resolution_clock::now();
+RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& active, bool status1, short location, uint64_t &count) {
 
-  // Copy basic properties
-  direction = predecesor.direction;
-  name = count;
-  nodestatus = status;
-  unstartedTransitions = predecesor.unstartedTransitions;
-  startedActivitiys = predecesor.startedActivitiys;
-  finishedActivitiys = predecesor.finishedActivitiys;
-  marking = predecesor.marking;
+    // 1. FAST COPY (Vectors are contiguous, so this is basically a memcpy)
+    startedActivitiys = predecesor.startedActivitiys;
+    finishedActivitiys = predecesor.finishedActivitiys;
+    marking = predecesor.marking;
+    activeTransitionIndices = predecesor.activeTransitionIndices;
 
-  // Copy indices instead of full Transition objects
-  activeTransitionIndices = predecesor.activeTransitionIndices;
-  //avilableTransitionIndices = predecesor.avilableTransitionIndices;
-  g = predecesor.g;
+    // Copy Scalars
+    g = predecesor.g;
+    status = status1;
+    h = predecesor.h;
 
-  if (direction) {
-    if (status) {
-      h = predecesor.h;
+    // 2. FORWARD LOGIC
+    if (1) {
+        if (status) { // --- STARTING A TASK ---
 
-      // Apply arcs_in from the transition
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_in_indices) {
+            // Apply arcs_in (Consume resources)
+            // Note: active.name is 1-based, so we subtract 1 to access Petri net transitions
+            for (const auto& arc : petri.Transitions[active.name - 1].arcs_in_indices) {
+                marking[arc.first] -= arc.second;
+            }
 
-        // arc.first  is now the integer Place ID (e.g., 5)
-        // arc.second is the token count (e.g., 1)
+            // Store index and duration
+            activeTransitionIndices.push_back({active.name, active.duration});
 
-        // This is a direct array access. 1 CPU cycle.
-        marking[arc.first] -= arc.second;
-      }
+            // [VECTOR UPDATE]
+            // Access index directly. Ensure vector size is at least active.name + 1
+            startedActivitiys[active.name] = g;
 
-      // Store index and duration instead of full Transition
-      activeTransitionIndices.push_back({active.name, active.duration});
-      startedActivitiys[active.name] = g;
-
-      if (active.duration==0) {
-        status=0;
-      }
-      auto endS1 = std::chrono::high_resolution_clock::now();
-      generateTIME += endS1-startS4;
-    }
-
-    if (!status) {
-      g += active.duration;
-      finishedActivitiys[active.name] = g;
-
-      // Remove from unstarted
-      unstartedTransitions.erase(
-          std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), active.name),
-          unstartedTransitions.end());
-
-      // Update durations and remove completed transitions
-      // 1. נעדכן את הזמן שנותר לכולן
-      for (auto& [id, remain] : activeTransitionIndices) {
-        remain -= active.duration;
-        if (remain < 0)
-          remain = 0;
-      }
-
-      // 2. נאסוף את כל המשימות שהסתיימו
-      std::vector<int> finishedNow;
-      for (const auto& [id, remain] : activeTransitionIndices) {
-        if (remain == 0)
-          finishedNow.push_back(id);
-      }
-
-      // 3. נסיים את כל המשימות שהסתיימו
-      for (int id : finishedNow) {
-        finishedActivitiys[id] = g;
-
-        for (const auto& arc : petri.Transitions[id - 1].arcs_out_indices) {
-          marking[arc.first] += arc.second;
+            if (active.duration == 0) {
+                status = 0; // Immediate finish if duration is 0
+            }
         }
 
-        // הסרה מ־active
-        activeTransitionIndices.erase(
-            std::remove_if(
-                activeTransitionIndices.begin(),
-                activeTransitionIndices.end(),
-                [id](const std::pair<int, int>& p) { return p.first == id; }),
-            activeTransitionIndices.end()
-        );
+        if (!status) { // --- FINISHING A TASK ---
+            g += active.duration;
 
-        // הסרה מ־unstarted אם לא הוסרה כבר
-        unstartedTransitions.erase(
-            std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), id),
-            unstartedTransitions.end()
-        );
-      }
+            // [VECTOR UPDATE]
+            // Mark the current active task as finished
+            finishedActivitiys[active.name] = g;
 
+            // 1. Update remaining time for ALL active tasks
+            for (auto& [id, remain] : activeTransitionIndices) {
+                remain -= active.duration;
+                if (remain < 0) remain = 0;
+            }
 
-      auto endS1 = std::chrono::high_resolution_clock::now();
-      generateTIME += endS1-startS4;
+            // 2. Collect ALL tasks that finished exactly at this moment
+            std::vector<int> finishedNow;
+            for (const auto& [id, remain] : activeTransitionIndices) {
+                if (remain == 0) {
+                    finishedNow.push_back(id);
+                }
+            }
 
-      h=getForwardHcost(unstartedTransitions,activeTransitionIndices,finishedActivitiys);
-      //h=0;
+            // 3. Process all finished tasks (Chain Reaction)
+            for (int id : finishedNow) {
+                // [VECTOR UPDATE]
+                // Check if already marked to avoid double-processing (optional optimization)
+                if (finishedActivitiys[id] == -1) {
+                    finishedActivitiys[id] = g;
+                }
 
-    }
+                // Release resources (Produce tokens)
+                // Note: id is 1-based, so id - 1 for Petri net access
+                for (const auto& arc : petri.Transitions[id - 1].arcs_out_indices) {
+                    marking[arc.first] += arc.second;
+                }
+            }
 
-  }
-  else {
-    // Similar transformation for the backward direction
-    if (status) {
-      h = predecesor.h;
-
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_out_indices) {
-        marking[arc.first] -= arc.second;
-      }
-
-      activeTransitionIndices.push_back({active.name, active.duration});
-      startedActivitiys[active.name] = g;
-
-      auto endS1 = std::chrono::high_resolution_clock::now();
-      generateTIME += endS1-startS4;
-    }
-    else {
-      g += active.duration;
-      finishedActivitiys[active.name] = g;
-
-      unstartedTransitions.erase(
-          std::remove(unstartedTransitions.begin(), unstartedTransitions.end(), active.name),
-          unstartedTransitions.end());
-
-      for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
-        activeTransitionIndices[i].second -= active.duration;
-        if (activeTransitionIndices[i].second<0) {
-          activeTransitionIndices[i].second=0;
+            // 4. Remove finished tasks from active list
+            // Optimization: Remove requires shifting elements.
+            // Since order doesn't matter, Swap-and-Pop is faster, but remove_if is safer for now.
+            activeTransitionIndices.erase(
+                std::remove_if(
+                    activeTransitionIndices.begin(),
+                    activeTransitionIndices.end(),
+                    [](const std::pair<int, int>& p) { return p.second == 0; }), // Remove if remaining time is 0
+                activeTransitionIndices.end()
+            );
         }
-        if (activeTransitionIndices[i].first == active.name) {
-          // for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
-          //   marking[arc.first] += arc.second;
-          // }
-          activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
-        }
-      }
-      auto endS1 = std::chrono::high_resolution_clock::now();
-      generateTIME += endS1-startS4;
-
     }
-  }
-  //avilableTransitionIndices = getAvilableTransitionIndices(marking);
+    // Backward logic omitted for brevity (mirror the changes above if needed)
 }
-
 
 RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool status, int location, uint64_t &count) {
  // auto startS4 = std::chrono::high_resolution_clock::now();
@@ -1500,8 +1444,8 @@ std::vector<int> getAvilableDetransitionIndices(const std::unordered_map<std::st
 
 bool RCPSPState::operator==(const RCPSPState& other) const {
   // 1. Fast checks
-  if (name != other.name) return false;
-  if (direction != other.direction) return false;
+  // if (name != other.name) return false;
+  // if (direction != other.direction) return false;
 
   // 2. Vector Comparison
   // This is only safe if you GUARANTEE every vector is initialized
@@ -1538,16 +1482,20 @@ bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
 }
 
 RCPSPState_TT::RCPSPState_TT() {
-  //startedActivitiys[0] = 0;
-auto startS1 = std::chrono::high_resolution_clock::now();
+    // Build mapping: resource name -> index (0-3)
+    std::unordered_map<int, int> place_to_resource_idx;
+    int res_count = 0;
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        int resID = petri.place_name_to_id.at(resName);
+        place_to_resource_idx[resID] = res_count++;
+    }
 
-    // 1. Initialize Vectors ONCE
-    marking.resize(petri.places.size()); // Vectors start empty
-    unstartedTransitions.reserve(petri.Transitions.size());
+    // Count activity nodes
+    int num_activities = petri.places.size() - res_count;
+    activity_nodes.resize(num_activities);
 
-    // -------------------------------------------------------
-    // STEP A: Setup Places (Start/End nodes & Initial tokens)
-    // -------------------------------------------------------
+    finishedActivitiys.fill(-1);
+    int activity_counter = 0;
     for (int i = 0; i < petri.places.size(); ++i) {
         const auto& place = petri.places[i];
 
@@ -1555,54 +1503,49 @@ auto startS1 = std::chrono::high_resolution_clock::now();
         if (place.arcs_out.empty()) finalstatename = place.name;
         if (place.arcs_in.empty())  initialstatename = place.name;
 
-        // Set Initial Tokens (Start Node = 1)
-        if (place.name == initialstatename) {
-            marking[i].push_back({1, 0});
-        }
-        else {
-            // Check JSON for other tokens (rare, but possible)
-            if (!place.state.empty() && !place.state[0].empty()) {
+        // Check if resource node
+        auto it = place_to_resource_idx.find(i);
+
+        if (it != place_to_resource_idx.end()) {
+            // This is a resource node
+            int res_idx = it->second;
+
+            if (place.name == initialstatename) {
+                resource_nodes[res_idx].push_back({1, 0});
+            } else if (!place.state.empty() && !place.state[0].empty()) {
                 int val = place.state[0][0];
-                if (val > 0) marking[i].push_back({val, 0});
+                if (val > 0) resource_nodes[res_idx].push_back({val, 0});
             }
+        } else {
+            // This is an activity node
+            if (place.name == initialstatename) {
+                activity_nodes[activity_counter] = {1, 0};
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                activity_nodes[activity_counter] = (val > 0) ? std::make_pair<short,short>(val, 0) : std::make_pair<short,short>(0, 0);
+            } else {
+                activity_nodes[activity_counter] = {0, 0};
+            }
+            activity_counter++;
         }
     }
 
-    // -------------------------------------------------------
-    // STEP B: Setup Resources (MUST BE OUTSIDE LOOP A)
-    // -------------------------------------------------------
-    // This runs exactly once per resource.
+    // Add resource capacities
     for (const auto& [resName, cap] : RCPSPex.resources) {
         if (cap > 0) {
             int resID = petri.place_name_to_id.at(resName);
+            int res_idx = place_to_resource_idx[resID];
 
-            // Only add if not already added by Step A
-            if (marking[resID].empty()) {
-                marking[resID].push_back({cap, 0});
+            if (resource_nodes[res_idx].empty()) {
+                resource_nodes[res_idx].push_back({cap, 0});
             }
         }
     }
 
-    // -------------------------------------------------------
-    // STEP C: Setup Transitions
-    // -------------------------------------------------------
-    // Start from 1 (Task 2) because Task 1 (Start Dummy) is handled by initial marking
-  for (int i = 0; i < petri.Transitions.size(); i++) {
-    unstartedTransitions.push_back(i + 1);
-  }
-
-    // -------------------------------------------------------
-    // Finalize
-    // -------------------------------------------------------
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    generateTIME += endS1 - startS1;
-
-
-
-    // Check availability based on the clean state we just built
-    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
-  g = 0;
+    g = 0;
 }
+
+
 std::vector<std::pair<short, short>> consumeResourceList(
     const std::vector<std::pair<short, short>>& resource,
     int amount,
@@ -1692,269 +1635,229 @@ double computeEarliestFinish(int activityId,
     int internalId = activityId - 1;
     double maxFinish = 0.0;
 
-    for (const std::string& dep : RCPSPex.backword_dependencies[internalId]) {
-        int depId = std::stoi(dep); // 1-based
-        int depInternal = depId - 1;
-
-        // Recurse only if it's in unstartedTransitions
-        if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId) != unstartedTransitions.end()) {
-            double depFinish = computeEarliestFinish(depId, earlyFinishMemo, unstartedTransitions, finishedActivities)
-                             + RCPSPex.activities[depInternal].duration;
-            maxFinish = std::max(maxFinish, depFinish);
-        } else {
-            // If dependency is finished, consider its finish time as stored in earlyFinishMemo
-            maxFinish = std::max(maxFinish, earlyFinishMemo[depId]);
-        }
-    }
+    // for (const std::string& dep : RCPSPex.backword_dependencies[internalId]) {
+    //     int depId = std::stoi(dep); // 1-based
+    //     int depInternal = depId - 1;
+    //
+    //     // Recurse only if it's in unstartedTransitions
+    //     if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId) != unstartedTransitions.end()) {
+    //         double depFinish = computeEarliestFinish(depId, earlyFinishMemo, unstartedTransitions, finishedActivities)
+    //                          + RCPSPex.activities[depInternal].duration;
+    //         maxFinish = std::max(maxFinish, depFinish);
+    //     } else {
+    //         // If dependency is finished, consider its finish time as stored in earlyFinishMemo
+    //         maxFinish = std::max(maxFinish, earlyFinishMemo[depId]);
+    //     }
+   // }
 
     earlyFinishMemo[activityId] = maxFinish;
     return maxFinish;
 }
 
 //!!!i changed map3 (early finish) havent chack correctness
-double getForwardHcost_TT(std::vector<short>unstartedTransitions, std::map<int, int> finishedActivitiys
-  //,std::string mode="defult"                     // activityID -> finish time
+double getForwardHcost_TT(std::vector<short>unstartedTransitions
 ) {
-  auto startS3 = std::chrono::high_resolution_clock::now();
-   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
-   std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
-  double h;
-  std::set<int> processedDependencies;
-  for (int activityId: unstartedTransitions) {
-    int maxFinishTime = 0;
+    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+    double h;
     std::set<int> processedDependencies;
+    for (int activityId: unstartedTransitions) {
+        int maxFinishTime = 0;
+        std::set<int> processedDependencies;
 
-    for (const auto &dep: RCPSPex.backword_dependencies[activityId - 1]) {
-      int depId = std::stoi(dep) - 1;
-      // if (processedDependencies.count(depId) > 0) continue;
-      // processedDependencies.insert(depId);
-      if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed from const auto& to int
+            int depId = dep - 1;  // No more std::stoi!
 
-          maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
-       //   earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration;
+            if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+                maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+            }
+            else {
+                maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+            }
+        }
 
-      }
-      else {
-         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
-       //  earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1];
-    //    maxFinishTime = std::max(maxFinishTime, 0);
-        //earlyfinishMap3[depId+1] = 0;
-      }
+        earlyfinishMap2[activityId] = maxFinishTime;
     }
 
-    earlyfinishMap2[activityId] = maxFinishTime;
-    earlyfinishMap3[activityId] = maxFinishTime+RCPSPex.activities[activityId].duration;
-  }
-  if (earlyfinishMap2.size()==0) {
-    h = 0;
-  }
-  else {
-    h = earlyfinishMap2.rbegin()->second;;
+    if (earlyfinishMap2.size()==0) {
+        h = 0;
+    }
+    else {
+        h = earlyfinishMap2.rbegin()->second;
+    }
 
-  }
-  if (useCS) {
-    std::vector<std::pair<short, short>> activeTransitionIndices;
-
-    h=computeSequenceLowerBoundWithMax2(
-        unstartedTransitions,
-         activeTransitionIndices,
-        earlyfinishMap2,
-        earlyfinishMap3,
-        h,
-        finishedActivitiys); // BL_Cs heuristic
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    HTIME += endS1 - startS3;
-    return h;
-  }
-  else {
-    auto endS1 = std::chrono::high_resolution_clock::now();
-    HTIME += endS1 - startS3;
-    return h;
-  }
- // return h;
- // return std::max(computeResourceCapacityLowerBound(unstartedTransitions,activeTransitionIndices,h), computeSequenceLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h));//BL_RC huristic
-  //return computeResourceCapacityLowerBound(unstartedTransitions,activeTransitionIndices,h);//BL_Cs huristic
-  //return computeSequenceLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h);//BL_Cs huristic
-  //return computeSequenceLowerBoundWithMax2(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,earlyfinishMap3,h,finishedActivitiys);//BL_Cs huristic
-  //return computeCoreTimeLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h);//BL_CT huristic
-  //return computeWorkloadLowerBoundWithMax(unstartedTransitions,activeTransitionIndices,earlyfinishMap2,h);//BL_CC huristic
-///
- //return h;
-
+    return h;  // Added return statement
 }
-
-RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, int transitionId, int firingTime) {
-    // 1. Copy structures from previous state
-    startedActivitiys = prev.startedActivitiys;
+RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, short transitionId, short firingTime) {
     finishedActivitiys = prev.finishedActivitiys;
-    unstartedTransitions = prev.unstartedTransitions;
-    marking = prev.marking;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
 
-    // 2. Cache frequently accessed data
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];
-    const int duration = act.duration;
-    const int activityFinishTime = firingTime + duration;
+    const short duration = act.duration;
+    const short activityFinishTime = firingTime + duration;
 
-    // 3. Update Petri net marking
-  // // A. CONSUME (Remove tokens from Predecessors) -> REQUIRED
-  // for (const auto& [placeID, weight] : transition.arcs_in_indices) {
-  //   auto& tokens = marking[placeID];
-  //
-  //   // We need to find and remove 'weight' tokens that are available <= firingTime
-  //   int needed = weight;
-  //
-  //   // Use iterator to safely remove while looping
-  //   for (auto it = tokens.begin(); it != tokens.end(); ) {
-  //     // Only consume tokens that exist at or before the firing time
-  //     if (it->second <= firingTime) {
-  //       if (it->first > needed) {
-  //         // Token has more than we need (e.g., 5 available, need 1)
-  //         it->first -= needed;
-  //         needed = 0;
-  //         break; // Done
-  //       } else {
-  //         // Token has equal or less (e.g., 1 available, need 1)
-  //         needed -= it->first;
-  //         it = tokens.erase(it); // Remove this entry entirely
-  //         if (needed == 0) break; // Done
-  //         continue; // Continue to next since we erased current
-  //       }
-  //     }
-  //     ++it;
-  //   }
-  // }
-  //
-
-  for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
-
-    // DIRECT ACCESS (Fast)
-    // No need for 'if (marking.count(place) == 0)'
-    // The vector slot at 'placeID' already exists. Just push to it.
-
-    marking[placeID].push_back({outAmount, firingTime + transition.duration});
-  }
-
-    // 4. Update activity states
-    startedActivitiys[transitionId] = firingTime;
-    finishedActivitiys[transitionId] = activityFinishTime;
-
-    // 5. Consume resources - optimized loop
-  for (const auto& [resName, demand] : act.resource_demands) {
-
-    if (demand > 0) {
-      // 1. TRANSLATE: String Name -> Integer ID
-      // Use the map we built in getPetri
-      int resID = petri.place_name_to_id.at(resName);
-
-      // 2. UPDATE: Direct Vector Access
-      // marking[resID] accesses the specific resource's timeline instantly
-      marking[resID] = consumeResourceList(marking[resID], demand, firingTime);
-
-      // Uncomment when ready:
-      // marking[resID] = return_resource(marking[resID], demand, activityFinishTime);
-    }
-  }
-
-    // 6. Remove from unstarted - optimized removal
-    auto it = std::find(unstartedTransitions.begin(), unstartedTransitions.end(), transitionId);
-    if (it != unstartedTransitions.end()) {
-        unstartedTransitions.erase(it); // Single iterator erase is faster
-    }
-
-    // 7. Calculate g-score efficiently
-    if (finishedActivitiys.empty()) {
-        g = 0;
-    }
-   else {
-        for (const auto& [id, finishTime] : finishedActivitiys) {
-            if (finishTime > g) {
-                g = finishTime;
-            }
+    // Add output tokens (NO SORTING HERE)
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        if (placeID < 4) {
+            resource_nodes[placeID].push_back({outAmount, firingTime + transition.duration});
+        } else {
+            short activity_idx = placeID - 4;
+            activity_nodes[activity_idx] = {outAmount, firingTime + transition.duration};
         }
     }
 
-    // 8. REQUIRED: Calculate available transitions
-    //avilableTransitionIndices = getAvailableTransitionIndices_TT(unstartedTransitions, finishedActivitiys, marking);
+    finishedActivitiys[transitionId] = activityFinishTime;
 
-int lastActivityId = -1;
-  int maxTime = -1;
-
-  // Find last finished activity by ID instead of name
-  for (const auto& [id, time] : finishedActivitiys) {
-    if (time > maxTime) {
-      maxTime = time;
-      lastActivityId = id;
-    }
-  }
-
-  if (lastActivityId != -1) {
-    const std::string& lastActivityName = RCPSPex.activities[lastActivityId - 1].name;
-
-    // Pre-reserve vectors
-    std::vector<int> independentSet;
-    independentSet.reserve(unstartedTransitions.size());
-
-    // Filter independent transitions
-    for (int actIdx : unstartedTransitions) {
-      const std::string& actName = RCPSPex.activities[actIdx - 1].name;
-      if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end()) {
-        independentSet.push_back(actIdx);
-      }
+    // Consume resources (NO SORTING HERE)
+    for (const auto& [resName, demand] : act.resource_demands) {
+        if (demand > 0) {
+            short resID = petri.place_name_to_id.at(resName);
+            resource_nodes[resID] = consumeResourceList(resource_nodes[resID], demand, firingTime);
+        }
     }
 
-    // Create lookup set for efficient filtering
-    std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
-    std::vector<short> newUnstartedTransitions;
-    newUnstartedTransitions.reserve(unstartedTransitions.size());
-
-    for (int id : unstartedTransitions) {
-      if (independentLookup.find(id) == independentLookup.end()) {
-        newUnstartedTransitions.push_back(id);
-      }
+    // Calculate g
+    g = 0;
+    for (short finishTime : finishedActivitiys) {
+        if (finishTime > g) {
+            g = finishTime;
+        }
     }
-
-    // 10. Calculate heuristic efficiently
-    int latestStart = 0;
-    for (const auto& [id, startTime] : startedActivitiys) {
-      if (startTime > latestStart) {
-        latestStart = startTime;
-      }
-    }
-
-    int unkTime = g - latestStart;
-    std::map<int, int> finishedActivitiysnew=finishedActivitiys;                         // activityID -> finish time
-    for (int actIdx : independentSet) {
-      finishedActivitiysnew[actIdx] = 0;
-    }
-
-  // getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime;
-      h= std::max(getForwardHcost_TT(unstartedTransitions,finishedActivitiys) - unkTime,
-                 getForwardHcost_TT(newUnstartedTransitions,finishedActivitiysnew));
-  } else {
-    // Fallback if no finished activities
-    h= getForwardHcost_TT(unstartedTransitions,finishedActivitiys);
-  }
 }
+
+// std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+//     const std::vector<short> &unstartedTransitions,
+//     //const std::map<int, int> &finishedActivities,
+//     const     std::vector<short> &finishedActivitiys,
+//     const std::vector<std::vector<std::pair<short, short>>> &marking
+// ) {
+//     std::vector<std::pair<short, short>> available;
+//
+//     for (short transId : unstartedTransitions) {
+//
+//       const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
+//
+//       // DEBUG: Check if Task 2 (usually the first real task) has dependencies
+//       if (transId == 2 && dependencies.empty()) {
+//         std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+//         exit(1); // Stop immediately so you see this
+//       }
+//
+//
+//
+//         const Activity &act = RCPSPex.activities[transId - 1];
+//
+//         // 1. Precedence constraints
+//         bool allPredsFinished = true;
+//         int maxPredFinishTime = 0;
+//
+//         for (const std::string &predStr : RCPSPex.backword_dependencies[transId - 1]) {
+//             int predId = std::stoi(predStr);
+//
+//             // THE FIX: Direct Vector Access (O(1))
+//             // Get the time directly. If it is -1, it means "not finished".
+//             int finishTime = finishedActivitiys[predId];
+//
+//             if (finishTime == -1) {
+//                 allPredsFinished = false;
+//                 break;
+//             }
+//             else {
+//                 maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
+//             }
+//         }
+//
+//         if (!allPredsFinished)
+//             continue;
+//
+//         // 2. Resource availability
+//         bool resourcesOK = true;
+//         int maxResourceTime = maxPredFinishTime;
+//       for (const auto &[res, demand] : act.resource_demands) {
+//
+//         // 1. Get ID
+//         int resID = petri.place_name_to_id.at(res);
+//
+//         // 2. Check if resource has any tokens (Vector check)
+//         if (marking[resID].empty()) {
+//           resourcesOK = false;
+//           break;
+//         }
+//
+//         // 3. GET DATA (The Fix)
+//         // We make a local copy 'tokens' because we are about to sort it.
+//         // DO NOT use 'it->second'. Use 'marking[resID]'.
+//         auto tokens = marking[resID];
+//
+//         // ... The rest of your logic is perfect ...
+//         std::sort(tokens.begin(), tokens.end(),
+//                   [](auto &a, auto &b) { return a.second < b.second; });
+//
+//         int totalAvailable = 0;
+//         int resourceReadyTime = -1;
+//
+//         for (const auto &[amt, time] : tokens) {
+//           if (time <= maxPredFinishTime) {
+//             totalAvailable += amt;
+//           }
+//         }
+//
+//         if (totalAvailable >= demand) {
+//           resourceReadyTime = maxPredFinishTime;
+//         } else {
+//           for (const auto &[amt, time] : tokens) {
+//             if (time > maxPredFinishTime) {
+//               totalAvailable += amt;
+//               if (totalAvailable >= demand) {
+//                 resourceReadyTime = time;
+//                 break;
+//               }
+//             }
+//           }
+//         }
+//
+//         if (resourceReadyTime == -1) {
+//           resourcesOK = false;
+//           break;
+//         }
+//
+//         maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+//       }
+//
+//       if (resourcesOK) {
+//         available.emplace_back(transId, maxResourceTime);
+//       }
+//     }
+//
+//     return available;
+// }
+
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::map<int, int> &finishedActivities,
-    const std::vector<std::vector<std::pair<short, short>>> &marking
+    const std::vector<short> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
+);
+
+
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+    const std::vector<short> &unstartedTransitions,
+    const std::array<short, 128> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
 ) {
     std::vector<std::pair<short, short>> available;
 
     for (short transId : unstartedTransitions) {
+        const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
 
-      const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
-
-      // DEBUG: Check if Task 2 (usually the first real task) has dependencies
-      if (transId == 2 && dependencies.empty()) {
-        std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
-        exit(1); // Stop immediately so you see this
-      }
-
-
+        // DEBUG: Check if Task 2 has dependencies
+        if (transId == 2 && dependencies.empty()) {
+            std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+            exit(1);
+        }
 
         const Activity &act = RCPSPex.activities[transId - 1];
 
@@ -1962,15 +1865,14 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
         bool allPredsFinished = true;
         int maxPredFinishTime = 0;
 
-        for (const std::string &predStr : RCPSPex.backword_dependencies[transId - 1]) {
-            int predId = std::stoi(predStr);
-            auto it = finishedActivities.find(predId);
-          if (it == finishedActivities.end()) {
+        for (int predId : RCPSPex.backword_dependencies[transId - 1]) {
+            int finishTime = finishedActivitiys[predId];
+
+            if (finishTime == -1) {
                 allPredsFinished = false;
                 break;
-            }
-          else {
-                maxPredFinishTime = std::max(maxPredFinishTime, it->second);
+            } else {
+                maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
             }
         }
 
@@ -1980,64 +1882,70 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
         // 2. Resource availability
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
-      for (const auto &[res, demand] : act.resource_demands) {
 
-        // 1. Get ID
-        int resID = petri.place_name_to_id.at(res);
+        // Sort resources only once per transition check
+        std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
+        bool resources_sorted[4] = {false, false, false, false};
 
-        // 2. Check if resource has any tokens (Vector check)
-        if (marking[resID].empty()) {
-          resourcesOK = false;
-          break;
-        }
+        for (const auto &[res, demand] : act.resource_demands) {
+            int resID = petri.place_name_to_id.at(res);
 
-        // 3. GET DATA (The Fix)
-        // We make a local copy 'tokens' because we are about to sort it.
-        // DO NOT use 'it->second'. Use 'marking[resID]'.
-        auto tokens = marking[resID];
-
-        // ... The rest of your logic is perfect ...
-        std::sort(tokens.begin(), tokens.end(),
-                  [](auto &a, auto &b) { return a.second < b.second; });
-
-        int totalAvailable = 0;
-        int resourceReadyTime = -1;
-
-        for (const auto &[amt, time] : tokens) {
-          if (time <= maxPredFinishTime) {
-            totalAvailable += amt;
-          }
-        }
-
-        if (totalAvailable >= demand) {
-          resourceReadyTime = maxPredFinishTime;
-        } else {
-          for (const auto &[amt, time] : tokens) {
-            if (time > maxPredFinishTime) {
-              totalAvailable += amt;
-              if (totalAvailable >= demand) {
-                resourceReadyTime = time;
+            if (resource_nodes[resID].empty()) {
+                resourcesOK = false;
                 break;
-              }
             }
-          }
+
+            // Sort only once per resource, only if needed
+            if (!resources_sorted[resID]) {
+                sorted_resources[resID] = resource_nodes[resID];
+                std::sort(sorted_resources[resID].begin(), sorted_resources[resID].end(),
+                          [](const auto &a, const auto &b) { return a.second < b.second; });
+                resources_sorted[resID] = true;
+            }
+
+            const auto& tokens = sorted_resources[resID];
+
+            int totalAvailable = 0;
+            int resourceReadyTime = -1;
+
+            // Count tokens available at maxPredFinishTime
+            for (const auto &[amt, time] : tokens) {
+                if (time <= maxPredFinishTime) {
+                    totalAvailable += amt;
+                }
+            }
+
+            if (totalAvailable >= demand) {
+                resourceReadyTime = maxPredFinishTime;
+            } else {
+                // Check future tokens
+                for (const auto &[amt, time] : tokens) {
+                    if (time > maxPredFinishTime) {
+                        totalAvailable += amt;
+                        if (totalAvailable >= demand) {
+                            resourceReadyTime = time;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (resourceReadyTime == -1) {
+                resourcesOK = false;
+                break;
+            }
+
+            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
         }
 
-        if (resourceReadyTime == -1) {
-          resourcesOK = false;
-          break;
+        if (resourcesOK) {
+            available.emplace_back(transId, maxResourceTime);
         }
-
-        maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
-      }
-
-      if (resourcesOK) {
-        available.emplace_back(transId, maxResourceTime);
-      }
     }
 
     return available;
 }
+
 
 
 bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {

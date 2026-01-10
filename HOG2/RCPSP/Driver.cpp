@@ -224,14 +224,6 @@ std::string generateOutputFilename(const Config& config) {
 int solveRCPSP(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
     std::cout << "started solving (TP): " << group << ":" << exam << std::endl;
 
-    // Reset timing variables
-    generateTIME = std::chrono::duration<double>(0);
-    avelableTIME = std::chrono::duration<double>(0);
-    HTIME = std::chrono::duration<double>(0);
-    hashTIME = std::chrono::duration<double>(0);
-    comperTime = std::chrono::duration<double>(0);
-    secssesorTIME = std::chrono::duration<double>(0);
-
     getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
     RCPSPex.computeAndStoreDeepDependencies();
@@ -290,19 +282,7 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
          << path.size() << ","
          << "TP" << ","
          << problemType << ","
-         << (useCS ? "True" : "False") << ","
-         << 100 * generateTIME.count() / elapsed.count() << ","
-         << generateTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * avelableTIME.count() / elapsed.count() << ","
-         << avelableTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * hashTIME.count() / elapsed.count() << ","
-         << hashTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * HTIME.count() / elapsed.count() << ","
-         << HTIME.count() / count << ","
-         << 100 * comperTime.count() / elapsed.count() << ","
-         << comperTime.count() / astar.GetNodesTouched() << ","
-         << 100 * secssesorTIME.count() / elapsed.count() << ","
-         << secssesorTIME.count() / count
+         << (useCS ? "True" : "False")
          << "\n";
 
     return 0;
@@ -333,10 +313,6 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
         std::cout << "Path found!" << std::endl;
         RCPSPState_TT state = path.back();
 
-        for (const auto& [actId, startTime] : state.startedActivitiys) {
-            std::cout << actId << ":" << startTime << " ";
-        }
-
         std::cout << std::endl;
         makespan = state.g;
         std::cout << "\nFinal makespan: " << makespan << std::endl;
@@ -356,19 +332,7 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
          << path.size() << ","
          << "TT" << ","
          << problemType << ","
-         << (useCS ? "True" : "False") << ","
-         << 100 * generateTIME.count() / elapsed.count() << ","
-         << generateTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * avelableTIME.count() / elapsed.count() << ","
-         << avelableTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * hashTIME.count() / elapsed.count() << ","
-         << hashTIME.count() / astar.GetNodesTouched() << ","
-         << 100 * HTIME.count() / elapsed.count() << ","
-         << HTIME.count() / count << ","
-         << 100 * comperTime.count() / elapsed.count() << ","
-         << comperTime.count() / astar.GetNodesTouched() << ","
-         << 100 * secssesorTIME.count() / elapsed.count() << ","
-         << secssesorTIME.count() / count
+         << (useCS ? "True" : "False")
          << "\n";
 
     return 0;

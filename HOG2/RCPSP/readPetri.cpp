@@ -59,25 +59,6 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
 
 
 
-    // // --- 1. SETUP PATHS ---
-    // std::string basePath;
-    // //if (instanceType == "j30") {basePath = "json_outputs_j30/j30";}
-    // if (instanceType == "j30") {basePath = "HOG2/RCPSP/json_outputs_j30/j30";}
-    // else if (instanceType == "j60") {basePath = "json_outputs_j60/j60";}
-    // else if (instanceType == "j90") {basePath = "json_outputs_j90/j90";}
-    // else if (instanceType == "j120") {basePath = "json_outputs_j120/j120";}
-    // else { throw std::runtime_error("Unsupported instanceType"); }
-    //
-    // std::string folderName;
-    // if (group == -1) folderName = basePath + "/smallData";
-    // else folderName = basePath + std::to_string(group) + "_" + std::to_string(exam);
-    //
-    // std::ifstream input_file(folderName+"/petri.json");
-    // if (!input_file.is_open()) {
-    //     std::cerr << "Failed to open petri.json at " << folderName << std::endl;
-    //     return;
-    // }
-
     json j;
     try {
         input_file >> j;
@@ -98,25 +79,25 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         petriExample.place_name_to_id[pName] = petriExample.places.size();
 
         // 1. Load State
-        std::vector<std::vector<int>> state;
+        std::vector<std::vector<short>> state;
         if (j[i].contains("state") && j[i]["state"].is_array()) {
-            state = j[i]["state"].get<std::vector<std::vector<int>>>();
+            state = j[i]["state"].get<std::vector<std::vector<short>>>();
         } else {
             state.push_back({0});
         }
 
         // 2. LOAD ARCS (The Fix!)
         // We must load these so .empty() works correctly later
-        std::unordered_map<std::string, int> arcsIn;
-        std::unordered_map<std::string, int> arcsOut;
+        std::unordered_map<std::string, short> arcsIn;
+        std::unordered_map<std::string, short> arcsOut;
 
         if (j[i]["arcs_in"].is_object()) {
             // Use unordered_map here too
-            arcsIn = j[i]["arcs_in"].get<std::unordered_map<std::string, int>>();
+            arcsIn = j[i]["arcs_in"].get<std::unordered_map<std::string, short>>();
         }
         if (j[i]["arcs_out"].is_object()) {
             // Use unordered_map here too
-            arcsOut = j[i]["arcs_out"].get<std::unordered_map<std::string, int>>();
+            arcsOut = j[i]["arcs_out"].get<std::unordered_map<std::string, short>>();
         }
 
         // 3. Create Place with REAL arcs
@@ -158,6 +139,7 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
         petriExample.Transitions.push_back(tran);
     }
 }
+
 void getRCPSP(P_RCPSP::RCPSP_example& rcpsp_example,int group,int exam, const std::string &instanceType = "j30") {
     // Open the file for reading
     rcpsp_example.reset();
@@ -200,40 +182,6 @@ void getRCPSP(P_RCPSP::RCPSP_example& rcpsp_example,int group,int exam, const st
         std::cerr << "   Tried: " << path3 << std::endl;
         return;
     }
-
-    // std::string folderName;
-    // std::string basePath;
-    // if (instanceType == "j30") {basePath = "json_outputs_j30/j30";}
-    // if (instanceType == "j30") {basePath = "HOG2/RCPSP/json_outputs_j30/j30";}
-    // else if (instanceType == "j60") {basePath = "json_outputs_j60/j60";}
-    // else if (instanceType == "j90") {basePath = "json_outputs_j90/j90";}
-    // else if (instanceType == "j120") {basePath = "json_outputs_j120/j120";}
-    // else {
-    //     throw std::runtime_error("Unsupported instance type: " + instanceType);
-    // }
-    //
-    // // Handle special case group == -1
-    // if (group == -1) {
-    //     folderName = basePath + "/smallData";
-    // } else {
-    //     folderName = basePath + std::to_string(group) + "_" + std::to_string(exam);
-    // }
-
-    // Try opening a file (example: rcpsp.json or petriExample.json)
-    // std::ifstream test_file(folderName + "/petri.json");
-    // if (!test_file) {
-    //     throw std::runtime_error("Could not open: " + folderName + "/petri.json");
-    // }
-
-
-    // //std::ifstream input_file("rcpspExample.json");
-    // std::ifstream input_file(folderName+"/rcpsp.json");
-    // // If the file could not be opened
-    // if (!input_file.is_open()) {
-    //     std::cerr << "Failed to open rcpsp.json" << std::endl;
-    //     return;
-    // }
-
     // Create JSON object
     json j;
 
@@ -281,15 +229,18 @@ int size= j.size();
         return a.first < b.first;
     });
 
-    // Print the sorted keys and their associated values
+    // Print the sorted keys and their associated values - CONVERT STRINGS TO INTS
     for (const auto& [key, value] : sorted32) {
-        //std::cout << "Key: " << key << " -> Values: ";
         for (const auto& val : value) {
-            //std::cout << val << " ";
-            rcpsp_example.backword_dependencies[key-1].push_back(val);
+            // Handle both string and int from JSON
+            if (val.is_string()) {
+                rcpsp_example.backword_dependencies[key-1].push_back(std::stoi(val.get<std::string>()));
+            } else if (val.is_number_integer()) {
+                rcpsp_example.backword_dependencies[key-1].push_back(val.get<int>());
+            }
         }
-        //std::cout << std::endl;
     }
+
     std::vector<std::pair<int, json>> sorted33;
     for (const auto& item : j[j.size()-3].items()) {
         sorted33.push_back({std::stoi(item.key()), item.value()});
@@ -300,17 +251,18 @@ int size= j.size();
         return a.first < b.first;
     });
 
-    // Print the sorted keys and their associated values
+    // Print the sorted keys and their associated values - CONVERT STRINGS TO INTS
     for (const auto& [key, value] : sorted33) {
-       // std::cout << "Key: " << key << " -> Values: ";
         for (const auto& val : value) {
-            //std::cout << val << " ";
-
-            rcpsp_example.dependencies[key-1].push_back(val);
-
+            // Handle both string and int from JSON
+            if (val.is_string()) {
+                rcpsp_example.dependencies[key-1].push_back(std::stoi(val.get<std::string>()));
+            } else if (val.is_number_integer()) {
+                rcpsp_example.dependencies[key-1].push_back(val.get<int>());
+            }
         }
-        //std::cout << std::endl;
     }
+
     // Close the file after reading
     //std::cout << "Current size of dependencies: " << rcpsp_example.dependencies.size() << std::endl;
 
@@ -338,112 +290,3 @@ int size= j.size();
     }
     return;
 }
-
-//
-// void getRCPSP_old(RCPSP_example& rcpsp_example,int group,int exam) {
-//     // Open the file for reading
-//     rcpsp_example.reset();
-//     std::string folderName;
-//     if (group==-1) {
-//         folderName = "json_outputs_old/smallData";;
-//     }
-//     else {
-//         std::string basePath = "json_outputs_old/j30";
-//         folderName = basePath + std::to_string(group) + "_" + std::to_string(exam);
-//     }
-//     std::ifstream input_file(folderName+"/rcpsp.json");
-//
-//     // If the file could not be opened
-//     if (!input_file.is_open()) {
-//         std::cerr << "Failed to open rcpsp.json" << std::endl;
-//         return;
-//     }
-//     // Create JSON object
-//     json j;
-//
-//     // Read into the JSON object
-//     input_file >> j;
-//
-//     // Check if the JSON is an array and contains at least one part
-//     if (j.is_array() && j.size() > 0) {
-//         // Print the names of the activities in Part 1 (first 32 activities)
-//
-//         // Loop over the first 32 elements (0-31)
-//         for (int i = 0; i < j.size()-3 && i < j.size(); ++i) {
-//             const auto& activity1 = j[i];
-//             Activity activity(activity1["duration"], activity1["name"], activity1["resource_demands"]);
-//             rcpsp_example.addActivity(activity);
-//             // Check if the "name" and "duration" fields exist in the current activity
-//             if (activity1.contains("name") && activity1.contains("duration")) {
-//
-//
-//                 // Print resource demands, if they exist
-//                 if (activity1.contains("resource_demands") && !activity1["resource_demands"].empty()) {
-//
-//                     for (auto& demand : activity1["resource_demands"].items()) {
-//                         //std::cout << "  " << demand.key() << ": " << demand.value() << std::endl;
-//                     }
-//                 } else {
-//                     //std::cout << "No resource demands." << std::endl;
-//                 }
-//             }
-//             //std::cout << std::endl;  // Space between activities
-//         }
-//
-//     } else {
-//         //std::cerr << "The JSON structure is invalid or does not have enough parts." << std::endl;
-//     }
-//     rcpsp_example.dependencies.resize(j.size()-3);
-//     rcpsp_example.backword_dependencies.resize(j.size()-3);
-//     std::vector<std::pair<int, json>> sorted32;
-//     for (const auto& item : j[j.size()-3].items()) {
-//         sorted32.push_back({std::stoi(item.key()), item.value()});
-//     }
-//
-//     // Sort by the integer value of the keys
-//     std::sort(sorted32.begin(), sorted32.end(), [](const auto& a, const auto& b) {
-//         return a.first < b.first;
-//     });
-//
-//     // Print the sorted keys and their associated values
-//     for (const auto& [key, value] : sorted32) {
-//         //std::cout << "Key: " << key << " -> Values: ";
-//         for (const auto& val : value) {
-//             //std::cout << val << " ";
-//             rcpsp_example.backword_dependencies[key-1].push_back(val);
-//         }
-//         //std::cout << std::endl;
-//     }
-//     std::vector<std::pair<int, json>> sorted33;
-//     for (const auto& item : j[j.size()-2].items()) {
-//         sorted33.push_back({std::stoi(item.key()), item.value()});
-//     }
-//
-//     // Sort by the integer value of the keys
-//     std::sort(sorted33.begin(), sorted33.end(), [](const auto& a, const auto& b) {
-//         return a.first < b.first;
-//     });
-//
-//     // Print the sorted keys and their associated values
-//     for (const auto& [key, value] : sorted33) {
-//        // std::cout << "Key: " << key << " -> Values: ";
-//         for (const auto& val : value) {
-//             //std::cout << val << " ";
-//
-//             rcpsp_example.dependencies[key-1].push_back(val);
-//
-//         }
-//         //std::cout << std::endl;
-//     }
-//     // Close the file after reading
-//     //std::cout << "Current size of dependencies: " << rcpsp_example.dependencies.size() << std::endl;
-//
-//     const auto& resources_json = j[34];  // Get the resources part
-//
-//     // Loop through and add resources individually to the class
-//     for (auto& [key, value] : resources_json.items()) {
-//         // Assuming the value is always an integer (resources are integers)
-//         rcpsp_example.addResource(key, value.get<int>());
-//     }
-//     return;
-// }

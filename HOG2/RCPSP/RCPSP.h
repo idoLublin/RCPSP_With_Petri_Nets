@@ -11,6 +11,13 @@
 
 using namespace P_RCPSP;
 
+// Forward declarations for DP-based heuristic functions
+double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
+                         const std::vector<std::pair<short, short>>& activeTransitionIndices);
+double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions);
+void initializeHeuristicDP();
+extern thread_local bool heuristicDPInitialized;
+
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
 // searchNode node;
@@ -252,10 +259,8 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       }
     }
 
-    // NOTE: You must update the definition of getForwardHcost
-    // to accept 'const std::vector<int>&' instead of 'std::map...'
-    //state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices, state1.finishedActivitiys);
-    state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+    // DP-based heuristic: Uses precomputed values instead of recalculating from scratch
+    state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
     return state1.h;
   }
   //return state1.h;
@@ -689,14 +694,12 @@ int lastActivityId = -1;
       finishedActivitiysnew[actIdx] = 0;
     }
 
-    // return std::max(getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys) - unkTime,
-    //            getForwardHcost_TT(newUnstartedTransitions, finishedActivitiysnew));
-    return std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
-           getForwardHcost_TT(newUnstartedTransitions));
+    // DP-based heuristic: Uses precomputed values for faster calculation
+    return std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
+           getForwardHcostDP_TT(newUnstartedTransitions));
   } else {
     // Fallback if no finished activities
-    return getForwardHcost_TT(tempUnstarted);
-    // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
+    return getForwardHcostDP_TT(tempUnstarted);
   }
 }
 inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {

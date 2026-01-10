@@ -89,7 +89,18 @@ inline size_t getStartedSize(const RCPSPState& state) {
 }
 
 
-std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+// Configurable timeout for A* search (in seconds)
+// Default: 300 seconds (5 minutes)
+// Can be set via setSearchTimeout() before calling GetPath()
+inline int searchTimeoutSeconds = 300;
+inline std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::seconds(searchTimeoutSeconds);
+
+// Call this function to set the timeout before each search
+inline void setSearchTimeout(int seconds) {
+    searchTimeoutSeconds = seconds;
+    timeout = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
+}
+
 //ido lublin 28.4 A*
 
 template <class state>

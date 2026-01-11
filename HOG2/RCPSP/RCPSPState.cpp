@@ -185,7 +185,7 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
     // Recursive memoized computation of earliest finish time for an activity.
     // This removes any dependence on the order of unstartedTransitions.
     auto computeEarlyFinish = [&](short activityId, const auto& self) -> int {
-        if (activityId < 0 || activityId >= static_cast<short>(earlyFinish.size())) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
             return 0;
         }
 
@@ -214,13 +214,6 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
                     );
                 }
                 // If predecessor is neither unstarted nor active, it is finished and contributes 0.
-            } else if (dep >= 0 && dep < static_cast<int>(activeRemaining.size())
-                       && activeRemaining[dep] != -1) {
-                // Index is outside earlyFinish but inside activeRemaining; treat as active if present.
-                maxPredecessorFinish = std::max(
-                    maxPredecessorFinish,
-                    static_cast<int>(activeRemaining[dep])
-                );
             }
         }
 
@@ -241,7 +234,7 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
     // Process all unstarted activities in any order; the recursive DP ensures
     // that predecessors are accounted for correctly regardless of iteration order.
     for (short activityId : unstartedTransitions) {
-        if (activityId < 0 || activityId >= static_cast<short>(earlyFinish.size())) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
             continue;
         }
         int ef = computeEarlyFinish(activityId, computeEarlyFinish);
@@ -277,7 +270,7 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
     // Recursive memoized computation of earliest finish time for an activity.
     // This removes any dependence on the order of unstartedTransitions.
     auto computeEarlyFinish = [&](short activityId, const auto& self) -> int {
-        if (activityId < 0 || activityId >= static_cast<short>(earlyFinish.size())) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
             return 0;
         }
 
@@ -298,7 +291,7 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
                         self(static_cast<short>(dep), self)
                     );
                 }
-                // If predecessor is neither unstarted, it is finished and contributes 0.
+                // If predecessor is not unstarted, it is finished and contributes 0.
             }
         }
 
@@ -312,7 +305,7 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
     // Process all unstarted activities in any order; the recursive DP ensures
     // that predecessors are accounted for correctly regardless of iteration order.
     for (short activityId : unstartedTransitions) {
-        if (activityId < 0 || activityId >= static_cast<short>(earlyFinish.size())) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
             continue;
         }
         int ef = computeEarlyFinish(activityId, computeEarlyFinish);

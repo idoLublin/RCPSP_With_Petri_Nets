@@ -14,8 +14,9 @@ class RCPSPState {
   public:
   RCPSPState();
      RCPSPState(const RCPSPState& predecessor,const P_RCPSP::Transition& newTransition,bool status,short location,uint64_t &count);
+
     std::vector<short> marking;
-    std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
+    std::vector<std::pair<short, short>> activeTransitionIndices;  // can possibly be calculated on the fly
 
     std::array<short, 128> startedActivitiys;   // Was vector
     std::array<short, 128> finishedActivitiys;  // Was vector

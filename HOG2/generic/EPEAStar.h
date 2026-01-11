@@ -36,10 +36,16 @@
 #define UINT32_MAX        4294967295U
 #endif
 
-#include "FPUtil.h"
+//#include "FPUtil.h"
+#include "../utils/FPUtil.h"
+
 #include <unordered_map>
-#include "AStarOpenClosed.h"
-#include "BucketOpenClosed.h"
+#include "../algorithms/AStarOpenClosed.h"
+#include "../algorithms/BucketOpenClosed.h"
+
+
+//#include "AStarOpenClosed.h"
+//#include "BucketOpenClosed.h"
 //#include "SearchEnvironment.h" // for the SearchEnvironment class
 #include "float.h"
 
@@ -63,17 +69,82 @@ public:
 	uint64_t special;
 };
 
+
+
+
+
+
+
+
+template <typename T>
+size_t getFinishedCountGeneric(const T& data) {
+	size_t count = 0;
+	// We assume both state types have .finishedActivitiys
+	// If your TT state uses a different name, adjust here.
+	for (const auto& val : data.finishedActivitiys) {
+		if (val != -1) count++;
+	}
+	return count;
+}
+
+// ---------------------------------------------------------
+// 2. The Updated EPEAStarCompare
+// ---------------------------------------------------------
 template <class state>
 struct EPEAStarCompare {
 	bool operator()(const EPEAOpenClosedData<state> &i1, const EPEAOpenClosedData<state> &i2) const
 	{
-		if (fequal(i1.g+i1.h, i2.g+i2.h))
-		{
-			return (fless(i1.g, i2.g));
+		// Calculate F-scores
+		double f1 = i1.g + i1.h;
+		double f2 = i2.g + i2.h;
+
+		// 1. Primary: F-score
+		// If f1 > f2, return true (i1 is "less than" i2).
+		// In a Priority Queue, this puts the SMALLEST F at the top.
+		if (!fequal(f1, f2)) {
+			return fgreater(f1, f2);
 		}
-		return (fgreater(i1.g+i1.h, i2.g+i2.h));
+
+		// 2. Secondary: G-score (Tie-breaking)
+		// We prefer HIGHER G (closer to goal).
+		// If g1 < g2, return true (i1 is "worse").
+		if (!fequal(i1.g, i2.g)) {
+			return fless(i1.g, i2.g);
+		}
+
+		// 3. Tertiary: Started Count (Polymorphic via overload)
+		// Relies on your global getStartedCount(state) overloads.
+		// We prefer HIGHER started count.
+		size_t start1 = getStartedCount(i1.data);
+		size_t start2 = getStartedCount(i2.data);
+
+		if (start1 != start2) {
+			return start1 < start2; // If i1 has fewer started, it is "worse"
+		}
+
+		// 4. Quaternary: Finished Count
+		// We prefer HIGHER finished count.
+		size_t finish1 = getFinishedCountGeneric(i1.data);
+		size_t finish2 = getFinishedCountGeneric(i2.data);
+
+		return finish1 < finish2; // If i1 has fewer finished, it is "worse"
 	}
 };
+
+
+
+////old 11.1.2026 ido lublin
+// template <class state>
+// struct EPEAStarCompare {
+// 	bool operator()(const EPEAOpenClosedData<state> &i1, const EPEAOpenClosedData<state> &i2) const
+// 	{
+// 		if (fequal(i1.g+i1.h, i2.g+i2.h))
+// 		{
+// 			return (fless(i1.g, i2.g));
+// 		}
+// 		return (fgreater(i1.g+i1.h, i2.g+i2.h));
+// 	}
+// };
 
 /**
  * A templated version of A*, based on HOG genericAStar
@@ -87,7 +158,8 @@ public:
 	
 	void GetPath(environment *, const state& , const state& , std::vector<action> & ) { assert(false); };
 	
-	AStarOpenClosed<state, EPEAStarCompare<state>, EPEAOpenClosedData<xyLoc> > openClosedList;
+	//AStarOpenClosed<state, EPEAStarCompare<state>, EPEAOpenClosedData<xyLoc> > openClosedList;
+	AStarOpenClosed<state, EPEAStarCompare<state>, EPEAOpenClosedData<state> > openClosedList;
 	//BucketOpenClosed<state, EPEAStarCompare<state>, EPEAOpenClosedData<xyLoc> > openClosedList;
 	state goal, start;
 	

@@ -1917,7 +1917,8 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
             if (totalAvailable >= demand) {
                 resourceReadyTime = maxPredFinishTime;
-            } else {
+            }
+            else {
                 // Check future tokens
                 for (const auto &[amt, time] : tokens) {
                     if (time > maxPredFinishTime) {

@@ -7,6 +7,7 @@
  #include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
+#include "../../HOG2/generic/EPEAStar.h"
 
 #include "RCPSP.h"
 //****importent i changed GLUtil.h with recVec == operator abit****//
@@ -171,14 +172,44 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     RCPSP_TT as1;
 
-    TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    //TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    EPEAStar<RCPSPState_TT, int, RCPSP_TT> astar;
     std::vector<RCPSPState_TT> path;
 
 
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
-    astar.GetPath(&as1, first, last, path);
+    //astar.GetPath(&as1, first, last, path);
+    // 1. Setup the search
+    astar.InitializeSearch(&as1, first, last, path);
+
+    // 2. Setup the timer
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeLimit = std::chrono::minutes(5);
+
+    // 3. Run the loop manually
+    bool found = false;
+    while (!astar.DoSingleSearchStep(path))
+    {
+        // Check time every step (or every 1000 steps for speed)
+        auto currentTime = std::chrono::steady_clock::now();
+        if (currentTime - startTime > timeLimit) {
+            printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+            break;
+        }
+    }
+
+    // 4. Check if we actually found a path
+    if (path.size() > 0) {
+        printf("Solution found! Length: %llu\n", path.size());
+    } else {
+        printf("Failed to find solution (Timeout or No Path).\n");
+    }
+
+
+
+
 
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
@@ -402,6 +433,8 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 
  int main() {
      runBenchmark();
+
+
     return 0;
 }
 
@@ -430,9 +463,9 @@ void runBenchmark() {
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
-    solveRCPSP_TT(9, 1, filename, "j30");
+    // solveRCPSP_TT(9, 1, filename, "j30");
 
-    for(int i = 16; i < 17; i++) {
+    for(int i = 1; i < 49; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
@@ -444,33 +477,33 @@ void runBenchmark() {
             solveRCPSP_TT(i, j, filename, "j30");
         }
     }
-    for(int i = 16; i < 17; i++) {
-        for(int j = 10; j >0; j--) {
+    // for(int i = 16; i < 17; i++) {
+    //     for(int j = 10; j >0; j--) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         //        solveRCPSP(i, j, filename, "j30");
+    //         solveRCPSP_TT(i, j, filename, "j30");
+    //     }
+    // }
 
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
 
-            // 2. SOLVE
-            //        solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
-        }
-    }
-
-
-    for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
-
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-            //        solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
-        }
-    }
-    solveRCPSP_TT(9, 1, filename, "j30");
+    // for(int i = 16; i < 17; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         //        solveRCPSP(i, j, filename, "j30");
+    //         solveRCPSP_TT(i, j, filename, "j30");
+    //     }
+    // }
+    // solveRCPSP_TT(9, 1, filename, "j30");
 
     // solveRCPSP(9, 1, filename, "j30");
 
@@ -726,6 +759,70 @@ void solver_group(int startGroup,const std::string& filename) {
 
 
 
+
+void solver_group(int startGroup, const std::string& filename, const std::string& setType) {
+    for (int j = 1; j < 11; j++) {
+         solveRCPSP(startGroup, j, filename, setType);
+        //solveRCPSP_TT(startGroup, j, filename, setType);
+    }
+}
+void solver_group_TT(int startGroup, const std::string& filename, const std::string& setType) {
+    for (int j = 1; j < 11; j++) {
+        // solveRCPSP(startGroup, j, filename, setType);
+        solveRCPSP_TT(startGroup, j, filename, setType);
+    }
+}
+// int main(int argc, char *argv[]) {
+//     // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
+//     int startGroup = std::stoi(argv[1]);
+//     std::string outputFolder = argv[2]; // <--- Get the absolute path
+//
+//     // Construct filename: "/home/.../results_job_123/results_group_5.
+//
+//
+//
+//
+//     std::string filename = outputFolder + "/results_group_" + std::to_string(startGroup) + ".csv";
+//
+//     std::ofstream file(filename);
+//     // solver_group_TT(startGroup,filename,"j30");
+//     // solver_group_TT(startGroup+1,filename,"j30");
+//     // solver_group_TT(startGroup+2,filename,"j30");
+//
+//
+//
+//     // solver_group(startGroup,filename,"j30");
+//     // solver_group(startGroup+1,filename,"j30");
+//     // solver_group(startGroup+2,filename,"j30");
+//
+//     solver_group(startGroup,filename,"j60");
+//     solver_group(startGroup+1,filename,"j60");
+//     solver_group(startGroup+2,filename,"j60");
+//
+//
+//     solver_group(startGroup,filename,"j90");
+//     solver_group(startGroup+1,filename,"j90");
+//     solver_group(startGroup+2,filename,"j90");
+//
+//     // solver_group_TT(startGroup,filename,"j30");
+//     // solver_group_TT(startGroup+1,filename,"j30");
+//     // solver_group_TT(startGroup+2,filename,"j30");
+//
+//     solver_group_TT(startGroup,filename,"j60");
+//     solver_group_TT(startGroup+1,filename,"j60");
+//     solver_group_TT(startGroup+2,filename,"j60");
+//
+//
+//     solver_group_TT(startGroup,filename,"j90");
+//     solver_group_TT(startGroup+1,filename,"j90");
+//     solver_group_TT(startGroup+2,filename,"j90");
+//     // solver_group(startGroup+3,filename);
+//     // solver_group(startGroup+4,filename);
+//     // solver_group(startGroup+5,filename);
+//     // solver_group(startGroup+6,filename);
+//     // solver_group(startGroup+7,filename);
+// }
+//
 
 
 

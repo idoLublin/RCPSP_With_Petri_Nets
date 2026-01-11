@@ -526,9 +526,11 @@ public:
   bool GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &goal) const override;
   double HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const override;
   double GCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const override;
+  bool GetNextSuccessor(const RCPSPState_TT &curr, const RCPSPState_TT &goal,RCPSPState_TT &next, double parentH,uint64_t &special, bool &validMove) const;
+  int GetNumSuccessors(const RCPSPState_TT &stateID) const;
+
 
   int GetAction(const RCPSPState_TT &nodeID, const RCPSPState_TT &nodeID2) const override;
-  int GetNumSuccessors(const RCPSPState_TT &stateID) const;
   void GetActions(const RCPSPState_TT &nodeID, std::vector<int> &actions) const override;
   void ApplyAction(RCPSPState_TT &s, int a) const override;
   uint64_t GetActionHash(int act) const;
@@ -591,6 +593,7 @@ inline bool RCPSP_TT::GoalTest(const RCPSPState_TT &node, const RCPSPState_TT &g
 
 }
 inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
+  //return 0;
   // 9. Optimized independent set calculation
   // Optimization: Reserve memory to prevent re-allocations.
   // If you know the number of unstarted tasks (e.g., total - finished_count), use that.
@@ -720,7 +723,55 @@ inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
 }
 
 
+inline bool RCPSP_TT::GetNextSuccessor(const RCPSPState_TT &curr, const RCPSPState_TT &goal,
+                      RCPSPState_TT &next, double parentH,
+                      uint64_t &special, bool &validMove) const
+{
+  // 1. Get ONLY the lightweight move instructions (the pairs)
+  //    This must be fast!
+  std::vector<short> tempUnstarted;
 
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of .find() == .end(), we check if the value is -1.
+    if (curr.finishedActivitiys[taskID] == -1) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+  // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, curr.finishedActivitiys,curr.resource_nodes, curr.activity_nodes);
+
+  // 2. Use 'special' as the index into that array
+  unsigned int index = (unsigned int)special;
+
+  // 3. Check if we have run out of moves
+  if (index >= avilableTransitionIndices.size()) {
+    validMove = false;
+    return false;
+  }
+
+  // 4. Retrieve the specific pair for this step
+  std::pair<short, short> selectedMove = avilableTransitionIndices[index];
+
+  // 5. EXPENSIVE PART: Generate the full state ONLY for this move
+  next =RCPSPState_TT(curr, selectedMove.first, selectedMove.second) ;
+  // 6. Mark as valid and increment index
+  validMove = true;
+  special++;
+
+  // 7. Return true if there are more moves in the list
+  return (index + 1 < avilableTransitionIndices.size());
+}
 
 
 inline uint64_t RCPSP_TT::GetActionHash(int act) const {
@@ -753,12 +804,31 @@ inline int RCPSP_TT::GetAction(const RCPSPState_TT &nodeID, const RCPSPState_TT 
 // return s.name;
 //}
 inline int RCPSP_TT::GetNumSuccessors(const RCPSPState_TT &stateID) const {
-  // int i=0;
-  // if (stateID.activeTransitions.size() > 0){i=1;}
-  // return stateID.avilableTransition.size()+i;
-  return 0;
-}
+  //auto startS1 = std::chrono::high_resolution_clock::now();
+  std::vector<short> tempUnstarted;
 
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of .find() == .end(), we check if the value is -1.
+    if (stateID.finishedActivitiys[taskID] == -1) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+  // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, stateID.finishedActivitiys,stateID.resource_nodes, stateID.activity_nodes);
+
+  return avilableTransitionIndices.size();
+}
 
 
 inline void RCPSP_TT::ApplyAction(RCPSPState_TT &s, int a) const {

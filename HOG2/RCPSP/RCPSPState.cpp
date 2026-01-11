@@ -100,7 +100,7 @@ void GetNabor(std::vector<RCPSPState> &NodeList,int chosenNode,int &count);
 // ============================================================================
 // Precomputed heuristic values using DP to avoid recalculating from scratch
 // heuristicDP[i] = earliest finish time for activity i (1-based index)
-// heuristicFromActivity[i] = remaining time to complete all successors from activity i
+// heuristicFromEnd[i] = remaining time to complete all successors from activity i
 thread_local std::vector<int> heuristicDP;           // Earliest finish time for each activity
 thread_local std::vector<int> heuristicFromEnd;      // Time remaining from each activity to the end
 thread_local bool heuristicDPInitialized = false;

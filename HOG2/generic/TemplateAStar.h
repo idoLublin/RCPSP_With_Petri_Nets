@@ -427,7 +427,8 @@ template <class state, class action, class environment, class openList>
 bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environment *_env, const state& from, const state& to, std::vector<state> &thePath)
 {
 	//****ido lublin 10.4.25 timeout
-	timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+	// REMOVED: This was overriding the timeout set by setSearchTimeout()
+	// timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 	//***************
 
 

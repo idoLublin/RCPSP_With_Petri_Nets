@@ -79,7 +79,7 @@ void printUsage(const char* programName) {
               << "  --method M         Solving method: tp, tt, all (default: all)\n"
               << "  --output-folder F  Output folder path (default: data)\n"
               << "  --output-file F    Output filename (default: auto-generated)\n"
-              << "                     Auto format: YYYY-MM-DD_jXX_gN-M_eN-M_method_TAG.csv\n"
+              << "                     Auto format: based on date, problem type, group/exam range, method, and optional tag\n"
               << "  --tag TAG          Optional tag to append to filename (e.g., dp_test_1)\n"
               << "  --time-limit N     Time limit per problem in seconds (default: 300)\n"
               << "  --use-cs           Enable CS optimization (default: true)\n"

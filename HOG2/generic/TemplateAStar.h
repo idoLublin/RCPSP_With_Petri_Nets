@@ -92,13 +92,14 @@ inline size_t getStartedSize(const RCPSPState& state) {
 // Configurable timeout for A* search (in seconds)
 // Default: 300 seconds (5 minutes)
 // Can be set via setSearchTimeout() before calling GetPath()
+// NOTE: The actual timeout deadline is set in InitializeSearch() to avoid race conditions
 inline int searchTimeoutSeconds = 300;
-inline std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::seconds(searchTimeoutSeconds);
+inline std::chrono::steady_clock::time_point timeout;
 
-// Call this function to set the timeout before each search
+// Call this function to set the timeout duration before each search
+// The actual deadline will be calculated when InitializeSearch() is called
 inline void setSearchTimeout(int seconds) {
     searchTimeoutSeconds = seconds;
-    timeout = std::chrono::steady_clock::now() + std::chrono::seconds(seconds);
 }
 
 //ido lublin 28.4 A*
@@ -426,10 +427,9 @@ void TemplateAStar<state,action,environment,openList>::Reset()
 template <class state, class action, class environment, class openList>
 bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environment *_env, const state& from, const state& to, std::vector<state> &thePath)
 {
-	//****ido lublin 10.4.25 timeout
-	// REMOVED: This was overriding the timeout set by setSearchTimeout()
-	// timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
-	//***************
+	// Set the timeout deadline NOW when search actually starts
+	// This avoids race conditions if there's a delay between setSearchTimeout() and GetPath()
+	timeout = std::chrono::steady_clock::now() + std::chrono::seconds(searchTimeoutSeconds);
 
 
 	if (theHeuristic == 0 || !heuristicSet)

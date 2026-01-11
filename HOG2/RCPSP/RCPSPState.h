@@ -8,6 +8,11 @@
 #ifndef RCPSPSTATE_H
 #define RCPSPSTATE_H
 
+// Maximum supported activities for fixed-size arrays
+// If problems exceed this, the code will throw an error at initialization
+// Current datasets: j30=32, j60=62, j90=92, j120=122 activities
+constexpr int MAX_ACTIVITIES = 128;
+
 std::string finalstatename;
 std::string initialstatename;
 class RCPSPState {
@@ -17,8 +22,8 @@ class RCPSPState {
     std::vector<short> marking;
     std::vector<std::pair<short, short>> activeTransitionIndices;  // Store transition ID and remaining duration
 
-    std::array<short, 128> startedActivitiys;   // Was vector
-    std::array<short, 128> finishedActivitiys;  // Was vector
+    std::array<short, MAX_ACTIVITIES> startedActivitiys;   // -1 = not started
+    std::array<short, MAX_ACTIVITIES> finishedActivitiys;  // -1 = not finished
 
     bool status;
   short g=0;
@@ -31,7 +36,7 @@ class RCPSPState_TT {
 public:
     std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
     std::vector<std::pair<short, short>> activity_nodes;
-    std::array<short, 128> finishedActivitiys;  // Changed from vector
+    std::array<short, MAX_ACTIVITIES> finishedActivitiys;  // -1 = not finished
     short g = 0;
 
     RCPSPState_TT();

@@ -100,17 +100,25 @@ void GetNabor(std::vector<RCPSPState> &NodeList,int chosenNode,int &count);
 // ============================================================================
 // Precomputed heuristic values using DP to avoid recalculating from scratch
 // heuristicDP[i] = earliest finish time for activity i (1-based index)
-// heuristicFromEnd[i] = remaining time to complete all successors from activity i
 thread_local std::vector<int> heuristicDP;           // Earliest finish time for each activity
-thread_local std::vector<int> heuristicFromEnd;      // Time remaining from each activity to the end
 thread_local bool heuristicDPInitialized = false;
+
+// Note: MAX_ACTIVITIES is defined in RCPSPState.h
 
 // Initialize the DP heuristic table once when problem is loaded
 // Uses topological order (activities are already sorted by dependencies in RCPSP)
 void initializeHeuristicDP() {
     int n = RCPSPex.activities.size();
+    
+    // Bounds check: ensure we don't exceed maximum supported activities
+    if (n > MAX_ACTIVITIES) {
+        throw std::runtime_error(
+            "Error: Problem has " + std::to_string(n) + " activities, but maximum supported is " + 
+            std::to_string(MAX_ACTIVITIES) + ". Increase MAX_ACTIVITIES constant in RCPSPState.h."
+        );
+    }
+    
     heuristicDP.assign(n + 1, 0);      // 1-based indexing
-    heuristicFromEnd.assign(n + 1, 0);
     
     // Forward pass: Calculate earliest finish time for each activity
     // Activities are processed in topological order (1, 2, 3, ... n)
@@ -127,22 +135,6 @@ void initializeHeuristicDP() {
         // Earliest finish = max predecessor finish + own duration
         int duration = RCPSPex.activities[activityId - 1].duration;
         heuristicDP[activityId] = maxPredecessorFinish + duration;
-    }
-    
-    // Backward pass: Calculate time remaining from each activity to the end
-    // Process in reverse topological order (n, n-1, ... 1)
-    for (int activityId = n; activityId >= 1; activityId--) {
-        int maxSuccessorTime = 0;
-        
-        // Check all successors (forward dependencies)
-        for (int succ : RCPSPex.dependencies[activityId - 1]) {
-            int successorContribution = heuristicFromEnd[succ];
-            maxSuccessorTime = std::max(maxSuccessorTime, successorContribution);
-        }
-        
-        // Time from this activity to end = own duration + max successor time
-        int duration = RCPSPex.activities[activityId - 1].duration;
-        heuristicFromEnd[activityId] = duration + maxSuccessorTime;
     }
     
     heuristicDPInitialized = true;
@@ -165,7 +157,8 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
     // Taking into account which activities are already finished
     
     // Create a lookup for quick access to active transition remaining times
-    std::array<short, 128> activeRemaining;
+    // Note: Uses fixed-size array for performance; bounds checked at initialization
+    std::array<short, MAX_ACTIVITIES> activeRemaining;
     activeRemaining.fill(-1);
     for (const auto& [transIdx, remaining] : activeTransitionIndices) {
         activeRemaining[transIdx] = remaining;
@@ -173,7 +166,8 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
     
     // Calculate the earliest finish time for unstarted activities
     // using DP with memoization for this specific state
-    std::array<int, 128> earlyFinish;
+    // Note: Uses fixed-size array for performance; bounds checked at initialization
+    std::array<int, MAX_ACTIVITIES> earlyFinish;
     earlyFinish.fill(-1);  // -1 means not computed yet
     
     // Mark finished activities as having earlyFinish = 0 (already done)
@@ -226,7 +220,8 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
     }
     
     // Calculate the earliest finish time for unstarted activities
-    std::array<int, 128> earlyFinish;
+    // Note: Uses fixed-size array for performance; bounds checked at initialization
+    std::array<int, MAX_ACTIVITIES> earlyFinish;
     earlyFinish.fill(-1);
     
     double maxH = 0;
@@ -2000,7 +1995,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
-    const std::array<short, 128> &finishedActivitiys,
+    const std::array<short, MAX_ACTIVITIES> &finishedActivitiys,
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
     const std::vector<std::pair<short, short>> &activity_nodes
 ) {

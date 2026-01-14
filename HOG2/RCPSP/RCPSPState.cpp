@@ -1128,50 +1128,68 @@ finishedActivitiys.fill(-1);
   g = 0;
 }
 //not working
-RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
- // auto startS1 = std::chrono::high_resolution_clock::now();
-  //startedActivitiys.insert(0);
-  direction = true;
-
-  // Find initial and final places
-  for (int i = 0; i < petri.places.size(); i++) {
-    if (petri.places[i].arcs_out.size() == 0) {
-      finalstatename = petri.places[i].name;
-    }
-    if (petri.places[i].arcs_in.size() == 0) {
-      initialstatename = petri.places[i].name;
-    }
-  }
-
-  // Initialize unstartedTransitions
-  for (int i = 1; i < petri.Transitions.size(); i++) {
-    unstartedTransitions.insert(i+1);
-    //unstartedTransitions.insert(i);
-  }
-
-  // Initialize marking
-  for (int i = 0; i < petri.places.size(); i++) {
-    if (petri.places[i].name == initialstatename) {
-      marking[petri.places[i].name] = 1;
-    } else {
-      marking[petri.places[i].name] = petri.places[i].state[0][0];
-    }
-  }
-
- // auto endS1 = std::chrono::high_resolution_clock::now();
-  //generateTIME += endS1 - startS1;
-
-  // Change: Get indices of available transitions instead of full Transition objects
-  //avilableTransitionIndices = getAvilableTransitionIndices(marking);
-
- // avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
-  g_b = 0;
-  g_f = 0;
-  name = 0;
-  //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
-  h_b=0;
-  f=h_f;
-}
+// RCPSPState_bi::RCPSPState_bi(): nodestatus(false) {
+//   std::unordered_map<int, int> place_to_resource_idx;
+//     int res_count = 0;
+//     for (const auto& [resName, cap] : RCPSPex.resources) {
+//         int resID = petri.place_name_to_id.at(resName);
+//         place_to_resource_idx[resID] = res_count++;
+//     }
+//
+//     // Count activity nodes
+//     int num_activities = petri.places.size() - res_count;
+//     activity_nodes.resize(num_activities);
+//
+//     finishedActivitiys.fill(-1);
+//     int activity_counter = 0;
+//     for (int i = 0; i < petri.places.size(); ++i) {
+//         const auto& place = petri.places[i];
+//
+//         // Identify Start/End Names
+//         if (place.arcs_out.empty()) finalstatename = place.name;
+//         if (place.arcs_in.empty())  initialstatename = place.name;
+//
+//         // Check if resource node
+//         auto it = place_to_resource_idx.find(i);
+//
+//         if (it != place_to_resource_idx.end()) {
+//             // This is a resource node
+//             int res_idx = it->second;
+//
+//             if (place.name == initialstatename) {
+//                 resource_nodes[res_idx].push_back({1, 0});
+//             } else if (!place.state.empty() && !place.state[0].empty()) {
+//                 int val = place.state[0][0];
+//                 if (val > 0) resource_nodes[res_idx].push_back({val, 0});
+//             }
+//         } else {
+//             // This is an activity node
+//             if (place.name == initialstatename) {
+//                 activity_nodes[activity_counter] = {1, 0};
+//             } else if (!place.state.empty() && !place.state[0].empty()) {
+//                 int val = place.state[0][0];
+//                 activity_nodes[activity_counter] = (val > 0) ? std::make_pair<short,short>(val, 0) : std::make_pair<short,short>(0, 0);
+//             } else {
+//                 activity_nodes[activity_counter] = {0, 0};
+//             }
+//             activity_counter++;
+//         }
+//     }
+//
+//     // Add resource capacities
+//     for (const auto& [resName, cap] : RCPSPex.resources) {
+//         if (cap > 0) {
+//             int resID = petri.place_name_to_id.at(resName);
+//             int res_idx = place_to_resource_idx[resID];
+//
+//             if (resource_nodes[res_idx].empty()) {
+//                 resource_nodes[res_idx].push_back({cap, 0});
+//             }
+//         }
+//     }
+//
+//     g = 0;
+// }
 
 
 RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& active, bool status1, short location, uint64_t &count) {
@@ -1260,145 +1278,357 @@ RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& 
     // Backward logic omitted for brevity (mirror the changes above if needed)
 }
 
-RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool status, int location, uint64_t &count) {
- // auto startS4 = std::chrono::high_resolution_clock::now();
+// In your header/cpp file, outside of any class
+static std::vector<std::pair<short, short>> consumeResourceList(
+    const std::vector<std::pair<short, short>>& resource,
+    int amount,
+    int currentTime
+) {
+    if (amount < 1)
+        return resource;
 
-  // Copy basic properties
-  direction = predecesor.direction;
-  name = count;
-  nodestatus = status;
-  unstartedTransitions = predecesor.unstartedTransitions;
-  startedActivitiys = predecesor.startedActivitiys;
-  finishedActivitiys = predecesor.finishedActivitiys;
-  marking = predecesor.marking;
+    std::vector<std::pair<short, short>> resourceCopy = resource;
+    std::sort(resourceCopy.begin(), resourceCopy.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
 
-  // Copy indices instead of full Transition objects
-  activeTransitionIndices = predecesor.activeTransitionIndices;
-  avilableTransitionIndices = predecesor.avilableTransitionIndices;
-  g_b = predecesor.g_b;
-  g_f = predecesor.g_f;
-  h_b = predecesor.h_b;
-  h_f = predecesor.h_f;
+    int remainingAmount = amount;
 
-
-  if (direction) {
-    //g_f = predecesor.g_f;
-
-    if (status) {
-      //h_f = predecesor.h_f;
-
-      // Apply arcs_in from the transition
-      for (const auto& arc : petri.Transitions[active.name-1].arcs_in_indices) {
-
-        // arc.first  is now the integer Place ID (e.g., 5)
-        // arc.second is the token count (e.g., 1)
-
-        // This is a direct array access. 1 CPU cycle.
-       // marking[arc.first] -= arc.second;
-      }
-
-      // Store index and duration instead of full Transition
-      activeTransitionIndices.push_back({active.name, active.duration});
-      startedActivitiys.insert(active.name);
-      if (active.duration==0) {
-        status=0;
-      }
-    //  auto endS1 = std::chrono::high_resolution_clock::now();
-   //   generateTIME += endS1-startS4;
-    }
-    if (!status) {
-      g_f += active.duration;
-      finishedActivitiys.insert(active.name);
-
-
-      // Remove from unstarted
-      unstartedTransitions.erase(active.name);
-
-      // Update durations and remove completed transitions
-      for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
-        activeTransitionIndices[i].second -= active.duration;
-        if (activeTransitionIndices[i].second <0) {
-          activeTransitionIndices[i].second =0;
-
+    for (auto& [qty, time] : resourceCopy) {
+        if (time <= currentTime && remainingAmount > 0) {
+            if (qty >= remainingAmount) {
+                qty -= remainingAmount;
+                remainingAmount = 0;
+                break;
+            } else {
+                remainingAmount -= qty;
+                qty = 0;
+            }
         }
-        if (activeTransitionIndices[i].first == active.name) {
-          // Apply arcs_out from the transition
-          // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
-          //   marking[arc.first] += arc.second;
-          // }
-          activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
+    }
+
+    resourceCopy.erase(
+        std::remove_if(resourceCopy.begin(), resourceCopy.end(),
+                      [](const auto& p) { return p.first <= 0; }),
+        resourceCopy.end()
+    );
+
+    return resourceCopy;
+}
+
+static std::vector<std::pair<short, short>> removeResourceTokens(
+    const std::vector<std::pair<short, short>>& resource,
+    int amount,
+    int targetTime
+) {
+    std::vector<std::pair<short, short>> result = resource;
+
+    int remaining = amount;
+
+    for (auto it = result.begin(); it != result.end() && remaining > 0; ) {
+        if (it->second == targetTime) {
+            if (it->first > remaining) {
+                it->first -= remaining;
+                remaining = 0;
+                ++it;
+            } else {
+                remaining -= it->first;
+                it = result.erase(it);
+            }
+        } else {
+            ++it;
+        }
+    }
+
+    return result;
+}
+
+
+RCPSPState_Bi::RCPSPState_Bi() {
+    // Build mapping: resource name -> index (0-3)
+    std::unordered_map<int, int> place_to_resource_idx;
+    int res_count = 0;
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        int resID = petri.place_name_to_id.at(resName);
+        place_to_resource_idx[resID] = res_count++;
+    }
+
+    // Count activity nodes
+    int num_activities = petri.places.size() - res_count;
+    activity_nodes.resize(num_activities);
+
+    finishedActivitiys.fill(-1);
+
+    int activity_counter = 0;
+    for (int i = 0; i < petri.places.size(); ++i) {
+        const auto& place = petri.places[i];
+
+        if (place.arcs_out.empty()) finalstatename = place.name;
+        if (place.arcs_in.empty())  initialstatename = place.name;
+
+        auto it = place_to_resource_idx.find(i);
+
+        if (it != place_to_resource_idx.end()) {
+            int res_idx = it->second;
+            if (place.name == initialstatename) {
+                resource_nodes[res_idx].push_back({1, 0});
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                if (val > 0) resource_nodes[res_idx].push_back({val, 0});
+            }
+        } else {
+            if (place.name == initialstatename) {
+                activity_nodes[activity_counter] = {1, 0};
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                activity_nodes[activity_counter] = (val > 0) ?
+                    std::make_pair<short,short>(val, 0) : std::make_pair<short,short>(0, 0);
+            } else {
+                activity_nodes[activity_counter] = {0, 0};
+            }
+            activity_counter++;
+        }
+    }
+
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        if (cap > 0) {
+            int resID = petri.place_name_to_id.at(resName);
+            int res_idx = place_to_resource_idx[resID];
+            if (resource_nodes[res_idx].empty()) {
+                resource_nodes[res_idx].push_back({cap, 0});
+            }
+        }
+    }
+
+    g = 0;
+    direction = true;
+    f = g_f = g_b = h_f = h_b = 0;
+}
+
+
+RCPSPState_Bi::RCPSPState_Bi(const RCPSPState_Bi& prev, short transitionId, short firingTime) {
+    std::cout << "Creating successor: transId=" << transitionId
+              << ", firingTime=" << firingTime
+              << ", direction=" << prev.direction << std::endl;
+
+    // Validate inputs
+    if (transitionId < 1 || transitionId > petri.Transitions.size()) {
+        std::cerr << "ERROR: Invalid transitionId " << transitionId << std::endl;
+        throw std::runtime_error("Invalid transition ID");
+    }
+    finishedActivitiys = prev.finishedActivitiys;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
+    direction = prev.direction;
+
+    const Transition& transition = petri.Transitions[transitionId - 1];
+    const Activity& act = RCPSPex.activities[transitionId - 1];
+    const short duration = act.duration;
+
+    if (direction) {
+        // FORWARD: same as TT
+        const short activityFinishTime = firingTime + duration;
+
+        // Add output tokens
+        for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+            if (placeID < 4) {
+                resource_nodes[placeID].push_back({outAmount, activityFinishTime});
+            } else {
+                short activity_idx = placeID - 4;
+                activity_nodes[activity_idx] = {outAmount, activityFinishTime};
+            }
         }
 
-      }
+        finishedActivitiys[transitionId] = activityFinishTime;
 
-     // auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
-
-      //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
-
-    }
-    f=g_f+h_f;
-    h_b=getBackwardHcost2(startedActivitiys,finishedActivitiys,activeTransitionIndices);
-    f=2*g_f+h_f-h_b;
-    //f=2*g_f+h_f;
-
-    //avilableTransitionIndices = getAvilableTransitionIndices(marking);
-  }
-  else {
-
-
-    // Similar transformation for the backward direction
-    if (status) {
-      //h_b = predecesor.h_b;
-
-      // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
-      //   marking[arc.first] -= arc.second;
-      // }
-
-      activeTransitionIndices.push_back({active.name, 0});
-      auto it = std::find(finishedActivitiys.begin(), finishedActivitiys.end(), active.name);
-      if (it != finishedActivitiys.end()) {
-        finishedActivitiys.erase(it);
-      }
-      if (active.duration==0) {
-        status=0;
-      }
-     // auto endS1 = std::chrono::high_resolution_clock::now();
-      //generateTIME += endS1-startS4;
-    }
-    if (!status) {
-     g_b += (petri.Transitions[active.name-1].duration-active.duration);
-
-      auto it = std::find(startedActivitiys.begin(), startedActivitiys.end(), active.name);
-      if (it != startedActivitiys.end()) {
-        startedActivitiys.erase(it);
-
-      }
-      unstartedTransitions.insert(active.name);
-
-      for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
-        activeTransitionIndices[i].second += (petri.Transitions[active.name-1].duration-active.duration);
-        if (activeTransitionIndices[i].second>petri.Transitions[activeTransitionIndices[i].first-1].duration) {
-          activeTransitionIndices[i].second=petri.Transitions[activeTransitionIndices[i].first-1].duration;
+        // Consume resources
+        for (const auto& [resName, demand] : act.resource_demands) {
+            if (demand > 0) {
+                short resID = petri.place_name_to_id.at(resName);
+                resource_nodes[resID] = consumeResourceList(resource_nodes[resID], demand, firingTime);
+            }
         }
-        if (activeTransitionIndices[i].first == active.name) {
-          // for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
-          //   marking[arc.first] += arc.second;
-          // }
-          activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
+
+    } else {
+        // BACKWARD: un-fire the activity
+        const short activityFinishTime = firingTime + duration;
+
+        // Remove output tokens
+        for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+            if (placeID < 4) {
+                // Remove resource tokens that were produced
+                resource_nodes[placeID] = removeResourceTokens(resource_nodes[placeID], outAmount, activityFinishTime);
+            } else {
+                short activity_idx = placeID - 4;
+                activity_nodes[activity_idx] = {0, 0};  // Remove token
+            }
         }
-      }
-      //auto endS1 = std::chrono::high_resolution_clock::now();
-     // generateTIME += endS1-startS4;
-      h_b=getBackwardHcost2(startedActivitiys,finishedActivitiys,activeTransitionIndices);
 
+        // Mark activity as not finished
+        finishedActivitiys[transitionId] = activityFinishTime;
+if (g_b<activityFinishTime){g_b=activityFinishTime;}
+        // Return consumed resources
+        for (const auto& [resName, demand] : act.resource_demands) {
+            if (demand > 0) {
+                short resID = petri.place_name_to_id.at(resName);
+                resource_nodes[resID].push_back({demand, firingTime});
+            }
+        }
     }
-    //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
 
-    avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
-    f=2*g_b+h_b-h_f;
-    //f=g_b;
-    //f=g_b+h_b;
+    // Calculate g (max finish time of all activities)
+    // At the end of RCPSPState_Bi::RCPSPState_Bi(const RCPSPState_Bi &prev, short transitionId, short firingTime)
+
+    g = 0;
+    for (short finishTime : finishedActivitiys) {
+        if (finishTime > g) {
+            g = finishTime;
+        }
+    }
+
+    // Initialize BAE fields (will be set by search algorithm)
+    f = g_f = g_b = h_f = h_b = 0;
+
+
+
+    // auto startS4 = std::chrono::high_resolution_clock::now();
+  //
+  // // Copy basic properties
+  // direction = predecesor.direction;
+  // name = count;
+  // nodestatus = status;
+  // unstartedTransitions = predecesor.unstartedTransitions;
+  // startedActivitiys = predecesor.startedActivitiys;
+  // finishedActivitiys = predecesor.finishedActivitiys;
+  // marking = predecesor.marking;
+  //
+  // // Copy indices instead of full Transition objects
+  // activeTransitionIndices = predecesor.activeTransitionIndices;
+  // avilableTransitionIndices = predecesor.avilableTransitionIndices;
+  // g_b = predecesor.g_b;
+  // g_f = predecesor.g_f;
+  // h_b = predecesor.h_b;
+  // h_f = predecesor.h_f;
+  //
+  //
+  // if (direction) {
+  //   //g_f = predecesor.g_f;
+  //
+  //   if (status) {
+  //     //h_f = predecesor.h_f;
+  //
+  //     // Apply arcs_in from the transition
+  //     for (const auto& arc : petri.Transitions[active.name-1].arcs_in_indices) {
+  //
+  //       // arc.first  is now the integer Place ID (e.g., 5)
+  //       // arc.second is the token count (e.g., 1)
+  //
+  //       // This is a direct array access. 1 CPU cycle.
+  //      // marking[arc.first] -= arc.second;
+  //     }
+  //
+  //     // Store index and duration instead of full Transition
+  //     activeTransitionIndices.push_back({active.name, active.duration});
+  //     startedActivitiys.insert(active.name);
+  //     if (active.duration==0) {
+  //       status=0;
+  //     }
+  //   //  auto endS1 = std::chrono::high_resolution_clock::now();
+  //  //   generateTIME += endS1-startS4;
+  //   }
+  //   if (!status) {
+  //     g_f += active.duration;
+  //     finishedActivitiys.insert(active.name);
+  //
+  //
+  //     // Remove from unstarted
+  //     unstartedTransitions.erase(active.name);
+  //
+  //     // Update durations and remove completed transitions
+  //     for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
+  //       activeTransitionIndices[i].second -= active.duration;
+  //       if (activeTransitionIndices[i].second <0) {
+  //         activeTransitionIndices[i].second =0;
+  //
+  //       }
+  //       if (activeTransitionIndices[i].first == active.name) {
+  //         // Apply arcs_out from the transition
+  //         // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
+  //         //   marking[arc.first] += arc.second;
+  //         // }
+  //         activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
+  //       }
+  //
+  //     }
+  //
+  //    // auto endS1 = std::chrono::high_resolution_clock::now();
+  //     //generateTIME += endS1-startS4;
+  //
+  //     //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
+  //
+  //   }
+  //   f=g_f+h_f;
+  //   h_b=getBackwardHcost2(startedActivitiys,finishedActivitiys,activeTransitionIndices);
+  //   f=2*g_f+h_f-h_b;
+  //   //f=2*g_f+h_f;
+  //
+  //   //avilableTransitionIndices = getAvilableTransitionIndices(marking);
+  // }
+  // else {
+  //
+  //
+  //   // Similar transformation for the backward direction
+  //   if (status) {
+  //     //h_b = predecesor.h_b;
+  //
+  //     // for (const auto& arc : petri.Transitions[active.name-1].arcs_out) {
+  //     //   marking[arc.first] -= arc.second;
+  //     // }
+  //
+  //     activeTransitionIndices.push_back({active.name, 0});
+  //     auto it = std::find(finishedActivitiys.begin(), finishedActivitiys.end(), active.name);
+  //     if (it != finishedActivitiys.end()) {
+  //       finishedActivitiys.erase(it);
+  //     }
+  //     if (active.duration==0) {
+  //       status=0;
+  //     }
+  //    // auto endS1 = std::chrono::high_resolution_clock::now();
+  //     //generateTIME += endS1-startS4;
+  //   }
+  //   if (!status) {
+  //    g_b += (petri.Transitions[active.name-1].duration-active.duration);
+  //
+  //     auto it = std::find(startedActivitiys.begin(), startedActivitiys.end(), active.name);
+  //     if (it != startedActivitiys.end()) {
+  //       startedActivitiys.erase(it);
+  //
+  //     }
+  //     unstartedTransitions.insert(active.name);
+  //
+  //     for (int i = activeTransitionIndices.size() - 1; i >= 0; --i) {
+  //       activeTransitionIndices[i].second += (petri.Transitions[active.name-1].duration-active.duration);
+  //       if (activeTransitionIndices[i].second>petri.Transitions[activeTransitionIndices[i].first-1].duration) {
+  //         activeTransitionIndices[i].second=petri.Transitions[activeTransitionIndices[i].first-1].duration;
+  //       }
+  //       if (activeTransitionIndices[i].first == active.name) {
+  //         // for (const auto& arc : petri.Transitions[active.name-1].arcs_in) {
+  //         //   marking[arc.first] += arc.second;
+  //         // }
+  //         activeTransitionIndices.erase(activeTransitionIndices.begin() + i);
+  //       }
+  //     }
+  //     //auto endS1 = std::chrono::high_resolution_clock::now();
+  //    // generateTIME += endS1-startS4;
+  //     h_b=getBackwardHcost2(startedActivitiys,finishedActivitiys,activeTransitionIndices);
+  //
+  //   }
+  //   //h_f=getForwardHcost(unstartedTransitions,activeTransitionIndices);
+  //
+  //   avilableDeTransitionIndices = getAvilableDetransitionIndices(marking);
+  //   f=2*g_b+h_b-h_f;
+  //   //f=g_b;
+  //   //f=g_b+h_b;
   }
 
 
@@ -1408,10 +1638,10 @@ RCPSPState_bi::RCPSPState_bi(RCPSPState_bi predecesor, Transition active, bool s
 //   if (direction) {
 // }
 // else {
-//   }
-int asdasd;
-  asdasd++;
-}
+// //   }
+// int asdasd;
+//   asdasd++;
+//}
 
 // CHANGE 1: Input is now a fast vector, not a slow map
 
@@ -1454,30 +1684,6 @@ bool RCPSPState::operator==(const RCPSPState& other) const {
   if (finishedActivitiys != other.finishedActivitiys) return false;
   if (startedActivitiys != other.startedActivitiys) return false;
 
-  return true;
-}
-bool RCPSPState_bi::operator==(const RCPSPState_bi &other) const {
-  // if (this->expanded != other.expanded) {
-  //   return false;
-  // }
-  if (this->activeTransitionIndices!= other.activeTransitionIndices) {
-    return false;
-  }
-  if (this->startedActivitiys != other.startedActivitiys) {
-    return false;
-  }
-  // if (this->avilableTransition != other.avilableTransition) {
-  //   return false;
-  // }
-  // if (this->activeTransitions != other.activeTransitions) {
-  //   return false;
-  // }
-  if (this->finishedActivitiys != other.finishedActivitiys) {
-    return false;
-  }
-  // if (this->marking != other.marking) {
-  //   return false;
-  // }
   return true;
 }
 
@@ -1546,46 +1752,6 @@ RCPSPState_TT::RCPSPState_TT() {
 }
 
 
-std::vector<std::pair<short, short>> consumeResourceList(
-    const std::vector<std::pair<short, short>>& resource,
-    int amount,
-    int currentTime
-) {
-  if (amount < 1)
-    return resource;
-
-  // Check if already sorted to avoid unnecessary sorting
-  std::vector<std::pair<short, short>> resourceCopy = resource;
-
-  // Only sort if not already sorted (you could maintain sorted invariant)
-  std::sort(resourceCopy.begin(), resourceCopy.end(), [](const auto& a, const auto& b) {
-      return a.second > b.second; // DESCENDING by time
-  });
-
-  int remainingAmount = amount;
-
-  for (auto& [qty, time] : resourceCopy) {
-    if (time <= currentTime && remainingAmount > 0) {
-      if (qty >= remainingAmount) {
-        qty -= remainingAmount;
-        remainingAmount = 0;
-        break;
-      } else {
-        remainingAmount -= qty;
-        qty = 0;
-      }
-    }
-  }
-
-  // Use erase-remove idiom efficiently
-  resourceCopy.erase(
-      std::remove_if(resourceCopy.begin(), resourceCopy.end(),
-                    [](const auto& p) { return p.first <= 0; }),
-      resourceCopy.end()
-  );
-
-  return resourceCopy;
-}
 
 std::vector<std::pair<int, int>> return_resource(
     const std::vector<std::pair<int, int>>& resource,
@@ -1684,7 +1850,9 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
     else {
         h = earlyfinishMap2.rbegin()->second;
     }
-
+if (h==39) {
+    std::cout << "Nodes Expanded: ";
+}
     return h;  // Added return statement
 }
 RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, short transitionId, short firingTime) {
@@ -1947,11 +2115,27 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     return available;
 }
 
-
-
+//setup to work only with bi directional
 bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
-  return true;
-}
+        // Check finished activities
+        for (int i = 0; i < 128; i++) {
+            bool this_finished = (finishedActivitiys[i] != -1);
+            bool other_finished = (other.finishedActivitiys[i] != -1);
+            if (this_finished != other_finished) return false;
+        }
+
+        // Check activity place markings (token counts, not times)
+        if (activity_nodes.size() != other.activity_nodes.size()) return false;
+
+        for (int i = 0; i < activity_nodes.size(); i++) {
+            if (activity_nodes[i].first != other.activity_nodes[i].first) {
+                return false;  // Different token counts
+            }
+            // Ignore .second (timestamps)
+        }
+
+        return true;
+    }
 
 
 

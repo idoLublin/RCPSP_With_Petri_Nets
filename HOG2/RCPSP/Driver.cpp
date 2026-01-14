@@ -49,6 +49,124 @@ int solveRCPSP_Bi();
 #include <atomic>
 namespace fs = std::filesystem;
 
+double HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) {
+  //return 0;
+  // 9. Optimized independent set calculation
+  // Optimization: Reserve memory to prevent re-allocations.
+  // If you know the number of unstarted tasks (e.g., total - finished_count), use that.
+  // Otherwise, just reserve total.
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  // Optimization: Pre-allocate memory to avoid reallocations during push_back
+  tempUnstarted.reserve(petri.Transitions.size());
+  short h;
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of map.find(), check if the value at this index is -1.
+    // -1 indicates the task has not finished yet.
+    if (state1.finishedActivitiys[taskID] == -1) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+
+int lastActivityId = -1;
+  int maxTime = -1;
+
+  // Find last finished activity by ID instead of name
+  for (int id = 0; id < state1.finishedActivitiys.size(); ++id) {
+    int time = state1.finishedActivitiys[id];
+
+    // THE FIX: Only process tasks that actually finished (time != -1)
+    if (time != -1) {
+      if (time > maxTime) {
+        maxTime = time;
+        lastActivityId = id;
+      }
+    }
+  }
+
+  if (lastActivityId != -1) {
+    const std::string& lastActivityName = RCPSPex.activities[lastActivityId - 1].name;
+
+    // Pre-reserve vectors
+    std::vector<int> independentSet;
+    independentSet.reserve(tempUnstarted.size());
+
+    // Filter independent transitions
+    for (int actIdx : tempUnstarted) {
+      const std::string& actName = RCPSPex.activities[actIdx - 1].name;
+      if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end()) {
+        independentSet.push_back(actIdx);
+      }
+    }
+
+    // Create lookup set for efficient filtering
+    std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
+    std::vector<short> newUnstartedTransitions;
+    newUnstartedTransitions.reserve(tempUnstarted.size());
+
+    for (int id : tempUnstarted) {
+      if (independentLookup.find(id) == independentLookup.end()) {
+        newUnstartedTransitions.push_back(id);
+      }
+    }
+
+    // 10. Calculate heuristic efficiently
+    int latestStart = 0;
+
+    // FIX: Iterate through vector indices
+    for (int id = 0; id < state1.finishedActivitiys.size(); ++id) {
+      int finishTime = state1.finishedActivitiys[id];
+
+      // Check if valid finish time exists
+      if (finishTime != -1) {
+        // 1. Get the duration of this activity
+        // Note: 'id' is 1-based, so subtract 1 to access the static activities vector
+        int duration = RCPSPex.activities[id - 1].duration;
+
+        // 2. Calculate Start Time
+        int startTime = finishTime - duration;
+
+        // 3. Update Max
+        if (startTime > latestStart) {
+          latestStart = startTime;
+        }
+      }
+    }
+
+    int unkTime = state1.g - latestStart;
+
+    // FIX: Copy the vector (std::vector copy is deep by default)
+    std::array<short, 128> finishedActivitiysnew = state1.finishedActivitiys;
+
+    for (int actIdx : independentSet) {
+      // FIX: Direct index access
+      finishedActivitiysnew[actIdx] = 0;
+    }
+
+    // return std::max(getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys) - unkTime,
+    //            getForwardHcost_TT(newUnstartedTransitions, finishedActivitiysnew));
+
+    h =std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
+               getForwardHcost_TT(newUnstartedTransitions));
+  }
+  else {
+    // Fallback if no finished activities
+    h= getForwardHcost_TT(tempUnstarted);
+    // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
+  }
+  return h;
+
+}
+
+
+
+
 int solveRCPSP(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving: " << group<<":"<<exam << std::endl;
 
@@ -160,7 +278,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     return 0;
 }
     int solveRCPSP_TT(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
+    std::cout << "started solving EPEA*: " << group<<":"<<exam << std::endl;
     count=0;
     getPetri(petri, group, exam,problemType);
     getRCPSP(RCPSPex, group, exam,problemType);
@@ -169,45 +287,47 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     RCPSPState_TT last = first;
 
 
+    last.g = HCost(last, first);
 
     RCPSP_TT as1;
 
-    //TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
-    EPEAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    //EPEAStar<RCPSPState_TT, int, RCPSP_TT> astar;
     std::vector<RCPSPState_TT> path;
 
+    // astar.SetReopenNodes(true);  // ← ADD THIS!
 
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
-    //astar.GetPath(&as1, first, last, path);
+   astar.GetPath(&as1, first, last, path);
     // 1. Setup the search
-    astar.InitializeSearch(&as1, first, last, path);
-
-    // 2. Setup the timer
-    auto startTime = std::chrono::steady_clock::now();
-    auto timeLimit = std::chrono::minutes(5);
-
-    // 3. Run the loop manually
-    bool found = false;
-    while (!astar.DoSingleSearchStep(path))
-    {
-        // Check time every step (or every 1000 steps for speed)
-        auto currentTime = std::chrono::steady_clock::now();
-        if (currentTime - startTime > timeLimit) {
-            printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
-            break;
-        }
-    }
-
-    // 4. Check if we actually found a path
-    if (path.size() > 0) {
-        printf("Solution found! Length: %llu\n", path.size());
-    } else {
-        printf("Failed to find solution (Timeout or No Path).\n");
-    }
-
-
+    // astar.InitializeSearch(&as1, first, last, path);
+    //
+    // // 2. Setup the timer
+    // auto startTime = std::chrono::steady_clock::now();
+    // auto timeLimit = std::chrono::minutes(5);
+    //
+    // // 3. Run the loop manually
+    // bool found = false;
+    // while (!astar.DoSingleSearchStep(path))
+    // {
+    //     // Check time every step (or every 1000 steps for speed)
+    //     auto currentTime = std::chrono::steady_clock::now();
+    //     if (currentTime - startTime > timeLimit) {
+    //         printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+    //         break;
+    //     }
+    // }
+    //
+    // // 4. Check if we actually found a path
+    // if (path.size() > 0) {
+    //     printf("Solution found! Length: %llu\n", path.size());
+    // } else {
+    //     printf("Failed to find solution (Timeout or No Path).\n");
+    // }
+    //
+    //
 
 
 
@@ -238,6 +358,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     }
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetUniqueNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
     std::ofstream file(filename, std::ios::app);
@@ -267,115 +388,119 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     return 0;
 }
 //not working
-int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
-    std::cout << "started solving: " << group<<":"<<exam << std::endl;
-
-  //  generateTIME= std::chrono::duration<double>(0);
-    //avelableTIME= std::chrono::duration<double>(0);
-   // hashTIME= std::chrono::duration<double>(0);
-  //  comperTime= std::chrono::duration<double>(0);
-    //secssesorTIME= std::chrono::duration<double>(0);
-    count=0;
+int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
+    std::cout << "started solving: " << group << ":" << exam << std::endl;
 
     getPetri(petri, group, exam);
     getRCPSP(RCPSPex, group, exam);
 
-    RCPSPState_bi first;
-    first.direction=true;
-    count=2;
-    RCPSPState_bi last = first;
-    last.direction=false;
-    last.h_b = first.h_f;
-    last.h_f = 0;
-last.name=1;
-    for (auto& pair : last.marking) {
-        //set only to to 4 diffrent resources
-        if (pair.first=="R1"){continue;}
-        if (pair.first=="R2"){continue;}
-        if (pair.first=="R3"){continue;}
-        if (pair.first=="R4"){continue;}
-        if (pair.second == 1) { pair.second = 0; }
-        if (pair.first == finalstatename) { pair.second = 1; }
+    // Create start state - this initializes finalstatename
+    RCPSPState_TT first_tt;
+    RCPSPState_Bi first(first_tt);
+    first.direction = true;
+
+    // Create goal state properly
+    RCPSPState_Bi last;
+    last.direction = false;
+
+    // Resize to match first
+    last.activity_nodes.resize(first.activity_nodes.size());
+
+    // Clear all activity nodes
+    for (auto& pair : last.activity_nodes) {
+        pair = {0, 0};
     }
-    last.avilableDeTransitionIndices=getAvilableDetransitionIndices(last.marking);
-    //last.avilableTransitionIndices=getAvilableTransitionIndices(last.marking);
-    for (int i=1;i<petri.Transitions.size()+1;i++) {
-        last.finishedActivitiys.insert(i);
-        last.startedActivitiys.insert(i);
+
+    // Set final sink place
+    if (finalstatename.empty()) {
+        std::cerr << "ERROR: finalstatename not initialized!" << std::endl;
+        return -1;
     }
-    last.unstartedTransitions.clear();
-    std::vector<RCPSPState_bi> path;
+
+    auto it = petri.place_name_to_id.find(finalstatename);
+    if (it == petri.place_name_to_id.end()) {
+        std::cerr << "ERROR: finalstatename not found!" << std::endl;
+        return -1;
+    }
+
+    short finalID = it->second;
+    if (finalID >= 4 && (finalID - 4) < last.activity_nodes.size()) {
+        last.activity_nodes[finalID - 4] = {1, 0};
+    }
+
+    // Copy resources from first
+    last.resource_nodes = first.resource_nodes;
+
+    // CRITICAL: Mark all activities as finished AFTER everything else
+    for (int i = 1; i <= petri.Transitions.size(); i++) {
+        last.finishedActivitiys[i] = -1;  // Mark as finished
+    }
+
+    last.g = 0;
+    last.f = last.g_f = last.g_b = last.h_f = last.h_b = 0;
+    auto it2 = petri.place_name_to_id.find(finalstatename);
+
+    // Always check if it was found to avoid a crash
+    if (it2 != petri.place_name_to_id.end()) {
+        // Use it2->second to get the actual ID integer
+        last.finishedActivitiys[it2->second] = 0;
+    }
+    else {
+        // Optional: Handle error if name not found
+        std::cerr << "Error: Place " << finalstatename << " not found!" << std::endl;
+    }
+    std::cout << "Goal state setup - checking finished activities:" << std::endl;
+    int goal_finished = 0;
+    // for (int i = 0; i < 128; i++) {
+    //     if (last.finishedActivitiys[i] != -1) goal_finished++;
+    // }
+    std::cout << "  Goal has " << goal_finished << " finished activities" << std::endl;
+    // Set resources an
+    std::vector<RCPSPState_Bi> path;
     ForwardRCPSPHeuristic H_F;
     BackwardRCPSPHeuristic H_B;
     RCPSP_BiGreedy bs1;
 
-
-    BAE<RCPSPState_bi, int, RCPSP_BiGreedy> Bi_RCPSP;
-
-
+    BAE<RCPSPState_Bi, int, RCPSP_BiGreedy> Bi_RCPSP;
 
     bool finished = false;
-    bool timeout_occurred = false;
     std::chrono::duration<double> elapsed;
 
-    // Create a flag for thread completion
-
     auto start = std::chrono::high_resolution_clock::now();
-    Bi_RCPSP.GetPath(&bs1, first, last,&H_F,&H_B ,path);
-
-
-
-    // Record end time and calculate elapsed time
+    Bi_RCPSP.GetPath(&bs1, first, last, &H_F, &H_B, path);
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
-
-
-    // Output results
     double max_f = 0;
     double max_b = 0;
 
     if (!path.empty()) {
-        finished=true;
+        finished = true;
         std::cout << "Path found!" << std::endl;
-        for (const auto& state : path) {
-            std::cout << "g_f: " << state.g_f << std::endl;
-            std::cout << "g_b: " << state.g_b << std::endl;
 
-            std::cout << "active: ";
-            for (const auto& [transIdx, duration] : state.activeTransitionIndices)
-                std::cout << " " << transIdx;
-            std::cout << std::endl;
+        // Find the meeting point where forward and backward met
+        double makespan = 0;
 
-            std::cout << "available: ";
-            for (int transIdx : state.avilableTransitionIndices)
-                std::cout << " " << transIdx;
-            std::cout << std::endl << std::endl;
+        for (int i = 0; i < path.size() - 1; i++) {
+            if (path[i].direction != path[i+1].direction) {
+                // Meeting point: g_f + g_b
+                makespan = path[i].g_f + path[i+1].g_b;
 
-            max_f = std::max(max_f,state.g_f);
-            max_b = std::max(max_b,state.g_b);
+                std::cout << "Meeting point at index " << i << std::endl;
+                std::cout << "  Forward: g=" << path[i].g << ", g_f=" << path[i].g_f << std::endl;
+                std::cout << "  Backward: g=" << path[i+1].g << ", g_b=" << path[i+1].g_b << std::endl;
+                std::cout << "  Makespan = g_f + g_b = " << path[i].g_f << " + " << path[i+1].g_b << " = " << makespan << std::endl;
+                break;
+            }
         }
-    } else {
-        std::cout << "Path not found or timeout occurred.\n";
+
+        std::cout << "Final Makespan: " << makespan << std::endl;
+        max_f = makespan;
     }
 
     std::cout << "Nodes Expanded: " << Bi_RCPSP.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << Bi_RCPSP.GetNodesTouched() << std::endl;
-    // Save to file
-    std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << elapsed.count() << ","
-         << (finished ? "True" : "False") << ","
-         << max_f+max_b << ","
-         << Bi_RCPSP.GetNodesExpanded() << ","
-        //  << ","<<100*generateTIME.count()/elapsed.count()<< ","<<generateTIME.count()
-         //    << ","<<100*avelableTIME.count()/elapsed.count()<< ","<<avelableTIME.count()
-          //       << ","<<100*hashTIME.count()/elapsed.count()<< ","<<hashTIME.count()<<
-                    // ","<<100*comperTime.count()/elapsed.count()<< ","<<comperTime.count()/astar.GetNodesTouched()<<
-             "\n";
-
-    return 0;
+    return 0;  // ADD THIS
 }
-
-
 
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
@@ -463,20 +588,21 @@ void runBenchmark() {
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
-    // solveRCPSP_TT(9, 1, filename, "j30");
+   //  solveRCPSP_Bi(16, 1, filename, "j30");
+     solveRCPSP_TT(22, 3, filename, "j30");
 
-    for(int i = 1; i < 49; i++) {
-        for(int j = 1; j < 11; j++) {
-
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-    //        solveRCPSP(i, j, filename, "j30");
-            solveRCPSP_TT(i, j, filename, "j30");
-        }
-    }
+    // for(int i = 1; i < 49; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    // //        solveRCPSP(i, j, filename, "j30");
+    //         solveRCPSP_TT(i, j, filename, "j30");
+    //     }
+    // }
     // for(int i = 16; i < 17; i++) {
     //     for(int j = 10; j >0; j--) {
     //

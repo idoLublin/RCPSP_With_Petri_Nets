@@ -94,41 +94,29 @@ template <class state>
 struct EPEAStarCompare {
 	bool operator()(const EPEAOpenClosedData<state> &i1, const EPEAOpenClosedData<state> &i2) const
 	{
-		// Calculate F-scores
 		double f1 = i1.g + i1.h;
 		double f2 = i2.g + i2.h;
 
-		// 1. Primary: F-score
-		// If f1 > f2, return true (i1 is "less than" i2).
-		// In a Priority Queue, this puts the SMALLEST F at the top.
-		if (!fequal(f1, f2)) {
-			return fgreater(f1, f2);
+		// Use DIRECT comparison like TemplateAStar
+		if (f1 != f2) {
+			return f1 > f2;  // Min f
 		}
 
-		// 2. Secondary: G-score (Tie-breaking)
-		// We prefer HIGHER G (closer to goal).
-		// If g1 < g2, return true (i1 is "worse").
-		if (!fequal(i1.g, i2.g)) {
-			return fless(i1.g, i2.g);
+		if (i1.g != i2.g) {
+			return i1.g < i2.g;  // Max g
 		}
 
-		// 3. Tertiary: Started Count (Polymorphic via overload)
-		// Relies on your global getStartedCount(state) overloads.
-		// We prefer HIGHER started count.
 		size_t start1 = getStartedCount(i1.data);
 		size_t start2 = getStartedCount(i2.data);
-
 		if (start1 != start2) {
-			return start1 < start2; // If i1 has fewer started, it is "worse"
+			return start1 < start2;
 		}
 
-		// 4. Quaternary: Finished Count
-		// We prefer HIGHER finished count.
 		size_t finish1 = getFinishedCountGeneric(i1.data);
 		size_t finish2 = getFinishedCountGeneric(i2.data);
-
-		return finish1 < finish2; // If i1 has fewer finished, it is "worse"
+		return finish1 < finish2;
 	}
+
 };
 
 

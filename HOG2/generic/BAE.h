@@ -57,7 +57,7 @@ struct BAECompare {
                     // Then check started_activities count
                     //auto endSCF = std::chrono::high_resolution_clock::now();
                     //comperTime += endSCF-startSCF;
-                    return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
+                    //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
                 }
                 return fless(i1.data.g_f, i2.data.g_f);
 
@@ -68,7 +68,7 @@ struct BAECompare {
                 if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
                     //auto endSCF = std::chrono::high_resolution_clock::now();
                     //comperTime += endSCF-startSCF;
-                    return i1.data.startedActivitiys.size() > i2.data.startedActivitiys.size();//< or >
+                    //return i1.data.startedActivitiys.size() > i2.data.startedActivitiys.size();//< or >
                 }
                 // Then check started_activities count
                 //auto endSCF = std::chrono::high_resolution_clock::now();

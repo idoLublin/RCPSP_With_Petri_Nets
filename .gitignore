@@ -8,3 +8,10 @@ HOG2/objs
 # CLion files
 cmake-build-debug
 CMakeLists.txt
+
+# Compiled object files
+*.o
+
+# Python cache
+__pycache__/
+*.pyc

@@ -153,8 +153,14 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
         return 0;
     }
     
-    // For each unstarted activity, we need to calculate how much time remains
-    // Taking into account which activities are already finished
+    // Build a fast lookup to know which activities are unstarted in this state
+    std::array<bool, 128> isUnstarted;
+    isUnstarted.fill(false);
+    for (short activityId : unstartedTransitions) {
+        if (activityId >= 0 && activityId < static_cast<short>(isUnstarted.size())) {
+            isUnstarted[activityId] = true;
+        }
+    }
     
     // Create a lookup for quick access to active transition remaining times
     // Note: Uses fixed-size array for performance; bounds checked at initialization
@@ -170,40 +176,63 @@ double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
     std::array<int, MAX_ACTIVITIES> earlyFinish;
     earlyFinish.fill(-1);  // -1 means not computed yet
     
-    // Mark finished activities as having earlyFinish = 0 (already done)
-    // This is implicit: if an activity is not in unstartedTransitions, 
-    // we treat its contribution as 0
-    
-    double maxH = 0;
-    
-    // Process unstarted activities - they're already in topological order
-    for (short activityId : unstartedTransitions) {
+    // Recursive memoized computation of earliest finish time for an activity.
+    // This removes any dependence on the order of unstartedTransitions.
+    auto computeEarlyFinish = [&](short activityId, const auto& self) -> int {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
+            return 0;
+        }
+
+        // If we've already computed this activity's earliest finish time, reuse it.
+        if (earlyFinish[activityId] != -1) {
+            return earlyFinish[activityId];
+        }
+
         int maxPredecessorFinish = 0;
-        
-        // Check all predecessors
+
+        // Check all predecessors of this activity
         for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
-            // Check if predecessor is in unstarted list
-            if (earlyFinish[dep] != -1) {
-                // Predecessor is unstarted and we've computed its value
-                maxPredecessorFinish = std::max(maxPredecessorFinish, earlyFinish[dep]);
-            }
-            // If predecessor is finished (not in list), its contribution is 0
-            // If predecessor is active, use remaining time
-            else if (activeRemaining[dep] != -1) {
-                maxPredecessorFinish = std::max(maxPredecessorFinish, (int)activeRemaining[dep]);
+            // Guard against out-of-bounds indices in our fixed-size arrays
+            if (dep >= 0 && dep < static_cast<int>(earlyFinish.size())) {
+                if (isUnstarted[dep]) {
+                    // Predecessor is unstarted in this state: compute its earliest finish recursively
+                    maxPredecessorFinish = std::max(
+                        maxPredecessorFinish,
+                        self(static_cast<short>(dep), self)
+                    );
+                } else if (activeRemaining[dep] != -1) {
+                    // Predecessor is currently active: use its remaining time
+                    maxPredecessorFinish = std::max(
+                        maxPredecessorFinish,
+                        static_cast<int>(activeRemaining[dep])
+                    );
+                }
+                // If predecessor is neither unstarted nor active, it is finished and contributes 0.
             }
         }
-        
-        // Get duration (check if active with remaining time)
+
+        // Get this activity's duration (use remaining time if it is currently active)
         int duration;
         if (activeRemaining[activityId] != -1) {
             duration = activeRemaining[activityId];
         } else {
             duration = RCPSPex.activities[activityId - 1].duration;
         }
-        
+
         earlyFinish[activityId] = maxPredecessorFinish + duration;
-        maxH = std::max(maxH, (double)earlyFinish[activityId]);
+        return earlyFinish[activityId];
+    };
+
+    double maxH = 0;
+    
+    // Process all unstarted activities in any order; the recursive DP ensures
+    // that predecessors are accounted for correctly regardless of iteration order.
+    for (short activityId : unstartedTransitions) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
+            continue;
+        }
+        int ef = computeEarlyFinish(activityId, computeEarlyFinish);
+        maxH = std::max(maxH, static_cast<double>(ef));
     }
     
     return maxH;
@@ -219,27 +248,63 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
         return 0;
     }
     
+    // Build a fast lookup to know which activities are unstarted in this state
+    std::array<bool, 128> isUnstarted;
+    isUnstarted.fill(false);
+    for (short activityId : unstartedTransitions) {
+        if (activityId >= 0 && activityId < static_cast<short>(isUnstarted.size())) {
+            isUnstarted[activityId] = true;
+        }
+    }
+    
     // Calculate the earliest finish time for unstarted activities
     // Note: Uses fixed-size array for performance; bounds checked at initialization
     std::array<int, MAX_ACTIVITIES> earlyFinish;
     earlyFinish.fill(-1);
     
-    double maxH = 0;
-    
-    // Process unstarted activities in topological order
-    for (short activityId : unstartedTransitions) {
-        int maxPredecessorFinish = 0;
-        
-        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
-            if (earlyFinish[dep] != -1) {
-                maxPredecessorFinish = std::max(maxPredecessorFinish, earlyFinish[dep]);
-            }
-            // Finished predecessors contribute 0
+    // Recursive memoized computation of earliest finish time for an activity.
+    // This removes any dependence on the order of unstartedTransitions.
+    auto computeEarlyFinish = [&](short activityId, const auto& self) -> int {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
+            return 0;
         }
-        
+
+        // If we've already computed this activity's earliest finish time, reuse it.
+        if (earlyFinish[activityId] != -1) {
+            return earlyFinish[activityId];
+        }
+
+        int maxPredecessorFinish = 0;
+
+        // Check all predecessors of this activity
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+            if (dep >= 0 && dep < static_cast<int>(earlyFinish.size())) {
+                if (isUnstarted[dep]) {
+                    // Predecessor is unstarted in this state: compute its earliest finish recursively
+                    maxPredecessorFinish = std::max(
+                        maxPredecessorFinish,
+                        self(static_cast<short>(dep), self)
+                    );
+                }
+                // If predecessor is not unstarted, it is finished and contributes 0.
+            }
+        }
+
         int duration = RCPSPex.activities[activityId - 1].duration;
         earlyFinish[activityId] = maxPredecessorFinish + duration;
-        maxH = std::max(maxH, (double)earlyFinish[activityId]);
+        return earlyFinish[activityId];
+    };
+
+    double maxH = 0;
+    
+    // Process all unstarted activities in any order; the recursive DP ensures
+    // that predecessors are accounted for correctly regardless of iteration order.
+    for (short activityId : unstartedTransitions) {
+        if (static_cast<int>(activityId) < 0 || static_cast<int>(activityId) >= static_cast<int>(earlyFinish.size())) {
+            continue;
+        }
+        int ef = computeEarlyFinish(activityId, computeEarlyFinish);
+        maxH = std::max(maxH, static_cast<double>(ef));
     }
     
     return maxH;

@@ -46,11 +46,13 @@ struct Config {
     // Output configuration (relative to repo root)
     std::string outputFolder = "data";
     std::string outputFile = "";  // If empty, auto-generate
+    std::string tag = "";          // Optional tag to append to filename (e.g., "dp_test_1")
     
     // Algorithm options
     bool useCS = true;
     bool sortResults = true;
     bool writeHeader = true;
+    int timeLimit = 300;  // Time limit per problem in seconds (default: 300 = 5 minutes)
     
     // Display help
     bool showHelp = false;
@@ -77,7 +79,9 @@ void printUsage(const char* programName) {
               << "  --method M         Solving method: tp, tt, all (default: all)\n"
               << "  --output-folder F  Output folder path (default: data)\n"
               << "  --output-file F    Output filename (default: auto-generated)\n"
-              << "                     Auto format: YYYY-MM-DD_jXX_gN-M_eN-M_method.csv\n"
+              << "                     Auto format: based on date, problem type, group/exam range, method, and optional tag\n"
+              << "  --tag TAG          Optional tag to append to filename (e.g., dp_test_1)\n"
+              << "  --time-limit N     Time limit per problem in seconds (default: 300)\n"
               << "  --use-cs           Enable CS optimization (default: true)\n"
               << "  --no-cs            Disable CS optimization\n"
               << "  --no-sort          Disable result sorting\n"
@@ -87,11 +91,12 @@ void printUsage(const char* programName) {
               << "  RCPSP_GROUP_START, RCPSP_GROUP_END\n"
               << "  RCPSP_EXAM_START, RCPSP_EXAM_END\n"
               << "  RCPSP_PROBLEM_TYPE, RCPSP_METHOD\n"
-              << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE\n"
-              << "  RCPSP_USE_CS (0 or 1)\n\n"
+              << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE, RCPSP_TAG\n"
+              << "  RCPSP_USE_CS (0 or 1), RCPSP_TIME_LIMIT\n\n"
               << "Examples:\n"
               << "  " << programName << " --group-start 1 --group-end 5 --method tp\n"
               << "  " << programName << " --problem-type j60 --output-file my_results.csv\n"
+              << "  " << programName << " --tag dp_test_1 --group-start 16 --exam-end 10\n"
               << "  RCPSP_METHOD=tt " << programName << "\n";
 }
 
@@ -129,7 +134,9 @@ Config parseArgs(int argc, char* argv[]) {
     config.method = getEnvOrDefault("RCPSP_METHOD", config.method);
     config.outputFolder = getEnvOrDefault("RCPSP_OUTPUT_FOLDER", config.outputFolder);
     config.outputFile = getEnvOrDefault("RCPSP_OUTPUT_FILE", config.outputFile);
+    config.tag = getEnvOrDefault("RCPSP_TAG", config.tag);
     config.useCS = getEnvOrDefault("RCPSP_USE_CS", config.useCS);
+    config.timeLimit = getEnvOrDefault("RCPSP_TIME_LIMIT", config.timeLimit);
     
     // Parse command-line arguments (override env vars)
     for (int i = 1; i < argc; i++) {
@@ -153,6 +160,10 @@ Config parseArgs(int argc, char* argv[]) {
             config.outputFolder = argv[++i];
         } else if (arg == "--output-file" && i + 1 < argc) {
             config.outputFile = argv[++i];
+        } else if (arg == "--tag" && i + 1 < argc) {
+            config.tag = argv[++i];
+        } else if (arg == "--time-limit" && i + 1 < argc) {
+            config.timeLimit = std::stoi(argv[++i]);
         } else if (arg == "--use-cs") {
             config.useCS = true;
         } else if (arg == "--no-cs") {
@@ -205,6 +216,11 @@ std::string generateOutputFilename(const Config& config) {
     }
     
     oss << "_" << config.method;
+    
+    // Add tag if provided
+    if (!config.tag.empty()) {
+        oss << "_" << config.tag;
+    }
     
     std::string baseName = oss.str();
     std::string filename = fullOutputFolder + "/" + baseName + ".csv";
@@ -444,6 +460,7 @@ void runSolver(const Config& config) {
     std::cout << "  Method: " << config.method << "\n";
     std::cout << "  Output: " << filename << "\n";
     std::cout << "  Use CS: " << (config.useCS ? "Yes" : "No") << "\n";
+    std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
     
     // Set global useCS flag
@@ -468,14 +485,17 @@ void runSolver(const Config& config) {
             // Reset state before each problem
             petri.reset();
             RCPSPex.reset();
+            heuristicDPInitialized = false;  // Reset DP cache for new problem
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {
+                setSearchTimeout(config.timeLimit);  // Reset timeout for this problem
                 solveRCPSP(group, exam, filename, config.problemType);
             }
             
             // Run TT method if selected
             if (config.method == "tt" || config.method == "all") {
+                setSearchTimeout(config.timeLimit);  // Reset timeout for this problem
                 solveRCPSP_TT(group, exam, filename, config.problemType);
             }
         }

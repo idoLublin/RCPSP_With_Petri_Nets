@@ -11,12 +11,27 @@
 
 using namespace P_RCPSP;
 
-// Forward declarations for DP-based heuristic functions
+// Forward declarations for heuristic functions
 double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
                          const std::vector<std::pair<short, short>>& activeTransitionIndices);
 double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions);
 void initializeHeuristicDP();
 extern thread_local bool heuristicDPInitialized;
+
+// LBcc - Critical Capacity Lower Bound heuristic (Appendix A of paper)
+double computeCriticalCapacityLowerBound(
+    const std::vector<short>& unfinishedTransitions,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices
+);
+
+// Heuristic type enum (defined in Driver.cpp)
+enum class HeuristicType {
+    DP,      // DP-based critical path heuristic (default)
+    LBcc     // Critical Capacity Lower Bound
+};
+
+// Global heuristic selection (defined in Driver.cpp)
+extern HeuristicType selectedHeuristic;
 
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
@@ -239,31 +254,36 @@ double calculateEarlyFinishRecursive(int activityId, std::map<int, int>& earlyfi
 
 inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) const {
   if (state1.status) {
-    return state1.h;//if status is 1 the h is identical to before so we dont need to change a thing
+    return state1.h;  // If status is 1, h is identical to before
   }
   else {
     std::vector<short> tempUnstarted;
 
     // Optimization: Reserve max possible size to prevent re-allocations
-    // (Using the size logic from your original code)
     tempUnstarted.reserve(petri.Transitions.size());
 
-    // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+    // Build list of unfinished activities (1-based indexing)
     for (int i = 0; i < petri.Transitions.size(); i++) {
-      short taskID = i + 1; // Preserving your 1-based logic
-
-      // THE FIX: Direct vector access (O(1) speed)
-      // Check if value is -1 (meaning "not finished")
+      short taskID = i + 1;
       if (state1.finishedActivitiys[taskID] == -1) {
         tempUnstarted.push_back(taskID);
       }
     }
 
-    // DP-based heuristic: Uses precomputed values instead of recalculating from scratch
-    state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+    // Select heuristic based on global configuration
+    switch (selectedHeuristic) {
+      case HeuristicType::LBcc:
+        // LBcc: Critical Capacity Lower Bound (combines critical path + resource capacity)
+        state1.h = computeCriticalCapacityLowerBound(tempUnstarted, state1.activeTransitionIndices);
+        break;
+      case HeuristicType::DP:
+      default:
+        // DP-based heuristic: Uses precomputed values (critical path only)
+        state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+        break;
+    }
     return state1.h;
   }
-  //return state1.h;
 }
 
 inline double RCPSP::GCost(const RCPSPState &state1, const RCPSPState &state2) const {

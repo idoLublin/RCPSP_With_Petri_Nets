@@ -74,6 +74,7 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 | `--output-file F` | Output filename | auto-generated |
 | `--tag TAG` | Tag to append to filename | (none) |
 | `--time-limit N` | Time limit per problem (seconds) | 300 |
+| `--heuristic H` | Heuristic function: `dp`, `lbcc` | dp |
 | `--use-cs` | Enable CS optimization | true |
 | `--no-cs` | Disable CS optimization | |
 | `--no-sort` | Disable result sorting | |
@@ -85,6 +86,14 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 - **TP (Timed Petri)**: Uses timed Petri net representation
 - **TT (Time-Tabled)**: Uses time-tabled approach with more constrained search
 - **all**: Runs both TP and TT methods
+
+### Heuristics
+
+- **dp** (default): DP-based critical path heuristic - uses precomputed earliest finish times
+- **lbcc**: Critical Capacity Lower Bound (LBcc) - combines critical path with resource capacity bounds
+  - Based on Appendix A of "An exact composite lower bound strategy for the resource-constrained project scheduling problem"
+  - Better for problems with tight resource constraints (low Resource Strength)
+  - Calculates work content at each earliest start time and drains at resource capacity rate
 
 ### Example Commands
 
@@ -100,6 +109,13 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 
 # Run all methods on j30 with custom output
 ./build/Driver --output-file results.csv --method all
+
+# Run with LBcc heuristic (better for resource-constrained problems)
+./build/Driver --heuristic lbcc --group-start 1 --group-end 16 --method tp
+
+# Compare heuristics on low Resource Strength problems (groups 1-16)
+./build/Driver --heuristic dp --group-start 1 --group-end 16 --tag dp_test
+./build/Driver --heuristic lbcc --group-start 1 --group-end 16 --tag lbcc_test
 ```
 
 ### Environment Variables
@@ -111,6 +127,7 @@ export RCPSP_GROUP_END=16
 export RCPSP_METHOD=tp
 export RCPSP_TIME_LIMIT=300
 export RCPSP_TAG=dp_test
+export RCPSP_HEURISTIC=lbcc
 
 ./build/Driver  # Uses environment variable defaults
 ```
@@ -133,12 +150,34 @@ Results are written to CSV files in the `data/` folder (or specified output fold
 
 ## DP-Approach Branch Features
 
-This branch includes **Dynamic Programming optimizations** for the heuristic function:
+This branch includes **Dynamic Programming optimizations** and **configurable heuristics**:
 
+### DP Heuristic (Default)
 1. **Precomputed Arrays**: Uses topological sort to precompute earliest finish times
 2. **O(1) Heuristic Lookups**: Instead of computing heuristic on-the-fly, uses precomputed values
 3. **Thread-Local Storage**: Safe for parallel execution
 4. **MAX_ACTIVITIES Constant**: Supports up to 128 activities (j30/j60/j90/j120)
+
+### LBcc Heuristic (New)
+Based on the paper "An exact composite lower bound strategy for the resource-constrained project scheduling problem":
+
+1. **Combines Critical Path + Resource Capacity**: Merges LBcp and LBrc bounds
+2. **Work Content Algorithm**: Tracks work accumulation at earliest start times
+3. **Resource-Aware**: Considers resource capacity when computing lower bound
+4. **Better for Low RS Problems**: More effective on resource-constrained instances
+
+## Problem Set Structure (Resource Strength)
+
+The j30 problem set is organized by Resource Strength (RS) and Resource Factor (RF):
+
+| Groups | Resource Strength (RS) | Resource Factor (RF) | Difficulty |
+|--------|------------------------|----------------------|------------|
+| 1-16   | 0.2 (Low)              | Various              | Hardest    |
+| 17-32  | 0.5 (Medium)           | Various              | Medium     |
+| 33-48  | 1.0 (High)             | Various              | Easiest    |
+
+**Low RS (groups 1-16)**: Tight resource constraints - LBcc heuristic recommended
+**High RS (groups 33-48)**: Relaxed constraints - DP heuristic usually sufficient
 
 ## Problem Sets
 

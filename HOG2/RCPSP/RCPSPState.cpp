@@ -83,6 +83,12 @@ double computeResourceCapacityLowerBound(
     double criticalPathEstimate
 );
 
+// LBcc - Critical Capacity Lower Bound (Appendix A)
+double computeCriticalCapacityLowerBound(
+    const std::vector<short>& unfinishedTransitions,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices
+);
+
 double getBackwardHcost2(
     const std::set<int>& startedActivities,
     const std::set<int>& finishedActivities,
@@ -1085,6 +1091,164 @@ double computeResourceCapacityLowerBound(
   }
 
   return std::max(criticalPathEstimate, lb);
+}
+
+// ============================================================================
+// LBcc - Critical Capacity Lower Bound (Appendix A of the paper)
+// ============================================================================
+// Combines critical path (LBcp) with resource capacity bounds (LBrc)
+// Algorithm:
+// 1. Calculate earliest start times (ES) for each activity using CPM
+// 2. At each unique ES time, work content increases by sum of (duration × demand)
+// 3. Work content decreases at rate of resource availability (capacity)
+// 4. LBcc = time when work content drops to zero
+// 5. For multiple resources, calculate for each and take maximum
+// ============================================================================
+double computeCriticalCapacityLowerBound(
+    const std::vector<short>& unfinishedTransitions,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices
+) {
+    if (unfinishedTransitions.empty() && activeTransitionIndices.empty()) {
+        return 0.0;
+    }
+
+    // Step 1: Build set of active IDs and their remaining times
+    std::unordered_map<int, int> activeRemaining;
+    for (const auto& [id, remaining] : activeTransitionIndices) {
+        activeRemaining[id] = remaining;
+    }
+
+    // Step 2: Calculate earliest start times (ES) for all unfinished activities
+    // Uses the same DP approach as getForwardHcostDP but tracks ES times
+    std::array<int, MAX_ACTIVITIES> earlyStart;
+    std::array<int, MAX_ACTIVITIES> earlyFinish;
+    earlyStart.fill(-1);
+    earlyFinish.fill(-1);
+
+    // Active activities have already started (ES = 0 relative to current state)
+    for (const auto& [id, remaining] : activeTransitionIndices) {
+        earlyStart[id] = 0;
+        earlyFinish[id] = remaining;
+    }
+
+    // Calculate ES for unstarted activities in topological order
+    for (short activityId : unfinishedTransitions) {
+        // Skip if already active
+        if (activeRemaining.count(activityId)) {
+            continue;
+        }
+
+        int maxPredecessorFinish = 0;
+
+        // Check all predecessors
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+            // Check if predecessor is unfinished (in our list)
+            if (earlyFinish[dep] != -1) {
+                maxPredecessorFinish = std::max(maxPredecessorFinish, earlyFinish[dep]);
+            }
+            // If predecessor is active
+            else if (activeRemaining.count(dep)) {
+                maxPredecessorFinish = std::max(maxPredecessorFinish, activeRemaining[dep]);
+            }
+            // If predecessor is finished (not in unfinished list and not active),
+            // its contribution is 0
+        }
+
+        int duration = RCPSPex.activities[activityId - 1].duration;
+        earlyStart[activityId] = maxPredecessorFinish;
+        earlyFinish[activityId] = maxPredecessorFinish + duration;
+    }
+
+    // Step 3: Collect all unique event times (ES values) and build events list
+    // Event: (time, list of activities starting at this time)
+    std::map<int, std::vector<int>> eventsByTime;
+
+    // Add active activities at time 0
+    for (const auto& [id, remaining] : activeTransitionIndices) {
+        eventsByTime[0].push_back(id);
+    }
+
+    // Add unstarted activities at their ES time
+    for (short activityId : unfinishedTransitions) {
+        if (!activeRemaining.count(activityId) && earlyStart[activityId] != -1) {
+            eventsByTime[earlyStart[activityId]].push_back(activityId);
+        }
+    }
+
+    // Step 4: For each resource, compute LBcc using the work content algorithm
+    double maxLBcc = 0.0;
+
+    for (const auto& [resName, capacity] : RCPSPex.resources) {
+        if (capacity <= 0) continue;
+
+        // Sort events by time (map already sorted)
+        std::vector<std::pair<int, int>> events;  // (time, work_added)
+
+        for (const auto& [time, actIds] : eventsByTime) {
+            int workAdded = 0;
+            for (int actId : actIds) {
+                const auto& act = RCPSPex.activities[actId - 1];
+
+                // Get resource demand for this activity
+                auto demandIt = act.resource_demands.find(resName);
+                if (demandIt != act.resource_demands.end()) {
+                    int duration;
+                    if (activeRemaining.count(actId)) {
+                        duration = activeRemaining[actId];  // Use remaining time for active
+                    } else {
+                        duration = act.duration;
+                    }
+                    workAdded += demandIt->second * duration;
+                }
+            }
+            if (workAdded > 0) {
+                events.emplace_back(time, workAdded);
+            }
+        }
+
+        if (events.empty()) continue;
+
+        // Apply the LBcc algorithm from Appendix A:
+        // Work content increases at event times, decreases at rate = capacity
+        double workContent = 0.0;
+        double currentTime = 0.0;
+
+        for (const auto& [eventTime, workAdded] : events) {
+            // Time elapsed since last event
+            double elapsed = eventTime - currentTime;
+
+            // Decrease work content by capacity * elapsed time
+            if (elapsed > 0 && workContent > 0) {
+                workContent -= capacity * elapsed;
+                if (workContent < 0) workContent = 0;
+            }
+
+            // Add new work at this event
+            workContent += workAdded;
+            currentTime = eventTime;
+        }
+
+        // Calculate time to drain remaining work content
+        if (workContent > 0 && capacity > 0) {
+            double drainTime = std::ceil(workContent / static_cast<double>(capacity));
+            double resourceLBcc = currentTime + drainTime;
+            maxLBcc = std::max(maxLBcc, resourceLBcc);
+        }
+    }
+
+    // Return maximum of LBcc and critical path estimate
+    // Get critical path estimate from earlyFinish
+    double criticalPath = 0.0;
+    for (short activityId : unfinishedTransitions) {
+        if (earlyFinish[activityId] != -1) {
+            criticalPath = std::max(criticalPath, static_cast<double>(earlyFinish[activityId]));
+        }
+    }
+    for (const auto& [id, remaining] : activeTransitionIndices) {
+        criticalPath = std::max(criticalPath, static_cast<double>(remaining));
+    }
+
+    return std::max(maxLBcc, criticalPath);
 }
 
 

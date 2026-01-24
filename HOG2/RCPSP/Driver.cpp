@@ -30,30 +30,36 @@ namespace fs = std::filesystem;
 // Path to repository root (relative to executable location when running from repo root)
 const std::string REPO_ROOT = "";
 
+// Global heuristic selection - defined here, declared extern in RCPSP.h
+HeuristicType selectedHeuristic = HeuristicType::DP;
+
 struct Config {
     // Problem range
     int groupStart = 1;
     int groupEnd = 1;
     int examStart = 1;
     int examEnd = 10;
-    
+
     // Problem set type: j30, j60, j90, j120
     std::string problemType = "j30";
-    
+
     // Solving methods: "tp", "tt", "all"
     std::string method = "all";
-    
+
     // Output configuration (relative to repo root)
     std::string outputFolder = "data";
     std::string outputFile = "";  // If empty, auto-generate
     std::string tag = "";          // Optional tag to append to filename (e.g., "dp_test_1")
-    
+
     // Algorithm options
     bool useCS = true;
     bool sortResults = true;
     bool writeHeader = true;
     int timeLimit = 300;  // Time limit per problem in seconds (default: 300 = 5 minutes)
-    
+
+    // Heuristic selection: "dp", "lbcc"
+    std::string heuristic = "dp";
+
     // Display help
     bool showHelp = false;
 };
@@ -82,6 +88,9 @@ void printUsage(const char* programName) {
               << "                     Auto format: based on date, problem type, group/exam range, method, and optional tag\n"
               << "  --tag TAG          Optional tag to append to filename (e.g., dp_test_1)\n"
               << "  --time-limit N     Time limit per problem in seconds (default: 300)\n"
+              << "  --heuristic H      Heuristic to use: dp, lbcc (default: dp)\n"
+              << "                     dp   = DP-based critical path heuristic\n"
+              << "                     lbcc = Critical Capacity Lower Bound (LBcc)\n"
               << "  --use-cs           Enable CS optimization (default: true)\n"
               << "  --no-cs            Disable CS optimization\n"
               << "  --no-sort          Disable result sorting\n"
@@ -92,7 +101,8 @@ void printUsage(const char* programName) {
               << "  RCPSP_EXAM_START, RCPSP_EXAM_END\n"
               << "  RCPSP_PROBLEM_TYPE, RCPSP_METHOD\n"
               << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE, RCPSP_TAG\n"
-              << "  RCPSP_USE_CS (0 or 1), RCPSP_TIME_LIMIT\n\n"
+              << "  RCPSP_USE_CS (0 or 1), RCPSP_TIME_LIMIT\n"
+              << "  RCPSP_HEURISTIC (dp or lbcc)\n\n"
               << "Examples:\n"
               << "  " << programName << " --group-start 1 --group-end 5 --method tp\n"
               << "  " << programName << " --problem-type j60 --output-file my_results.csv\n"
@@ -137,7 +147,8 @@ Config parseArgs(int argc, char* argv[]) {
     config.tag = getEnvOrDefault("RCPSP_TAG", config.tag);
     config.useCS = getEnvOrDefault("RCPSP_USE_CS", config.useCS);
     config.timeLimit = getEnvOrDefault("RCPSP_TIME_LIMIT", config.timeLimit);
-    
+    config.heuristic = getEnvOrDefault("RCPSP_HEURISTIC", config.heuristic);
+
     // Parse command-line arguments (override env vars)
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -164,6 +175,8 @@ Config parseArgs(int argc, char* argv[]) {
             config.tag = argv[++i];
         } else if (arg == "--time-limit" && i + 1 < argc) {
             config.timeLimit = std::stoi(argv[++i]);
+        } else if (arg == "--heuristic" && i + 1 < argc) {
+            config.heuristic = argv[++i];
         } else if (arg == "--use-cs") {
             config.useCS = true;
         } else if (arg == "--no-cs") {
@@ -458,13 +471,21 @@ void runSolver(const Config& config) {
     std::cout << "  Exams: " << config.examStart << " - " << config.examEnd << "\n";
     std::cout << "  Problem Type: " << config.problemType << "\n";
     std::cout << "  Method: " << config.method << "\n";
+    std::cout << "  Heuristic: " << config.heuristic << "\n";
     std::cout << "  Output: " << filename << "\n";
     std::cout << "  Use CS: " << (config.useCS ? "Yes" : "No") << "\n";
     std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
-    
+
     // Set global useCS flag
     useCS = config.useCS;
+
+    // Set global heuristic selection
+    if (config.heuristic == "lbcc" || config.heuristic == "LBcc" || config.heuristic == "LBCC") {
+        selectedHeuristic = HeuristicType::LBcc;
+    } else {
+        selectedHeuristic = HeuristicType::DP;
+    }
     
     // Open output file
     std::ofstream file(filename);

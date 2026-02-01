@@ -18,6 +18,14 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions);
 void initializeHeuristicDP();
 extern thread_local bool heuristicDPInitialized;
 
+// Forward declarations for non-DP heuristic functions
+double getForwardHcost(std::vector<short> unstartedTransitions,
+                       std::vector<std::pair<short, short>> activeTransitionIndices);
+double getForwardHcost_TT(std::vector<short> unstartedTransitions);
+
+// Global DP toggle (defined in Driver.cpp)
+extern bool useDPHeuristic;
+
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
 // searchNode node;
@@ -259,8 +267,12 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       }
     }
 
-    // DP-based heuristic: Uses precomputed values instead of recalculating from scratch
-    state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+    // Heuristic calculation: DP or non-DP based on configuration
+    if (useDPHeuristic) {
+      state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+    } else {
+      state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+    }
     return state1.h;
   }
   //return state1.h;
@@ -694,12 +706,21 @@ int lastActivityId = -1;
       finishedActivitiysnew[actIdx] = 0;
     }
 
-    // DP-based heuristic: Uses precomputed values for faster calculation
-    return std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
-           getForwardHcostDP_TT(newUnstartedTransitions));
+    // Heuristic calculation: DP or non-DP based on configuration
+    if (useDPHeuristic) {
+      return std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
+             getForwardHcostDP_TT(newUnstartedTransitions));
+    } else {
+      return std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
+             getForwardHcost_TT(newUnstartedTransitions));
+    }
   } else {
     // Fallback if no finished activities
-    return getForwardHcostDP_TT(tempUnstarted);
+    if (useDPHeuristic) {
+      return getForwardHcostDP_TT(tempUnstarted);
+    } else {
+      return getForwardHcost_TT(tempUnstarted);
+    }
   }
 }
 inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) const {
@@ -709,13 +730,24 @@ inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
   std::size_t seed = 0;
 
-  // Fixed-size loop - compiler can optimize better
+  // 1. Hash all finished activities (including -1 entries for unfinished)
   for (int id = 0; id < 128; ++id) {
-    int time = node.finishedActivitiys[id];
+    seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<int>{}(node.finishedActivitiys[id]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
 
-    if (time != -1) {
-      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // 2. Hash activity nodes
+  for (const auto& p : node.activity_nodes) {
+    seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  // 3. Hash resource nodes
+  for (int r = 0; r < 4; ++r) {
+    seed ^= std::hash<int>{}(r) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    for (const auto& p : node.resource_nodes[r]) {
+      seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
   }
 

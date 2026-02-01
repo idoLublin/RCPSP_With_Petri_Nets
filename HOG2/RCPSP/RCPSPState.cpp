@@ -2100,7 +2100,9 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
 
 
 bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
-  return true;
+  return finishedActivitiys == other.finishedActivitiys &&
+         activity_nodes == other.activity_nodes &&
+         resource_nodes == other.resource_nodes;
 }
 
 

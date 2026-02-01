@@ -17,6 +17,7 @@
 #include <iomanip>
 #include <ctime>
 
+#include "HeuristicTypes.h"
 #include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
@@ -29,6 +30,55 @@ namespace fs = std::filesystem;
 // ============================================================================
 // Path to repository root (relative to executable location when running from repo root)
 const std::string REPO_ROOT = "";
+
+// Global heuristic selection
+P_RCPSP::HeuristicType activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
+
+// Global DP heuristic toggle
+bool useDPHeuristic = true;
+
+// Global optimal makespan map for validation
+std::map<std::pair<int,int>, int> optimalMakespan;
+
+// ============================================================================
+// Optimal Makespan Loader
+// ============================================================================
+std::map<std::pair<int,int>, int> loadOptimalMakespan(const std::string& problemType) {
+    std::map<std::pair<int,int>, int> result;
+    std::string filepath = REPO_ROOT + "data/" + problemType + "opt.sm";
+    std::ifstream file(filepath);
+    if (!file.is_open()) {
+        std::cerr << "Warning: Could not open optimal makespan file: " << filepath << std::endl;
+        return result;
+    }
+
+    std::string line;
+    // Skip header lines (everything before the data, lines starting with non-digits)
+    bool inData = false;
+    while (std::getline(file, line)) {
+        if (line.empty()) continue;
+        // Data lines start with a digit
+        if (!inData) {
+            // Check if line starts with a digit (data section)
+            size_t firstNonSpace = line.find_first_not_of(" \t");
+            if (firstNonSpace != std::string::npos && std::isdigit(line[firstNonSpace])) {
+                inData = true;
+            } else {
+                continue;
+            }
+        }
+        if (!inData) continue;
+
+        std::istringstream iss(line);
+        int group, exam, makespan;
+        double cpuTime;
+        if (iss >> group >> exam >> makespan >> cpuTime) {
+            result[{group, exam}] = makespan;
+        }
+    }
+    std::cout << "Loaded " << result.size() << " optimal makespans from " << filepath << std::endl;
+    return result;
+}
 
 struct Config {
     // Problem range
@@ -49,7 +99,8 @@ struct Config {
     std::string tag = "";          // Optional tag to append to filename (e.g., "dp_test_1")
     
     // Algorithm options
-    bool useCS = true;
+    P_RCPSP::HeuristicType heuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;  // Default: CP
+    bool useDP = true;           // Use DP preprocessing for heuristic (default: true)
     bool sortResults = true;
     bool writeHeader = true;
     int timeLimit = 300;  // Time limit per problem in seconds (default: 300 = 5 minutes)
@@ -82,8 +133,12 @@ void printUsage(const char* programName) {
               << "                     Auto format: based on date, problem type, group/exam range, method, and optional tag\n"
               << "  --tag TAG          Optional tag to append to filename (e.g., dp_test_1)\n"
               << "  --time-limit N     Time limit per problem in seconds (default: 300)\n"
-              << "  --use-cs           Enable CS optimization (default: true)\n"
-              << "  --no-cs            Disable CS optimization\n"
+              << "  --heuristic H      Heuristic type: cp (Critical Path), lbcs (Lower Bound CS)\n"
+              << "                     (default: cp)\n"
+              << "  --dp               Use DP preprocessing for heuristic (default)\n"
+              << "  --no-dp            Disable DP preprocessing (use original heuristic)\n"
+              << "  --use-cs           [DEPRECATED] Same as --heuristic lbcs\n"
+              << "  --no-cs            [DEPRECATED] Same as --heuristic cp\n"
               << "  --no-sort          Disable result sorting\n"
               << "  --no-header        Don't write CSV header\n"
               << "  --help, -h         Show this help message\n\n"
@@ -92,12 +147,12 @@ void printUsage(const char* programName) {
               << "  RCPSP_EXAM_START, RCPSP_EXAM_END\n"
               << "  RCPSP_PROBLEM_TYPE, RCPSP_METHOD\n"
               << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE, RCPSP_TAG\n"
-              << "  RCPSP_USE_CS (0 or 1), RCPSP_TIME_LIMIT\n\n"
+              << "  RCPSP_HEURISTIC (cp or lbcs), RCPSP_TIME_LIMIT\n\n"
               << "Examples:\n"
               << "  " << programName << " --group-start 1 --group-end 5 --method tp\n"
-              << "  " << programName << " --problem-type j60 --output-file my_results.csv\n"
+              << "  " << programName << " --problem-type j60 --heuristic lbcs\n"
               << "  " << programName << " --tag dp_test_1 --group-start 16 --exam-end 10\n"
-              << "  RCPSP_METHOD=tt " << programName << "\n";
+              << "  RCPSP_HEURISTIC=lbcs " << programName << "\n";
 }
 
 std::string getEnvOrDefault(const char* envVar, const std::string& defaultVal) {
@@ -135,8 +190,13 @@ Config parseArgs(int argc, char* argv[]) {
     config.outputFolder = getEnvOrDefault("RCPSP_OUTPUT_FOLDER", config.outputFolder);
     config.outputFile = getEnvOrDefault("RCPSP_OUTPUT_FILE", config.outputFile);
     config.tag = getEnvOrDefault("RCPSP_TAG", config.tag);
-    config.useCS = getEnvOrDefault("RCPSP_USE_CS", config.useCS);
     config.timeLimit = getEnvOrDefault("RCPSP_TIME_LIMIT", config.timeLimit);
+
+    // Heuristic selection from environment
+    const char* heuristicEnv = std::getenv("RCPSP_HEURISTIC");
+    if (heuristicEnv) {
+        config.heuristic = P_RCPSP::stringToHeuristicType(heuristicEnv);
+    }
     
     // Parse command-line arguments (override env vars)
     for (int i = 1; i < argc; i++) {
@@ -164,10 +224,18 @@ Config parseArgs(int argc, char* argv[]) {
             config.tag = argv[++i];
         } else if (arg == "--time-limit" && i + 1 < argc) {
             config.timeLimit = std::stoi(argv[++i]);
+        } else if (arg == "--heuristic" && i + 1 < argc) {
+            config.heuristic = P_RCPSP::stringToHeuristicType(argv[++i]);
         } else if (arg == "--use-cs") {
-            config.useCS = true;
+            // Deprecated: backward compatibility
+            config.heuristic = P_RCPSP::HeuristicType::LBCS;
         } else if (arg == "--no-cs") {
-            config.useCS = false;
+            // Deprecated: backward compatibility
+            config.heuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
+        } else if (arg == "--dp") {
+            config.useDP = true;
+        } else if (arg == "--no-dp") {
+            config.useDP = false;
         } else if (arg == "--no-sort") {
             config.sortResults = false;
         } else if (arg == "--no-header") {
@@ -282,6 +350,17 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
 
             makespan = state.g;
         }
+
+        // Validate against optimal makespan
+        auto it = optimalMakespan.find({group, exam});
+        if (it != optimalMakespan.end()) {
+            if (makespan != it->second) {
+                std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
+                          << "! Got " << makespan << ", expected optimal " << it->second << std::endl;
+                exit(1);
+            }
+            std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
+        }
     } else {
         std::cout << "Path not found or timeout occurred.\n";
     }
@@ -289,6 +368,7 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+    std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
          << (!path.empty() ? "True" : "False") << ","
@@ -298,7 +378,7 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
          << path.size() << ","
          << "TP" << ","
          << problemType << ","
-         << (useCS ? "True" : "False")
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
          << "\n";
 
     return 0;
@@ -332,6 +412,17 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
         std::cout << std::endl;
         makespan = state.g;
         std::cout << "\nFinal makespan: " << makespan << std::endl;
+
+        // Validate against optimal makespan
+        auto it = optimalMakespan.find({group, exam});
+        if (it != optimalMakespan.end()) {
+            if (makespan != it->second) {
+                std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
+                          << "! Got " << makespan << ", expected optimal " << it->second << std::endl;
+                exit(1);
+            }
+            std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
+        }
     } else {
         std::cout << "Path not found or timeout occurred.\n";
     }
@@ -339,6 +430,7 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+    std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
          << (!path.empty() ? "True" : "False") << ","
@@ -348,7 +440,7 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
          << path.size() << ","
          << "TT" << ","
          << problemType << ","
-         << (useCS ? "True" : "False")
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
          << "\n";
 
     return 0;
@@ -444,7 +536,7 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
 // ============================================================================
 // CSV Header
 // ============================================================================
-const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,UseCS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)";
+const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)";
 
 // ============================================================================
 // Main Solver Runner
@@ -459,13 +551,19 @@ void runSolver(const Config& config) {
     std::cout << "  Problem Type: " << config.problemType << "\n";
     std::cout << "  Method: " << config.method << "\n";
     std::cout << "  Output: " << filename << "\n";
-    std::cout << "  Use CS: " << (config.useCS ? "Yes" : "No") << "\n";
+    std::cout << "  Heuristic: " << P_RCPSP::heuristicTypeToString(config.heuristic)
+              << " (" << P_RCPSP::heuristicTypeDescription(config.heuristic) << ")\n";
+    std::cout << "  DP Preprocessing: " << (config.useDP ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
-    
-    // Set global useCS flag
-    useCS = config.useCS;
-    
+
+    // Set global heuristic type and DP flag
+    activeHeuristic = config.heuristic;
+    useDPHeuristic = config.useDP;
+
+    // Load optimal makespan for validation
+    optimalMakespan = loadOptimalMakespan(config.problemType);
+
     // Open output file
     std::ofstream file(filename);
     if (!file.is_open()) {

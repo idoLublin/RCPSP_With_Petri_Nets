@@ -37,26 +37,44 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 | `--exam-end N` | Ending exam number | 10 |
 | `--problem-type T` | `j30`, `j60`, `j90`, `j120` | j30 |
 | `--method M` | `tp`, `tt`, `all` | all |
+| `--heuristic H` | `cp` (Critical Path), `lbcs` (Lower Bound CS), `lbcc` (Lower Bound CC) | cp |
+| `--dp` | Use DP preprocessing for heuristic (default) | enabled |
+| `--no-dp` | Disable DP preprocessing (use original heuristic) | |
 | `--output-folder F` | Output folder path | data |
 | `--output-file F` | Output filename | auto-generated |
 | `--tag TAG` | Tag to append to filename | (none) |
 | `--time-limit N` | Time limit per problem (seconds) | 300 |
-| `--use-cs` / `--no-cs` | Enable/disable CS optimization | enabled |
+| `--no-sort` | Disable result sorting | |
+| `--no-header` | Don't write CSV header | |
 | `--help, -h` | Show help | |
 
 ### Example Commands
 
 ```bash
-# Run groups 1-16, exams 1-10 with TP method
-./build/Driver --group-start 1 --group-end 16 --method tp --tag my_test
+# Run groups 1-48, exams 1-10 with TT method and CP heuristic (DP enabled)
+./build/Driver --group-start 1 --group-end 48 --method tt --heuristic cp --tag cp_dp
+
+# Run without DP preprocessing
+./build/Driver --group-start 1 --group-end 48 --method tt --heuristic cp --no-dp --tag cp_nodp
+
+# Run specific group with TT method
+./build/Driver --group-start 10 --group-end 10 --exam-start 8 --exam-end 8 --method tt
 
 # Run j60 problems with 5-minute timeout
 ./build/Driver --problem-type j60 --time-limit 300
 
-# Run specific group with TT method
-./build/Driver --group-start 16 --group-end 16 --method tt --tag tt_test
+# Run TP method on group 1
+./build/Driver --group-start 1 --group-end 1 --method tp --tag tp_test
 ```
 
 ## Output
 
 Results are written as CSV to the `data/` folder. Use `--output-folder` or `--output-file` to customize.
+
+CSV columns: `Group, Exam, Time, Solved, Makespan, NodesExpanded, NodesTouched, PathLength, Method, ProblemType, Heuristic`
+
+The Heuristic column includes DP status (e.g., `CP_DP` or `CP_NoDP`).
+
+## Makespan Validation
+
+Solved problems are automatically validated against `data/{problemType}opt.sm` (e.g., `data/j30opt.sm`). If a solved problem's makespan doesn't match the known optimal, the solver exits with an error.

@@ -34,7 +34,8 @@ public:
     std::vector<std::pair<short, short>> activity_nodes;
     std::array<short, 128> finishedActivitiys;  // Changed from vector
     short g = 0;
-
+mutable short h = 0;
+    short predessesor_h = 0;
     RCPSPState_TT();
     RCPSPState_TT(const RCPSPState_TT& prev, short ID, short firingTime);
     bool operator==(const RCPSPState_TT& other) const;

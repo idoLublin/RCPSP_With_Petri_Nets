@@ -46,19 +46,36 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
 //test=1;
   std::size_t seed = 0;
 
-  // 1. Hash Started Activities
-  for (int id = 0; id < node.startedActivitiys.size(); ++id) {
-    int time = node.startedActivitiys[id];
+  // // 1. Hash Started Activities
+  // for (int id = 0; id < node.startedActivitiys.size(); ++id) {
+  //   int time = node.startedActivitiys[id];
+  //
+  //   // Only hash if the activity exists (equivalent to iterating the map)
+  //   if (time != -1) {
+  //     // Hash the ID (formerly pair.first)
+  //     seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //     // Hash the Time (formerly pair.second)
+  //     seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //   }
+ // }
+for (const auto& entry : node.activeTransitionIndices) {
+  // Hash the ID
+  seed ^= std::hash<short>{}(entry.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // Hash the Start Time
+  seed ^= std::hash<short>{}(entry.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+  // 1. Hash Active Transitions (Vector of Pairs)
+  // iterate through the vector directly
+  // for (const auto& entry : node.activeTransitionIndices) {
+  //   short id = entry.first;   // The Transition/Task ID
+  //   short time = entry.second; // The Time/Duration info
 
-    // Only hash if the activity exists (equivalent to iterating the map)
-    if (time != -1) {
-      // Hash the ID (formerly pair.first)
-      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      // Hash the Time (formerly pair.second)
-      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    }
-  }
+  //   // Hash the ID
+  //   seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 
+  //   // Hash the Time
+  //   seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // }
   // 2. Hash Finished Activities
   for (int id = 0; id < node.finishedActivitiys.size(); ++id) {
     int time = node.finishedActivitiys[id];
@@ -68,9 +85,13 @@ inline uint64_t RCPSP::GetStateHash(const RCPSPState &node) const {
       // Hash the ID (formerly pair.first)
       seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
       // Hash the Time (formerly pair.second)
-      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+     seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
   }
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  //
+  // hashTIME += endS1-startS1;
+
   // auto endS1 = std::chrono::high_resolution_clock::now();
   //
   // hashTIME += endS1-startS1;
@@ -235,6 +256,51 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
     return state1.h;//if status is 1 the h is identical to before so we dont need to change a thing
   }
   else {
+
+    // // We use the 'finishedActivitiys' array to determine what is left.
+    // std::set<short> unstartedSet;
+    //
+    // // Iterate all transitions (1..N)
+    // for (int i = 0; i < petri.Transitions.size(); i++) {
+    //   short taskID = i + 1;
+    //   // If value is -1, the task is either Active or Not Started
+    //   if (state1.finishedActivitiys[taskID] == -1) {
+    //     unstartedSet.insert(taskID);
+    //   }
+    // }
+    //
+    // // 2. Prepare Effective Durations
+    // // Your helper reads the 2nd value of the pair as "Duration".
+    // // The state stores "StartTime".
+    // // We must calculate: Remaining = Total - (Now - Start).
+    // std::vector<std::pair<short, short>> effectiveActiveDurations;
+    // effectiveActiveDurations.reserve(state1.activeTransitionIndices.size());
+    //
+    // for (const auto& entry : state1.activeTransitionIndices) {
+    //   short id = entry.first;
+    //   short startTime = entry.second;
+    //
+    //   // TP LOGIC: Calculate Remaining Duration
+    //   int progress = state1.g - startTime;
+    //   int originalDuration = RCPSPex.activities[id - 1].duration;
+    //   int remaining = originalDuration - progress;
+    //
+    //   // Safety clamp
+    //   if (remaining < 0) remaining = 0;
+    //
+    //   // Push {ID, RemainingDuration} to the temporary vector
+    //   effectiveActiveDurations.push_back({id, (short)remaining});
+    // }
+    //
+    // // 3. Call your Unchanged Helper
+    // // The helper now sees "Active Tasks" with their correct Remaining Durations
+    // return getForwardHcost(unstartedSet, effectiveActiveDurations);
+
+
+
+
+
+
     std::vector<short> tempUnstarted;
 
     // Optimization: Reserve max possible size to prevent re-allocations
@@ -649,7 +715,9 @@ int lastActivityId = -1;
     // Filter independent transitions
     for (int actIdx : tempUnstarted) {
       const std::string& actName = RCPSPex.activities[actIdx - 1].name;
-      if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end()) {
+
+      if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end())
+        {
         independentSet.push_back(actIdx);
       }
     }
@@ -851,6 +919,7 @@ inline double RCPSP_TT::HCost(const RCPSPState_TT &state1, const RCPSPState_TT &
   // Optimization: Reserve memory to prevent re-allocations.
   // If you know the number of unstarted tasks (e.g., total - finished_count), use that.
   // Otherwise, just reserve total.
+
   std::vector<short> tempUnstarted;
 
   // Optimization: Reserve max possible size to prevent re-allocations
@@ -947,18 +1016,44 @@ int lastActivityId = -1;
 
     // return std::max(getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys) - unkTime,
     //            getForwardHcost_TT(newUnstartedTransitions, finishedActivitiysnew));
-
-    h =std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
-               getForwardHcost_TT(newUnstartedTransitions));
+//return getForwardHcost_TT(tempUnstarted) - unkTime;
+   short h1 =getForwardHcost_TT(tempUnstarted) - unkTime;
+    short h2=getForwardHcost_TT(newUnstartedTransitions);
+    if (h1>=h2) {
+      h=h1;
+    }
+    else {
+      h=h2;
+    }
+    state1.h=h;
+    if (state1.h>77) {
+      std::cout<<"not addmissable"<< "\n";
+      std::cout << "latestStart=" << latestStart << ", state1.g=" << state1.g << ", unkTime=" << unkTime << std::endl;
+      std::cout << "All finished activities and their start times:" << std::endl;
+      for (int id = 1; id < state1.finishedActivitiys.size(); ++id) {
+        int finishTime = state1.finishedActivitiys[id];
+        if (finishTime != -1) {
+          int duration = RCPSPex.activities[id - 1].duration;
+          int startTime = finishTime - duration;
+          std::cout << "  Activity " << id << ": start=" << startTime << ", finish=" << finishTime << ", duration=" << duration << std::endl;
+        }
+      }
+    }
   }
   else {
     // Fallback if no finished activities
     h= getForwardHcost_TT(tempUnstarted);
     // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
+    state1.h=h;
+
   }
-if (h+state1.g<state2.g) {
-std::cout << "not admissable";
-}
+// if (h+state1.g<state2.g) {
+// std::cout << "not admissable";
+// }
+// if (h+state1.g>70) {
+//   std::cout<<state1.g<<"\n";
+// }
+
 
   return h;
 
@@ -969,18 +1064,35 @@ inline double RCPSP_TT::GCost(const RCPSPState_TT &state1, const RCPSPState_TT &
 
 inline uint64_t RCPSP_TT::GetStateHash(const RCPSPState_TT &node) const {
   std::size_t seed = 0;
-
-  // Fixed-size loop - compiler can optimize better
+  // 1. Finished Activities (Array 128)
   for (int id = 0; id < 128; ++id) {
-    int time = node.finishedActivitiys[id];
+    // מצפינים את ה-ID ואת הזמן היחסי (Time - G)
+    // בלי IF: גם אם זה מינוס אחד, זה נכנס לחישוב
+    seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<int>{}(node.finishedActivitiys[id]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
 
-    if (time != -1) {
-      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // 2. Activity Nodes (Vector of Pairs)
+  for (const auto& p : node.activity_nodes) {
+    // p.first = ID, p.second = Time
+    seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  // 3. Resource Nodes (Array 4 of Vectors of Pairs)
+  for (int r = 0; r < 4; ++r) {
+    // מצפינים את אינדקס המשאב כדי להפריד בין הוקטורים
+    seed ^= std::hash<int>{}(r) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+
+    for (const auto& p : node.resource_nodes[r]) {
+      // p.first = Amount/ID, p.second = Time
+      seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     }
   }
 
   return seed;
+
 }
 
 inline bool RCPSP_TT::GetNextSuccessor(const RCPSPState_TT &curr, const RCPSPState_TT &goal,

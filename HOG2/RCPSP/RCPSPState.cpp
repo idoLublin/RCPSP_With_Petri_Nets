@@ -4,6 +4,7 @@
 #include <iostream>
 #include <vector>
 #include <set>
+#include <queue>
 #include <unordered_set>
 #include "petriclasses.h"
 #include "RCPSPState.h"
@@ -1850,15 +1851,89 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
     else {
         h = earlyfinishMap2.rbegin()->second;
     }
-if (h==39) {
-    std::cout << "Nodes Expanded: ";
-}
+// if (h==39) {
+//     std::cout << "Nodes Expanded: ";
+// }
     return h;  // Added return statement
 }
+
+// double getForwardHcost_TT(std::vector<short> unstartedTransitions) {
+//     std::map<int, int> earlyfinishMap2;
+//
+//     // BUILD DEPENDENCY GRAPH for unstarted activities
+//     std::map<int, std::vector<int>> graph;
+//     std::map<int, int> in_degree;
+//
+//     for (int activityId : unstartedTransitions) {
+//         in_degree[activityId] = 0;
+//         graph[activityId] = {};
+//     }
+//
+//     // Build graph edges
+//     for (int activityId : unstartedTransitions) {
+//         for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+//             // If dependency is also unstarted, create edge
+//             if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), dep) != unstartedTransitions.end()) {
+//                 graph[dep].push_back(activityId);
+//                 in_degree[activityId]++;
+//             }
+//         }
+//     }
+//
+//     // TOPOLOGICAL SORT
+//     std::queue<int> queue;
+//     std::vector<int> topo_order;
+//
+//     for (auto& [node, degree] : in_degree) {
+//         if (degree == 0) {
+//             queue.push(node);
+//         }
+//     }
+//
+//     while (!queue.empty()) {
+//         int node = queue.front();
+//         queue.pop();
+//         topo_order.push_back(node);
+//
+//         for (int neighbor : graph[node]) {
+//             in_degree[neighbor]--;
+//             if (in_degree[neighbor] == 0) {
+//                 queue.push(neighbor);
+//             }
+//         }
+//     }
+//
+//     // NOW calculate early finish times in TOPOLOGICAL ORDER
+//     for (int activityId : topo_order) {
+//         int maxFinishTime = 0;
+//
+//         for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+//             int depId = dep - 1;
+//
+//             if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+//                 maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+//             }
+//             else {
+//                 maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+//             }
+//         }
+//
+//         earlyfinishMap2[activityId] = maxFinishTime;
+//     }
+//
+//     if (earlyfinishMap2.empty()) {
+//         return 0;
+//     }
+//
+//     return earlyfinishMap2.rbegin()->second;
+// }
+
+
 RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, short transitionId, short firingTime) {
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
+    predessesor_h = prev.h;
 
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];

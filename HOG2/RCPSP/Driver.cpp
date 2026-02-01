@@ -370,7 +370,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << path.size() << ","
         << "TT"<< ","
         << problemType<< ","
-//          << (useCS ? "True" : "False")<< ","
+         << (useCS ? "True" : "False")<< ","
 //     << 100 * generateTIME.count() / elapsed.count() << ","
 // << generateTIME.count() / astar.GetNodesTouched() << ","
 // << 100 * avelableTIME.count() / elapsed.count() << ","
@@ -566,7 +566,7 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 
 void runBenchmark() {
     std::string folder = "new_results";
-    std::string baseName = "output_";
+    std::string baseName = "output!!!!!!_";
     std::string extension = ".csv";
 
     std::string filename = getNextFilename(folder, baseName, extension);
@@ -589,8 +589,10 @@ void runBenchmark() {
      //omp_set_num_threads(2); // 1. Set the core count.
      //#pragma omp parallel for collapse(2) schedule(dynamic)
    //  solveRCPSP_Bi(16, 1, filename, "j30");
-     solveRCPSP_TT(22, 3, filename, "j30");
-
+    // solveRCPSP_TT(16, 9, filename, "j30");
+solveRCPSP_TT(16,8,filename,"j30");
+solveRCPSP_TT(16,9,filename,"j30");
+solveRCPSP_TT(16,4,filename,"j30");
     // for(int i = 1; i < 49; i++) {
     //     for(int j = 1; j < 11; j++) {
     //
@@ -599,10 +601,12 @@ void runBenchmark() {
     //         RCPSPex.reset();
     //
     //         // 2. SOLVE
-    // //        solveRCPSP(i, j, filename, "j30");
-    //         solveRCPSP_TT(i, j, filename, "j30");
+    //         solveRCPSP(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
     //     }
     // }
+
+
     // for(int i = 16; i < 17; i++) {
     //     for(int j = 10; j >0; j--) {
     //

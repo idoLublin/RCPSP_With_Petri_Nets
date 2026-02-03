@@ -4,11 +4,13 @@
 // Your First C++ Program
 
 #include <iostream>
- #include "RCPSPState.cpp"
+#include "RCPSPState.h"
+#include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
 #include "../../HOG2/generic/EPEAStar.h"
-
+#include <filesystem> // <--- 1. Make sure this is here
+namespace fs = std::filesystem;
 #include "RCPSP.h"
 //****importent i changed GLUtil.h with recVec == operator abit****//
  //PetriExample petri;
@@ -47,9 +49,9 @@ int solveRCPSP_Bi();
 #include <thread>
 #include <thread>
 #include <atomic>
-namespace fs = std::filesystem;
 
-double HCost(const RCPSPState_TT &state1, const RCPSPState_TT &state2) {
+
+double HCost_TT(const RCPSPState_TT &state1, const RCPSPState_TT &state2) {
   //return 0;
   // 9. Optimized independent set calculation
   // Optimization: Reserve memory to prevent re-allocations.
@@ -164,6 +166,27 @@ int lastActivityId = -1;
 
 }
 
+double HCost_TT2(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) {
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
+
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+        short taskID = i + 1;
+        // Check for -1 (Not Finished)
+        if (state1.finishedActivitiys[taskID] == 0) {
+            tempUnstarted.push_back(taskID);
+        }
+    }
+
+    // 2. Standard CPM Heuristic
+    // This calculates the longest path among the unstarted tasks.
+    // Since 'g' is the time spent so far, and this H is the time remaining,
+    // F = G + H is admissible.
+    short h = getForwardHcost_TT(tempUnstarted);
+
+    return h;
+
+}
 
 
 
@@ -287,7 +310,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     RCPSPState_TT last = first;
 
 
-    last.g = HCost(last, first);
+    last.g = HCost_TT(last, first);
 
     RCPSP_TT as1;
 
@@ -387,6 +410,108 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     return 0;
 }
+
+ int solveRCPSP_TT2(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
+    std::cout << "started solving TT2: " << group<<":"<<exam << std::endl;
+    count=0;
+    getPetri(petri, group, exam,problemType);
+    getRCPSP(RCPSPex, group, exam,problemType);
+
+    RCPSPState_TT2 first;
+    RCPSPState_TT2 last = first;
+
+
+    last.g = HCost_TT2(last, first);
+
+    RCPSP_TT2 as1;
+
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    //EPEAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    std::vector<RCPSPState_TT2> path;
+
+    // astar.SetReopenNodes(true);  // ← ADD THIS!
+
+    std::chrono::duration<double> elapsed;
+
+    auto start = std::chrono::high_resolution_clock::now();
+   astar.GetPath(&as1, first, last, path);
+    // 1. Setup the search
+    // astar.InitializeSearch(&as1, first, last, path);
+    //
+    // // 2. Setup the timer
+    // auto startTime = std::chrono::steady_clock::now();
+    // auto timeLimit = std::chrono::minutes(5);
+    //
+    // // 3. Run the loop manually
+    // bool found = false;
+    // while (!astar.DoSingleSearchStep(path))
+    // {
+    //     // Check time every step (or every 1000 steps for speed)
+    //     auto currentTime = std::chrono::steady_clock::now();
+    //     if (currentTime - startTime > timeLimit) {
+    //         printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+    //         break;
+    //     }
+    // }
+    //
+    // // 4. Check if we actually found a path
+    // if (path.size() > 0) {
+    //     printf("Solution found! Length: %llu\n", path.size());
+    // } else {
+    //     printf("Failed to find solution (Timeout or No Path).\n");
+    // }
+    //
+    //
+
+
+
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+
+    int makespan = 0;
+
+    if (!path.empty()) {
+        std::cout << "Path found!" << std::endl;
+
+        //for (const auto& state : path) {
+        RCPSPState_TT2 state=path.back();
+            //std::cout << "g: " << state.g;
+
+            // for (const auto& [actId, startTime] : state.startedActivitiys) {
+            //     std::cout << actId << ":" << startTime << " ";
+            // }
+
+            std::cout << std::endl;
+            makespan = state.g;
+        //}
+
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+    }
+     else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+   std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+   // std::cout << "Nodes Touched: " << astar.GetUniqueNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+         << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+        << "TT"<< ","
+        << problemType<< ","
+         << (useCS ? "True" : "False")<< ","
+         << "\n";
+
+    return 0;
+}
+
+
+
 //not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving: " << group << ":" << exam << std::endl;
@@ -590,9 +715,12 @@ void runBenchmark() {
      //#pragma omp parallel for collapse(2) schedule(dynamic)
    //  solveRCPSP_Bi(16, 1, filename, "j30");
     // solveRCPSP_TT(16, 9, filename, "j30");
-solveRCPSP_TT(16,8,filename,"j30");
-solveRCPSP_TT(16,9,filename,"j30");
-solveRCPSP_TT(16,4,filename,"j30");
+solveRCPSP_TT2(16,8,filename,"j30");
+solveRCPSP_TT2(16,9,filename,"j30");
+solveRCPSP_TT2(16,4,filename,"j30");
+    solveRCPSP_TT(16,8,filename,"j30");
+    solveRCPSP_TT(16,9,filename,"j30");
+    solveRCPSP_TT(16,4,filename,"j30");
     // for(int i = 1; i < 49; i++) {
     //     for(int j = 1; j < 11; j++) {
     //

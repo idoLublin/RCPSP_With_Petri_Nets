@@ -61,7 +61,12 @@ struct AStarCompareWithF {
 */
 
 
-// Version 1: For regular RCPSPState
+// =========================================================
+// HELPER FUNCTIONS FOR ALL STATE TYPES
+// Place this BEFORE "struct AStarCompareWithF"
+// =========================================================
+
+// --- 1. Standard RCPSPState ---
 inline size_t getStartedCount(const RCPSPState& state) {
 	size_t count = 0;
 	for (int t : state.startedActivitiys) {
@@ -69,26 +74,37 @@ inline size_t getStartedCount(const RCPSPState& state) {
 	}
 	return count;
 }
+inline size_t getFinishedCount(const RCPSPState& state) {
+	size_t count = 0;
+	for (int t : state.finishedActivitiys) {
+		if (t != -1) count++;
+	}
+	return count;
+}
 
-// Version 2: For RCPSPState_TT
+// --- 2. RCPSPState_TT (Old Timed Transition) ---
 inline size_t getStartedCount(const RCPSPState_TT& state) {
-	return 0;  // TT doesn't track started activities
+	return 0;
+}
+inline size_t getFinishedCount(const RCPSPState_TT& state) {
+	size_t count = 0;
+	for (int t : state.finishedActivitiys) {
+		if (t != -1) count++;
+	}
+	return count;
 }
 
-
-
-
-inline size_t getStartedSize(const RCPSPState_TT& state) {
-	return state.finishedActivitiys.size();
+// --- 3. RCPSPState_TT2 (New Optimized) ---
+inline size_t getStartedCount(const RCPSPState_TT2& state) {
+	return state.activeTransitionIndices.size();
+}
+inline size_t getFinishedCount(const RCPSPState_TT2& state) {
+	// For bitset, use .count(). For array, use the cached variable if available.
+	// Based on your latest code using bitset:
+	return state.finishedActivitiys.count();
 }
 
-// 2. Helper for TP (Standard RCPSP)
-// specific logic: Started = Finished + Active
-inline size_t getStartedSize(const RCPSPState& state) {
-	return state.finishedActivitiys.size() + state.activeTransitionIndices.size();
-}
-
-
+// =========================================================
 std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 //ido lublin 28.4 A*
 
@@ -128,35 +144,29 @@ struct AStarCompareWithF {
 
 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
-		/// 1. Primary: f_score
+		// 1. Primary: f_score
 		if (i1.f != i2.f) return i1.f > i2.f;
 
 		// 2. Secondary: g_score
 		if (i1.g != i2.g) return i1.g < i2.g;
+		size_t finish1 = getFinishedCount(i1.data);
+		size_t finish2 = getFinishedCount(i2.data);
+		if (finish1 != finish2) {
+			return finish1 < finish2;
+		}
 
-		// Helper lambda to count valid items (not -1) - works with both vector and array
-		auto countValid = [](const auto& container) {
-			int count = 0;
-			for (int v : container) {
-				if (v != -1) count++;
-			}
-			return count;
-		};
-
-		// 3. Tertiary: Started Count
+		// 3. Tertiary: Started Count (Uses Helper)
 		size_t start1 = getStartedCount(i1.data);
 		size_t start2 = getStartedCount(i2.data);
 
-		if (start1 != start2) {
+		//if (start1 != start2) {
 			return start1 < start2;
-		}
+		//}
 
-		// 4. Quaternary: Finished Count
-		int finish1 = countValid(i1.data.finishedActivitiys);
-		int finish2 = countValid(i2.data.finishedActivitiys);
-
-		return finish1 < finish2;
-	}
+		// 4. Quaternary: Finished Count (Uses Helper)
+		// This will now correctly call .count() for TT2 (bitset)
+		// and the loop for others (array/vector).
+}
 };
 /*
 struct AStarCompareWithF {

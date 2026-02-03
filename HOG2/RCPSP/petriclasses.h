@@ -168,7 +168,7 @@ public:
                duration == other.duration;
     }
 };
-int getTransitionDuration(const std::vector<Transition>& transitions, const short& name) {
+inline int getTransitionDuration(const std::vector<Transition>& transitions, const short& name) {
     auto it = std::find_if(transitions.begin(), transitions.end(),
                            [&name](const Transition& t) { return t.name == name; });
 
@@ -177,7 +177,7 @@ int getTransitionDuration(const std::vector<Transition>& transitions, const shor
     }
     return -1;  // Return -1 or any other value to indicate not found
 }
-short getTransitionDuration2(const std::vector<std::pair<short, short>>& activeTransitions, short transitionId) {
+inline short getTransitionDuration2(const std::vector<std::pair<short, short>>& activeTransitions, short transitionId) {
     for (const auto& [idx, duration] : activeTransitions) {
         if (idx == transitionId) {
             return duration;

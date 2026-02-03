@@ -8,7 +8,7 @@
 #include "RCPSPState.h"
 #include "../utils//GLUtil.h"
 #include <functional>
-
+#include "petriclasses.h"
 using namespace P_RCPSP;
 
 //creted the RCPSPState in searchgraph
@@ -499,42 +499,42 @@ public:
 
         std::cout << "  Forward: Unstarted=" << tempUnstarted.size() << std::endl;
 
-        auto availableTransitionIndices =
-            getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys,
-                                             nodeID.resource_nodes, nodeID.activity_nodes);
+    //     auto availableTransitionIndices =
+    //         getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys,
+    //                                          nodeID.resource_nodes, nodeID.activity_nodes);
+    //
+    //     std::cout << "  Forward: Available=" << availableTransitionIndices.size() << std::endl;
+    //
+    //     for (const auto& [transId, firingTime] : availableTransitionIndices) {
+    //         neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
+    //     }
+    //
+    // } else {
+    //     // BACKWARD
+    //     std::vector<short> tempFinished;
+    //     tempFinished.reserve(petri.Transitions.size());
+    //
+    //     for (int i = 0; i < petri.Transitions.size(); i++) {
+    //         short taskID = i + 1;
+    //         if (nodeID.finishedActivitiys[taskID] == -1) {
+    //             tempFinished.push_back(taskID);
+    //         }
+    //     }
+        //
+        // std::cout << "  Backward: Finished=" << tempFinished.size() << std::endl;
+        //
+        // auto unfireableTransitions =
+        //     getUnfireableTransitionIndices(tempFinished, nodeID.finishedActivitiys,
+        //                                   nodeID.resource_nodes, nodeID.activity_nodes);
+    //
+    //     std::cout << "  Backward: Unfireable=" << unfireableTransitions.size() << std::endl;
+    //
+    //     for (const auto& [transId, firingTime] : unfireableTransitions) {
+    //         neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
+    //     }
+     }
 
-        std::cout << "  Forward: Available=" << availableTransitionIndices.size() << std::endl;
-
-        for (const auto& [transId, firingTime] : availableTransitionIndices) {
-            neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
-        }
-
-    } else {
-        // BACKWARD
-        std::vector<short> tempFinished;
-        tempFinished.reserve(petri.Transitions.size());
-
-        for (int i = 0; i < petri.Transitions.size(); i++) {
-            short taskID = i + 1;
-            if (nodeID.finishedActivitiys[taskID] == -1) {
-                tempFinished.push_back(taskID);
-            }
-        }
-
-        std::cout << "  Backward: Finished=" << tempFinished.size() << std::endl;
-
-        auto unfireableTransitions =
-            getUnfireableTransitionIndices(tempFinished, nodeID.finishedActivitiys,
-                                          nodeID.resource_nodes, nodeID.activity_nodes);
-
-        std::cout << "  Backward: Unfireable=" << unfireableTransitions.size() << std::endl;
-
-        for (const auto& [transId, firingTime] : unfireableTransitions) {
-            neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
-        }
-    }
-
-    std::cout << "  Generated " << neighbors.size() << " neighbors" << std::endl;
+   // std::cout << "  Generated " << neighbors.size() << " neighbors" << std::endl;
 }
    inline bool GoalTest(const RCPSPState_Bi &node, const RCPSPState_Bi &goal) const override {
   return (node == goal);
@@ -839,6 +839,110 @@ private:
   }
 };
 
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+    const std::vector<short> &unstartedTransitions,
+    const std::array<short, 128> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
+) {
+    std::vector<std::pair<short, short>> available;
+
+    for (short transId : unstartedTransitions) {
+        const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
+
+        // DEBUG: Check if Task 2 has dependencies
+        if (transId == 2 && dependencies.empty()) {
+            std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON Loading Failed)" << std::endl;
+            exit(1);
+        }
+
+        const Activity &act = RCPSPex.activities[transId - 1];
+
+        // 1. Precedence constraints
+        bool allPredsFinished = true;
+        int maxPredFinishTime = 0;
+
+        for (int predId : RCPSPex.backword_dependencies[transId - 1]) {
+            int finishTime = finishedActivitiys[predId];
+
+            if (finishTime == -1) {
+                allPredsFinished = false;
+                break;
+            } else {
+                maxPredFinishTime = std::max(maxPredFinishTime, finishTime);
+            }
+        }
+
+        if (!allPredsFinished)
+            continue;
+
+        // 2. Resource availability
+        bool resourcesOK = true;
+        int maxResourceTime = maxPredFinishTime;
+
+        // Sort resources only once per transition check
+        std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
+        bool resources_sorted[4] = {false, false, false, false};
+
+        for (const auto &[res, demand] : act.resource_demands) {
+            int resID = petri.place_name_to_id.at(res);
+
+            if (resource_nodes[resID].empty()) {
+                resourcesOK = false;
+                break;
+            }
+
+            // Sort only once per resource, only if needed
+            if (!resources_sorted[resID]) {
+                sorted_resources[resID] = resource_nodes[resID];
+                std::sort(sorted_resources[resID].begin(), sorted_resources[resID].end(),
+                          [](const auto &a, const auto &b) { return a.second < b.second; });
+                resources_sorted[resID] = true;
+            }
+
+            const auto& tokens = sorted_resources[resID];
+
+            int totalAvailable = 0;
+            int resourceReadyTime = -1;
+
+            // Count tokens available at maxPredFinishTime
+            for (const auto &[amt, time] : tokens) {
+                if (time <= maxPredFinishTime) {
+                    totalAvailable += amt;
+                }
+            }
+
+            if (totalAvailable >= demand) {
+                resourceReadyTime = maxPredFinishTime;
+            }
+            else {
+                // Check future tokens
+                for (const auto &[amt, time] : tokens) {
+                    if (time > maxPredFinishTime) {
+                        totalAvailable += amt;
+                        if (totalAvailable >= demand) {
+                            resourceReadyTime = time;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (resourceReadyTime == -1) {
+                resourcesOK = false;
+                break;
+            }
+
+            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+        }
+
+        if (resourcesOK) {
+            available.emplace_back(transId, maxResourceTime);
+        }
+    }
+
+    return available;
+}
 
 class RCPSP_TT : public SearchEnvironment<RCPSPState_TT,int>{
 public:
@@ -1324,6 +1428,300 @@ inline void RCPSP_TT::ApplyAction(RCPSPState_TT &s, int a) const {
 inline double RCPSP_TT::GCost(const RCPSPState_TT &node, const int &act) const {
   return node.g;
 }
+
+
+
+
+class RCPSP_TT2 : public SearchEnvironment<RCPSPState_TT2,int>{
+public:
+  RCPSP_TT2();
+  void GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const override;
+  bool GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const override;
+  double HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
+  double GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
+  bool GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,RCPSPState_TT2 &next, double parentH,uint64_t &special, bool &validMove) const;
+
+
+  int GetNumSuccessors(const RCPSPState_TT2 &stateID) const;
+
+
+  int GetAction(const RCPSPState_TT2 &nodeID, const RCPSPState_TT2 &nodeID2) const override;
+  void GetActions(const RCPSPState_TT2 &nodeID, std::vector<int> &actions) const override;
+  void ApplyAction(RCPSPState_TT2 &s, int a) const override;
+  uint64_t GetActionHash(int act) const;
+  uint64_t GetStateHash(const RCPSPState_TT2 &node) const;
+  bool InvertAction(int &a) const;
+  std::vector<RCPSPState_TT2> GetSuccessors(const RCPSPState_TT2 &nodeID) const;
+  double GCost(const RCPSPState_TT2 &node, const int &act) const override;
+};
+
+inline RCPSP_TT2::RCPSP_TT2() {
+}
+
+
+inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
+  //auto startS1 = std::chrono::high_resolution_clock::now();
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of .find() == .end(), we check if the value is -1.
+    if (nodeID.finishedActivitiys[taskID] == 0) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+  // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, nodeID.finishedActivitiys,nodeID.resource_nodes, nodeID.activity_nodes,nodeID.activeTransitionIndices);
+
+  //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
+
+  for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+    neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta));
+  }
+  // auto endS1 = std::chrono::high_resolution_clock::now();
+  // secssesorTIME += endS1 - startS1;
+
+}
+
+inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const {
+  int count = 0;
+
+  // רצים רק על הטווח הרלוונטי (למשל 1 עד 30)
+  for (int i = 1; i <= petri.Transitions.size(); i++) {
+    // אם הערך הוא 1 (סיים), מוסיפים לספירה
+    if (node.finishedActivitiys[i] == 1) {
+      count++;
+    }
+  }
+
+  // אם ספרנו בדיוק כמספר המשימות בבעיה -> סיימנו
+  return count == petri.Transitions.size();
+
+}
+
+
+
+
+inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
+  if (state1.isDeltaZero) {
+    state1.h = state1.predessesor_h;  // FIX: = not ==
+    return state1.h;
+  }
+
+  std::vector<short> tempUnstarted;
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+    if (state1.finishedActivitiys[taskID] == 0) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  state1.h = getForwardHcost_TT2(tempUnstarted,state1.activity_nodes,state1.activeTransitionIndices);  // ← Pass active list
+
+  return state1.h;
+}
+inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
+  return state2.g-state1.g;//+state1.g
+}
+inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
+  std::size_t seed = 0;
+
+  // 1. Finished Activities
+  for (int i = 1; i <= petri.Transitions.size(); ++i) {
+    seed ^= std::hash<int>{}(node.finishedActivitiys[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  // 2. Activity Nodes (Tokens)
+  for (const auto& p : node.activity_nodes) {
+    seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  // 3. Resource Nodes
+  for (const auto& resourceVec : node.resource_nodes) {
+    for (const auto& p : resourceVec) {
+      seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+  }
+
+  // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
+  // Must verify these are SORTED in the state constructor!
+  for (const auto& active : node.activeTransitionIndices) {
+    // Hash the Task ID
+    seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // Hash the Remaining Time (Crucial!)
+    seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  return seed;
+}
+
+inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,
+                      RCPSPState_TT2 &next, double parentH,
+                      uint64_t &special, bool &validMove) const
+{
+
+  // Cache for storing transition lists per node
+  static std::unordered_map<uint64_t, std::vector<std::pair<short, short>>> transitionCache;
+
+  // Compute a hash for the current state
+  uint64_t nodeHash = 0;
+  for (size_t i = 0; i < curr.finishedActivitiys.size(); i++) {
+    nodeHash = nodeHash * 31 + (curr.finishedActivitiys[i] + 1000); // +1000 to handle -1 values
+  }
+  // Add resource state to hash for uniqueness
+  for (size_t i = 0; i < curr.resource_nodes.size(); i++) {
+    for (const auto& [amt, time] : curr.resource_nodes[i]) {
+      nodeHash = nodeHash * 31 + amt;
+      nodeHash = nodeHash * 31 + time;
+    }
+  }
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices;
+
+  if (special == 0) {
+    // First call for this node - generate the transition list
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
+
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+      short taskID = i + 1;
+      if (curr.finishedActivitiys[taskID] == 0) {
+        tempUnstarted.push_back(taskID);
+      }
+    }
+
+    avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, curr.finishedActivitiys,
+                                                                  curr.resource_nodes, curr.activity_nodes,curr.activeTransitionIndices);
+
+    // Optional: Sort for determinism (use this if sorting by time works for you)
+    if (avilableTransitionIndices.size() > 1) {
+      std::sort(avilableTransitionIndices.begin(), avilableTransitionIndices.end(),
+        [](const std::pair<short, short>& a, const std::pair<short, short>& b) {
+           // if (a.second != b.second) return a.second < b.second;  // By firing time
+            return a.first < b.first;  // Then by transition ID
+        });
+    }
+
+    // Cache the transition list
+    transitionCache[nodeHash] = avilableTransitionIndices;
+  } else {
+    // Subsequent calls - retrieve from cache
+    auto it = transitionCache.find(nodeHash);
+    if (it != transitionCache.end()) {
+      avilableTransitionIndices = it->second;
+    } else {
+      // This shouldn't happen, but handle it gracefully
+      std::cerr << "ERROR: Cache miss for node hash " << nodeHash << " with special=" << special << std::endl;
+      validMove = false;
+      return false;
+    }
+  }
+
+  unsigned int index = (unsigned int)special;
+
+  // Check if we have run out of moves
+  if (index >= avilableTransitionIndices.size()) {
+    // Clean up cache when node is fully expanded
+    transitionCache.erase(nodeHash);
+    validMove = false;
+    return false;
+  }
+
+  // Retrieve the specific pair for this step
+  std::pair<short, short> selectedMove = avilableTransitionIndices[index];
+
+  // Generate the full state ONLY for this move
+  next = RCPSPState_TT2(curr, selectedMove.first, selectedMove.second);
+
+  // Mark as valid and increment index
+  validMove = true;
+  special++;
+
+  // Return true if there are more moves in the list
+  return (index + 1 < avilableTransitionIndices.size());
+}
+
+
+inline uint64_t RCPSP_TT2::GetActionHash(int act) const {
+  // Example hash for an action
+  return std::hash<int>()(act);
+}
+inline void RCPSP_TT2::GetActions(const RCPSPState_TT2 &nodeID, std::vector<int> &actions) const {
+  // for (int i = 0; i < nodeID.sons.size(); ++i) {
+  //   actions.push_back(i); // Add the index of each available transition as an action.
+  // }
+}
+
+inline bool RCPSP_TT2::InvertAction(int &a) const {
+  // Example logic to invert an action
+  return true;
+}
+
+inline std::vector<RCPSPState_TT2> RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID) const {
+
+  std::vector<RCPSPState_TT2> neighbors;
+  return neighbors;
+}
+
+
+inline int RCPSP_TT2::GetAction(const RCPSPState_TT2 &nodeID, const RCPSPState_TT2 &nodeID2) const {
+  return 0;
+}
+
+//inline uint64_t RCPSP::GetStateHash(const RCPSPState &s) const {
+// return s.name;
+//}
+inline int RCPSP_TT2::GetNumSuccessors(const RCPSPState_TT2 &stateID) const {
+  //auto startS1 = std::chrono::high_resolution_clock::now();
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // THE FIX: Direct Vector Access (O(1))
+    // Instead of .find() == .end(), we check if the value is -1.
+    if (stateID.finishedActivitiys[taskID] == 0) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+  // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, stateID.finishedActivitiys,stateID.resource_nodes, stateID.activity_nodes,stateID.activeTransitionIndices);
+
+  return avilableTransitionIndices.size();
+}
+
+
+inline void RCPSP_TT2::ApplyAction(RCPSPState_TT2 &s, int a) const {
+
+}
+inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &node, const int &act) const {
+  return node.g;
+}
+
+
+
 
 #endif //RCPSP_H
 //

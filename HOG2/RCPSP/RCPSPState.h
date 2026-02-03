@@ -7,7 +7,9 @@
 #include "readPetri.cpp"
 #ifndef RCPSPSTATE_H
 #define RCPSPSTATE_H
-
+using namespace P_RCPSP;
+thread_local PetriExample petri;
+thread_local RCPSP_example RCPSPex;
 std::string finalstatename;
 std::string initialstatename;
 class RCPSPState {
@@ -41,9 +43,55 @@ mutable short h = 0;
     bool operator==(const RCPSPState_TT& other) const;
 };
 
+#include <vector>
+#include <array>
+#include <bitset>
+#include <utility> // for std::pair
 
+class RCPSPState_TT2 {
+public:
+    // 1. Resources: Pairs of <Amount/ID, TimeRemaining>
+    // TimeRemaining = 0 means available NOW.
+    std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
 
+    // 2. Activity Tokens: Pairs of <PlaceID, TimeRemaining>
+    std::vector<std::pair<short, short>> activity_nodes;
 
+    // 3. Finished Tasks: 16 bytes vs 128 bytes
+    std::bitset<128> finishedActivitiys;
+
+    // 4. Cached Indices (Derived Data)
+    // You want to keep this for now.
+    // WARNING: This is redundant data (derived from the nodes above).
+    std::vector<std::pair<short, short>> activeTransitionIndices;
+    bool isDeltaZero;
+    short g = 0;
+    short g_pre = 0;
+    mutable short h = 0;
+    short predessesor_h = 0;
+
+    RCPSPState_TT2();
+    RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime);
+
+    // Equality is CRITICAL for Relative Time
+    bool operator==(const RCPSPState_TT2& other) const {
+        // 1. Bitset comparison (fast)
+        if (finishedActivitiys != other.finishedActivitiys) return false;
+
+        // 2. Vectors must be SORTED for this to work!
+        // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
+        // they are the same state, but == will return false if not sorted.
+        if (activity_nodes != other.activity_nodes) return false;
+        if (resource_nodes != other.resource_nodes) return false;
+
+        // CRITICAL: Do NOT compare activeTransitionIndices here!
+        // Since it is derived data, if it is calculated/sorted slightly differently
+        // it might prevent merging of identical states.
+        // Only compare the "Physical" state.
+
+        return true;
+    }
+};
 int computeEarlyFinishTime(int activityId);
 
 class RCPSPState_Bi {
@@ -136,4 +184,34 @@ public:
 
     // Create goal state
 };
+
+
+
+
+// IN YOUR HEADER FILE (.h)
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
+    const std::vector<short> &unstartedTransitions,
+    const std::bitset<128> &finishedActivitiys,  // ← Changed to bitset
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes,
+    const std::vector<std::pair<short, short>> &activeTransitionIndices
+);
+
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
+    const std::vector<short> &unstartedTransitions,
+    const std::vector<short> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes
+);
+double getForwardHcost_TT(std::vector<short>unstartedTransitions);
+double getForwardHcost(std::vector<short>unstartedTransitions,
+                      std::vector<std::pair<short, short>>activeTransitionIndices
+                      );
+short getForwardHcost_TT2(
+const std::vector<short>& unstartedTransitions,
+const std::vector<std::pair<short, short>>& activity_tokens,
+const std::vector<std::pair<short, short>>& active_activities
+);
+double getForwardHcost_TT(const std::array<short, 128>& unstartedTransitions);
+
 #endif // RCPSPSTATE_H

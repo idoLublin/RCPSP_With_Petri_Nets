@@ -149,24 +149,23 @@ struct AStarCompareWithF {
 
 		// 2. Secondary: g_score
 		if (i1.g != i2.g) return i1.g < i2.g;
-		size_t finish1 = getFinishedCount(i1.data);
-		size_t finish2 = getFinishedCount(i2.data);
-		if (finish1 != finish2) {
-			return finish1 < finish2;
-		}
 
 		// 3. Tertiary: Started Count (Uses Helper)
 		size_t start1 = getStartedCount(i1.data);
 		size_t start2 = getStartedCount(i2.data);
 
-		//if (start1 != start2) {
+		if (start1 != start2) {
 			return start1 < start2;
-		//}
+		}
 
 		// 4. Quaternary: Finished Count (Uses Helper)
 		// This will now correctly call .count() for TT2 (bitset)
 		// and the loop for others (array/vector).
-}
+		size_t finish1 = getFinishedCount(i1.data);
+		size_t finish2 = getFinishedCount(i2.data);
+
+		return finish1 < finish2;
+	}
 };
 /*
 struct AStarCompareWithF {

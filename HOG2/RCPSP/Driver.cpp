@@ -472,7 +472,32 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     if (!path.empty()) {
         std::cout << "Path found!" << std::endl;
+        std::cout << "{'scheduling': {";
 
+        bool first = true;
+        int realJobCount = 0;
+
+        for (const auto& state : path) {
+            // Skip the root node (Action -1) or Dummy Source (0) if you don't want it counted
+            // Adjust 'state.lastTransitionId > 0' if Task 0 is a real job in your system.
+            if (state.lastTransitionId <= 0) continue;
+
+            if (!first) std::cout << ", ";
+            std::cout << "'" << state.lastTransitionId << "': " << state.g;
+
+            first = false;
+            realJobCount++;
+        }
+
+        std::cout << "}, ";
+
+        // 2. Print Statistics
+        makespan = path.back().g; // Final state G is the makespan
+
+        std::cout << "'total_jobs_scheduled': " << realJobCount << ", ";
+        std::cout << "'makespan': " << makespan << ", ";
+        std::cout << "'solved': True, ";
+        std::cout << "}" << std::endl;
         //for (const auto& state : path) {
         RCPSPState_TT2 state=path.back();
             //std::cout << "g: " << state.g;
@@ -715,12 +740,12 @@ void runBenchmark() {
      //#pragma omp parallel for collapse(2) schedule(dynamic)
    //  solveRCPSP_Bi(16, 1, filename, "j30");
     // solveRCPSP_TT(16, 9, filename, "j30");
-solveRCPSP_TT2(16,8,filename,"j30");
+//solveRCPSP_TT2(16,8,filename,"j30");
 solveRCPSP_TT2(16,9,filename,"j30");
-solveRCPSP_TT2(16,4,filename,"j30");
-    solveRCPSP_TT(16,8,filename,"j30");
+//solveRCPSP_TT2(16,4,filename,"j30");
+   // solveRCPSP_TT(16,8,filename,"j30");
     solveRCPSP_TT(16,9,filename,"j30");
-    solveRCPSP_TT(16,4,filename,"j30");
+   // solveRCPSP_TT(16,4,filename,"j30");
     // for(int i = 1; i < 49; i++) {
     //     for(int j = 1; j < 11; j++) {
     //

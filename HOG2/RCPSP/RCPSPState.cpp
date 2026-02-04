@@ -1987,6 +1987,10 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<std::pair<short, short>> &activity_nodes,
     const std::vector<std::pair<short, short>> &activeTransitionIndices
 ) {
+
+
+
+
     std::vector<std::pair<short, short>> available;
 
     // Create a set of active task IDs for fast lookup
@@ -2180,10 +2184,11 @@ RCPSPState_TT2::RCPSPState_TT2() {
 
 RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime) {
     // 1. Update Global Cost (G)
+
     isDeltaZero = (firingTime == 0);
     g = prev.g + firingTime;
     predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization
-
+    lastTransitionId=transitionId;
     // 2. Copy State
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;
@@ -2219,16 +2224,16 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
 
                 // Produce output tokens for this completed activity
                 const Transition& completedTransition = petri.Transitions[completedTaskID - 1];
-                for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
-                    if (placeID < 4) {
-                        // Resource output
-                        resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
-                    } else {
-                        // Activity dependency output
-                        short idx = placeID - 4;
-                        activity_nodes[idx] = {outAmount, 0};  // Available NOW
-                    }
-                }
+                // for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
+                //     if (placeID < 4) {
+                //         // Resource output
+                //         resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
+                //     } else {
+                //         // Activity dependency output
+                //         short idx = placeID - 4;
+                //         activity_nodes[idx] = {outAmount, 0};  // Available NOW
+                //     }
+                // }
 
                 // Remove from active list
                 it = activeTransitionIndices.erase(it);
@@ -2275,28 +2280,49 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
     }
 
     // 6. ADD TO ACTIVE LIST (instead of marking as finished immediately)
+    // 6. ADD TO ACTIVE LIST & GENERATE FUTURE EVENTS
     if (duration > 0) {
-        // Activity takes time - add to active list
+        // A. Track the Task (for "Finished" status logic)
         activeTransitionIndices.emplace_back(transitionId, duration);
 
-        // Sort active list by remaining time (optional, but helps with debugging)
-        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end(),
-                 [](const auto& a, const auto& b) { return a.second < b.second; });
+        // B. THE FIX: Immediately return outputs as "Future Events"
+        // We put resources back NOW, but marked as "Available in 'duration' seconds"
+        const Transition& currentTrans = petri.Transitions[transitionId - 1];
+
+        for (const auto& [placeID, outAmount] : currentTrans.arcs_out_indices) {
+            if (placeID < 4) {
+                // RESOURCE: Return it now with a delay
+                resource_nodes[placeID].emplace_back(outAmount, duration);
+            }
+            else {
+                // ACTIVITY TOKEN: Produce it now with a delay
+                // (Be careful with index math: placeID 4 is index 0 in activity_nodes?)
+                // Assuming your activity_nodes starts from Place 4:
+                short idx = placeID - 4;
+                // Only add if not already there (or handled by your specific logic)
+                // For TT, usually we just set the availability time:
+                if(idx < activity_nodes.size()) {
+                    activity_nodes[idx] = {outAmount, duration};
+                }
+            }
+        }
+
+        // Optional: Sort active list
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+
     } else {
-        // Duration is 0 - finish immediately
+        // Duration is 0 - finish immediately (Existing Logic)
         finishedActivitiys[transitionId] = 1;
 
-        // 7. Produce New Tokens (Output) - only if duration is 0
-        for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        for (const auto& [placeID, outAmount] : petri.Transitions[transitionId-1].arcs_out_indices) {
             if (placeID < 4) {
                 resource_nodes[placeID].emplace_back(outAmount, 0);
             } else {
                 short idx = placeID - 4;
-                activity_nodes[idx] = {outAmount, 0};
+                if(idx < activity_nodes.size()) activity_nodes[idx] = {outAmount, 0};
             }
         }
     }
-
     // NOTE: If duration > 0, outputs are produced when activity completes (in TIME SHIFT section above)
 
     // 8. Canonical Sort & Merge (Only for Resources)
@@ -2363,7 +2389,11 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
             }
         }
     }
-    bool i;
+    // if (firingTime==7&&transitionId != 26) {
+    //     int i;
+    //     i++;
+    // }
+
 }
 
 short getForwardHcost_TT2(

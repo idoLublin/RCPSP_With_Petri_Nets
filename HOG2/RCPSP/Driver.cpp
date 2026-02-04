@@ -483,7 +483,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
             if (state.lastTransitionId <= 0) continue;
 
             if (!first) std::cout << ", ";
-            std::cout << "'" << state.lastTransitionId << "': " << state.g;
+            std::cout << "'" << state.lastTransitionId << "': " << state.g<<","<<state.h;
 
             first = false;
             realJobCount++;
@@ -741,6 +741,7 @@ void runBenchmark() {
    //  solveRCPSP_Bi(16, 1, filename, "j30");
     // solveRCPSP_TT(16, 9, filename, "j30");
 //solveRCPSP_TT2(16,8,filename,"j30");
+solveRCPSP(16,9,filename,"j30");
 solveRCPSP_TT2(16,9,filename,"j30");
 //solveRCPSP_TT2(16,4,filename,"j30");
    // solveRCPSP_TT(16,8,filename,"j30");

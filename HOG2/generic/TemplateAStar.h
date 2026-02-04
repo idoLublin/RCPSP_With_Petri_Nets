@@ -67,14 +67,14 @@ struct AStarCompareWithF {
 // =========================================================
 
 // --- 1. Standard RCPSPState ---
-inline size_t getStartedCount(const RCPSPState& state) {
+inline size_t getcomper1(const RCPSPState& state) {
 	size_t count = 0;
 	for (int t : state.startedActivitiys) {
 		if (t != -1) count++;
 	}
 	return count;
 }
-inline size_t getFinishedCount(const RCPSPState& state) {
+inline size_t getcomper2(const RCPSPState& state) {
 	size_t count = 0;
 	for (int t : state.finishedActivitiys) {
 		if (t != -1) count++;
@@ -83,10 +83,10 @@ inline size_t getFinishedCount(const RCPSPState& state) {
 }
 
 // --- 2. RCPSPState_TT (Old Timed Transition) ---
-inline size_t getStartedCount(const RCPSPState_TT& state) {
+inline size_t getcomper1(const RCPSPState_TT& state) {
 	return 0;
 }
-inline size_t getFinishedCount(const RCPSPState_TT& state) {
+inline size_t getcomper2(const RCPSPState_TT& state) {
 	size_t count = 0;
 	for (int t : state.finishedActivitiys) {
 		if (t != -1) count++;
@@ -95,10 +95,10 @@ inline size_t getFinishedCount(const RCPSPState_TT& state) {
 }
 
 // --- 3. RCPSPState_TT2 (New Optimized) ---
-inline size_t getStartedCount(const RCPSPState_TT2& state) {
+inline size_t getcomper2(const RCPSPState_TT2& state) {
 	return state.activeTransitionIndices.size();
 }
-inline size_t getFinishedCount(const RCPSPState_TT2& state) {
+inline size_t getcomper1(const RCPSPState_TT2& state) {
 	// For bitset, use .count(). For array, use the cached variable if available.
 	// Based on your latest code using bitset:
 	return state.finishedActivitiys.count();
@@ -151,8 +151,8 @@ struct AStarCompareWithF {
 		if (i1.g != i2.g) return i1.g < i2.g;
 
 		// 3. Tertiary: Started Count (Uses Helper)
-		size_t start1 = getStartedCount(i1.data);
-		size_t start2 = getStartedCount(i2.data);
+		size_t start1 = getcomper1(i1.data);
+		size_t start2 = getcomper1(i2.data);
 
 		if (start1 != start2) {
 			return start1 < start2;
@@ -161,8 +161,8 @@ struct AStarCompareWithF {
 		// 4. Quaternary: Finished Count (Uses Helper)
 		// This will now correctly call .count() for TT2 (bitset)
 		// and the loop for others (array/vector).
-		size_t finish1 = getFinishedCount(i1.data);
-		size_t finish2 = getFinishedCount(i2.data);
+		size_t finish1 = getcomper2(i1.data);
+		size_t finish2 = getcomper2(i2.data);
 
 		return finish1 < finish2;
 	}

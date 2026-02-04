@@ -2177,7 +2177,7 @@ RCPSPState_TT2::RCPSPState_TT2() {
     }
 
 
-    h=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices);
+    h=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices,finishedActivitiys);
     predessesor_h=h;
     g = 0;
 }
@@ -2301,8 +2301,10 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
                 short idx = placeID - 4;
                 // Only add if not already there (or handled by your specific logic)
                 // For TT, usually we just set the availability time:
-                if(idx < activity_nodes.size()) {
-                    activity_nodes[idx] = {outAmount, duration};
+                if (idx < activity_nodes.size()) {
+                    if (activity_nodes[idx].first == 0 || activity_nodes[idx].second > duration) {
+                        activity_nodes[idx] = {outAmount, duration};
+                    }
                 }
             }
         }
@@ -2397,47 +2399,42 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
 }
 
 short getForwardHcost_TT2(
-     const std::vector<short>& unstartedTransitions,
-     const std::vector<std::pair<short, short>>& activity_tokens,
-     const std::vector<std::pair<short, short>>& active_activities)  // ← ADD THIS!
+    const std::vector<short>& unstartedTransitions,
+    const std::vector<std::pair<short, short>>& activity_tokens,
+    const std::vector<std::pair<short, short>>& active_activities,
+    const std::bitset<128>& finishedActivitiys)  // ← ADD THIS!
 {
     std::map<int, int> earlyFinishMap;
 
-    // 1. FIRST: Initialize finished activities (EFT = 0)
-    for (size_t i = 0; i < activity_tokens.size(); i++) {
-        int taskID = i + 1;
-        if (activity_tokens[i].second == 0) {  // Finished (no remaining time)
-            earlyFinishMap[taskID] = 0;
+    // 1. Initialize ALL finished activities (EFT = 0)
+    for (size_t i = 1; i < finishedActivitiys.size(); i++) {
+        if (finishedActivitiys.test(i)) {  // Finished
+            earlyFinishMap[i] = 0;
         }
     }
 
-    // 2. SECOND: Initialize active activities (EFT = remaining time)
+    // 2. Initialize active activities (EFT = remaining time)
     for (const auto& [taskID, remainingTime] : active_activities) {
         earlyFinishMap[taskID] = remainingTime;
     }
 
     int maxH = 0;
 
-    // 3. Also consider active activities in maxH
+    // 3. Include active activities in maxH
     for (const auto& [taskID, remainingTime] : active_activities) {
-        int temp=remainingTime;
-        maxH = std::max(maxH, temp);
+        maxH = std::max(maxH, (int)remainingTime);
     }
 
-    // 4. Process unstarted activities in dependency order
-    // THIS IS CRITICAL: You need topological sort or multiple passes!
-
-    // Simple fix: Multiple passes until no changes
+    // 4. Process unstarted activities
     bool changed = true;
     int iterations = 0;
-    const int MAX_ITER = 1000;  // Safety limit
+    const int MAX_ITER = 1000;
 
     while (changed && iterations < MAX_ITER) {
         changed = false;
         iterations++;
 
         for (short taskID : unstartedTransitions) {
-            // Skip if already calculated in this pass
             if (earlyFinishMap.count(taskID) && iterations > 1) {
                 continue;
             }
@@ -2445,26 +2442,22 @@ short getForwardHcost_TT2(
             int maxPredFinish = 0;
             bool allPredsReady = true;
 
-            // Check all predecessors
             for (int predID : RCPSPex.backword_dependencies[taskID - 1]) {
                 if (earlyFinishMap.count(predID)) {
                     maxPredFinish = std::max(maxPredFinish, earlyFinishMap[predID]);
                 } else {
-                    // Predecessor not yet calculated - skip this task for now
                     allPredsReady = false;
                     break;
                 }
             }
 
             if (!allPredsReady) {
-                continue;  // Will process in next iteration
+                continue;
             }
 
-            // Calculate EFT for this task
             int duration = RCPSPex.activities[taskID - 1].duration;
             int myFinish = maxPredFinish + duration;
 
-            // Update if changed
             if (!earlyFinishMap.count(taskID) || earlyFinishMap[taskID] != myFinish) {
                 earlyFinishMap[taskID] = myFinish;
                 changed = true;
@@ -2476,6 +2469,8 @@ short getForwardHcost_TT2(
 
     return maxH;
 }
+
+
 double getForwardHcost_TT(std::vector<short>unstartedTransitions
 ) {
   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times

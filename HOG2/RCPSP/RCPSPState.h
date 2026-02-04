@@ -208,10 +208,10 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
                       std::vector<std::pair<short, short>>activeTransitionIndices
                       );
 short getForwardHcost_TT2(
-const std::vector<short>& unstartedTransitions,
-const std::vector<std::pair<short, short>>& activity_tokens,
-const std::vector<std::pair<short, short>>& active_activities
-);
+    const std::vector<short>& unstartedTransitions,
+    const std::vector<std::pair<short, short>>& activity_tokens,
+    const std::vector<std::pair<short, short>>& active_activities,
+    const std::bitset<128>& finishedActivitiys) ;
 double getForwardHcost_TT(const std::array<short, 128>& unstartedTransitions);
 
 #endif // RCPSPSTATE_H

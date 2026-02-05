@@ -271,7 +271,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
-         << (!path.empty() ? "True" : "False") << ","
+             << (!path.empty() ? "True" : "False") << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
@@ -527,7 +527,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-        << "TT"<< ","
+        << "TT2"<< ","
         << problemType<< ","
          << (useCS ? "True" : "False")<< ","
          << "\n";
@@ -741,11 +741,11 @@ void runBenchmark() {
    //  solveRCPSP_Bi(16, 1, filename, "j30");
     // solveRCPSP_TT(16, 9, filename, "j30");
 //solveRCPSP_TT2(16,8,filename,"j30");
-solveRCPSP(16,9,filename,"j30");
-solveRCPSP_TT2(16,9,filename,"j30");
-//solveRCPSP_TT2(16,4,filename,"j30");
-   // solveRCPSP_TT(16,8,filename,"j30");
-    solveRCPSP_TT(16,9,filename,"j30");
+// solveRCPSP(16,9,filename,"j30");
+// solveRCPSP_TT2(16,9,filename,"j30");
+// //solveRCPSP_TT2(16,4,filename,"j30");
+//    // solveRCPSP_TT(16,8,filename,"j30");
+     solveRCPSP_TT(16,9,filename,"j30");
    // solveRCPSP_TT(16,4,filename,"j30");
     // for(int i = 1; i < 49; i++) {
     //     for(int j = 1; j < 11; j++) {
@@ -761,18 +761,20 @@ solveRCPSP_TT2(16,9,filename,"j30");
     // }
 
 
-    // for(int i = 16; i < 17; i++) {
-    //     for(int j = 10; j >0; j--) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         //        solveRCPSP(i, j, filename, "j30");
-    //         solveRCPSP_TT(i, j, filename, "j30");
-    //     }
-    // }
+    for(int i = 16; i < 17; i++) {
+        for(int j = 10; j >0; j--) {
+
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            //        solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT(i, j, filename, "j30");
+            solveRCPSP(i, j, filename, "j30");
+            solveRCPSP_TT2(i, j, filename, "j30");
+        }
+    }
 
 
     // for(int i = 16; i < 17; i++) {

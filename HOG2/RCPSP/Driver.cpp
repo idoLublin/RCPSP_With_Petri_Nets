@@ -561,11 +561,12 @@ void runSolver(const Config& config) {
     activeHeuristic = config.heuristic;
     useDPHeuristic = config.useDP;
 
-    // Warn if selected heuristic is not yet implemented
-    if (activeHeuristic != P_RCPSP::HeuristicType::CRITICAL_PATH) {
+    // Warn if selected heuristic is not yet implemented (LBCS is now implemented)
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
         std::cerr << "WARNING: Heuristic '"
                   << P_RCPSP::heuristicTypeToString(activeHeuristic)
                   << "' is not yet implemented. Falling back to Critical Path (CP).\n";
+        activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
     }
 
     // Load optimal makespan for validation

@@ -203,6 +203,304 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions) {
     return maxH;
 }
 
+// ============================================================================
+// LBCS: Lower Bound Critical Sequence
+// Based on Stinson, Davis & Khumawala (1978), as described in
+// Coelho & Vanhoucke (2018), Section 2.1
+// ============================================================================
+
+/**
+ * Compute LBCS for TT method.
+ * Only considers unstarted activities (TT has no "active" transitions concept in HCost).
+ *
+ * @param unstartedTransitions  Activity IDs (1-based) that are not yet finished, in ascending order
+ * @return  LBCS lower bound value
+ */
+double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
+    if (unstartedTransitions.empty()) return 0;
+
+    // --- Step 1: Forward pass (ES, EF) for remaining activities ---
+    std::array<int, MAX_ACTIVITIES> ES, EF;
+    ES.fill(-1);
+    EF.fill(-1);
+
+    // Process in topological order (ascending ID)
+    for (short actId : unstartedTransitions) {
+        int maxPredFinish = 0;
+        for (int dep : RCPSPex.backword_dependencies[actId - 1]) {
+            if (EF[dep] != -1) {
+                maxPredFinish = std::max(maxPredFinish, EF[dep]);
+            }
+            // Finished predecessors: contribute 0 (already done)
+        }
+        ES[actId] = maxPredFinish;
+        EF[actId] = maxPredFinish + RCPSPex.activities[actId - 1].duration;
+    }
+
+    // CPM = max earliest finish
+    int CPM = 0;
+    for (short actId : unstartedTransitions) {
+        CPM = std::max(CPM, EF[actId]);
+    }
+
+    if (CPM == 0) return 0;
+
+    // --- Step 2: Backward pass (LF) ---
+    // LF[act] = min over successors s of (LF[s] - duration[s])
+    // For activities with no remaining successors: LF = CPM
+    std::array<int, MAX_ACTIVITIES> LF;
+    LF.fill(-1);
+
+    // Process in reverse topological order (descending ID)
+    for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
+        short actId = unstartedTransitions[idx];
+        int minSuccLS = CPM; // default: can finish at project end
+
+        for (int succ : RCPSPex.dependencies[actId - 1]) {
+            if (LF[succ] != -1) {
+                int LS_succ = LF[succ] - RCPSPex.activities[succ - 1].duration;
+                minSuccLS = std::min(minSuccLS, LS_succ);
+            }
+        }
+
+        LF[actId] = minSuccLS;
+    }
+
+    // --- Step 3: Identify critical vs non-critical ---
+    std::vector<short> criticalActivities;
+    std::vector<short> nonCriticalActivities;
+
+    for (short actId : unstartedTransitions) {
+        int slack = LF[actId] - EF[actId];
+        if (slack == 0) {
+            criticalActivities.push_back(actId);
+        } else if (slack > 0) {
+            nonCriticalActivities.push_back(actId);
+        }
+    }
+
+    if (nonCriticalActivities.empty()) {
+        return CPM; // All critical, no extension possible
+    }
+
+    // --- Step 4: Sort non-critical by duration descending ---
+    std::sort(nonCriticalActivities.begin(), nonCriticalActivities.end(),
+              [](short a, short b) {
+                  return RCPSPex.activities[a - 1].duration > RCPSPex.activities[b - 1].duration;
+              });
+
+    // --- Step 5: Build resource usage profile of critical activities ---
+    int numResources = RCPSPex.resources.size();
+
+    // resourceUsage[resourceIdx][time] = usage at time t by critical activities
+    std::vector<std::vector<int>> resourceUsage(numResources, std::vector<int>(CPM, 0));
+
+    for (short actId : criticalActivities) {
+        int es = ES[actId];
+        int ef = EF[actId];
+        for (int k = 0; k < numResources; k++) {
+            const std::string& resName = RCPSPex.resources[k].first;
+            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
+            if (it != RCPSPex.activities[actId - 1].resource_demands.end() && it->second > 0) {
+                for (int t = es; t < ef && t < CPM; t++) {
+                    resourceUsage[k][t] += it->second;
+                }
+            }
+        }
+    }
+
+    // --- Step 6: Greedy extension check ---
+    int maxExtension = 0;
+
+    for (short actId : nonCriticalActivities) {
+        int dur = RCPSPex.activities[actId - 1].duration;
+        int es = ES[actId];
+        int lf = LF[actId];
+
+        int minAvailableSlots = INT_MAX; // min over all resources
+
+        for (int k = 0; k < numResources; k++) {
+            const std::string& resName = RCPSPex.resources[k].first;
+            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
+            if (it == RCPSPex.activities[actId - 1].resource_demands.end() || it->second == 0) {
+                continue; // No demand for this resource
+            }
+
+            int demand = it->second;
+            int capacity = RCPSPex.resources[k].second;
+
+            int availableSlots = 0;
+            for (int t = es; t < lf && t < CPM; t++) {
+                int remainingCap = capacity - resourceUsage[k][t];
+                if (remainingCap >= demand) {
+                    availableSlots++;
+                }
+            }
+
+            minAvailableSlots = std::min(minAvailableSlots, availableSlots);
+        }
+
+        if (minAvailableSlots == INT_MAX) {
+            minAvailableSlots = dur; // No resource constraints
+        }
+
+        int extension = std::max(0, dur - minAvailableSlots);
+        maxExtension = std::max(maxExtension, extension);
+    }
+
+    return CPM + maxExtension;
+}
+
+/**
+ * Compute LBCS for TP method.
+ * Accounts for active transitions that have remaining durations.
+ *
+ * @param unstartedTransitions      Activity IDs (1-based) not yet finished, in ascending order
+ * @param activeTransitionIndices   Currently active transitions: (transitionID, remainingDuration)
+ * @return  LBCS lower bound value
+ */
+double computeLBCS(const std::vector<short>& unstartedTransitions,
+                   const std::vector<std::pair<short, short>>& activeTransitionIndices) {
+    if (unstartedTransitions.empty()) return 0;
+
+    // Build active transition lookup
+    std::array<short, MAX_ACTIVITIES> activeRemaining;
+    activeRemaining.fill(-1);
+    for (const auto& [transIdx, remaining] : activeTransitionIndices) {
+        activeRemaining[transIdx] = remaining;
+    }
+
+    // --- Step 1: Forward pass (ES, EF) ---
+    std::array<int, MAX_ACTIVITIES> ES, EF;
+    ES.fill(-1);
+    EF.fill(-1);
+
+    for (short actId : unstartedTransitions) {
+        if (activeRemaining[actId] != -1) {
+            // Active: already started, remaining time only
+            ES[actId] = 0;
+            EF[actId] = activeRemaining[actId];
+            continue;
+        }
+
+        int maxPredFinish = 0;
+        for (int dep : RCPSPex.backword_dependencies[actId - 1]) {
+            if (EF[dep] != -1) {
+                maxPredFinish = std::max(maxPredFinish, EF[dep]);
+            }
+        }
+        ES[actId] = maxPredFinish;
+        EF[actId] = maxPredFinish + RCPSPex.activities[actId - 1].duration;
+    }
+
+    int CPM = 0;
+    for (short actId : unstartedTransitions) {
+        CPM = std::max(CPM, EF[actId]);
+    }
+
+    if (CPM == 0) return 0;
+
+    // --- Step 2: Backward pass (LF) ---
+    std::array<int, MAX_ACTIVITIES> LF;
+    LF.fill(-1);
+
+    for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
+        short actId = unstartedTransitions[idx];
+        int minSuccLS = CPM;
+
+        for (int succ : RCPSPex.dependencies[actId - 1]) {
+            if (LF[succ] != -1) {
+                int dur_succ = (activeRemaining[succ] != -1)
+                    ? activeRemaining[succ]
+                    : RCPSPex.activities[succ - 1].duration;
+                int LS_succ = LF[succ] - dur_succ;
+                minSuccLS = std::min(minSuccLS, LS_succ);
+            }
+        }
+
+        LF[actId] = minSuccLS;
+    }
+
+    // --- Step 3: Identify critical vs non-critical ---
+    std::vector<short> criticalActivities;
+    std::vector<short> nonCriticalActivities;
+
+    for (short actId : unstartedTransitions) {
+        // Skip active transitions for non-critical check (they're already committed)
+        if (activeRemaining[actId] != -1) {
+            // Active transitions are treated as critical (fixed schedule)
+            criticalActivities.push_back(actId);
+            continue;
+        }
+        int slack = LF[actId] - EF[actId];
+        if (slack == 0) {
+            criticalActivities.push_back(actId);
+        } else if (slack > 0) {
+            nonCriticalActivities.push_back(actId);
+        }
+    }
+
+    if (nonCriticalActivities.empty()) return CPM;
+
+    // --- Step 4: Sort non-critical by duration descending ---
+    std::sort(nonCriticalActivities.begin(), nonCriticalActivities.end(),
+              [](short a, short b) {
+                  return RCPSPex.activities[a - 1].duration > RCPSPex.activities[b - 1].duration;
+              });
+
+    // --- Step 5: Resource profile of critical activities ---
+    int numResources = RCPSPex.resources.size();
+    std::vector<std::vector<int>> resourceUsage(numResources, std::vector<int>(CPM, 0));
+
+    for (short actId : criticalActivities) {
+        int es = ES[actId];
+        int ef = EF[actId];
+        for (int k = 0; k < numResources; k++) {
+            const std::string& resName = RCPSPex.resources[k].first;
+            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
+            if (it != RCPSPex.activities[actId - 1].resource_demands.end() && it->second > 0) {
+                for (int t = es; t < ef && t < CPM; t++) {
+                    resourceUsage[k][t] += it->second;
+                }
+            }
+        }
+    }
+
+    // --- Step 6: Greedy extension check ---
+    int maxExtension = 0;
+
+    for (short actId : nonCriticalActivities) {
+        int dur = RCPSPex.activities[actId - 1].duration;
+        int es = ES[actId];
+        int lf = LF[actId];
+
+        int minAvailableSlots = INT_MAX;
+
+        for (int k = 0; k < numResources; k++) {
+            const std::string& resName = RCPSPex.resources[k].first;
+            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
+            if (it == RCPSPex.activities[actId - 1].resource_demands.end() || it->second == 0) continue;
+
+            int demand = it->second;
+            int capacity = RCPSPex.resources[k].second;
+
+            int availableSlots = 0;
+            for (int t = es; t < lf && t < CPM; t++) {
+                if (capacity - resourceUsage[k][t] >= demand) availableSlots++;
+            }
+
+            minAvailableSlots = std::min(minAvailableSlots, availableSlots);
+        }
+
+        if (minAvailableSlots == INT_MAX) minAvailableSlots = dur;
+
+        int extension = std::max(0, dur - minAvailableSlots);
+        maxExtension = std::max(maxExtension, extension);
+    }
+
+    return CPM + maxExtension;
+}
+
  int main2() {
    return 0;
  }

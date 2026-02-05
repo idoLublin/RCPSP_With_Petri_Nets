@@ -6,6 +6,7 @@
 //#include "../algorithms/OldSearchEnvironment.h"
 #include "../search/SearchEnvironment.h"
 #include "RCPSPState.h"
+#include "HeuristicTypes.h"
 #include "../utils//GLUtil.h"
 #include <functional>
 
@@ -23,8 +24,16 @@ double getForwardHcost(std::vector<short> unstartedTransitions,
                        std::vector<std::pair<short, short>> activeTransitionIndices);
 double getForwardHcost_TT(std::vector<short> unstartedTransitions);
 
+// Forward declarations for LBCS heuristic
+double computeLBCS(const std::vector<short>& unstartedTransitions,
+                   const std::vector<std::pair<short, short>>& activeTransitionIndices);
+double computeLBCS_TT(const std::vector<short>& unstartedTransitions);
+
 // Global DP toggle (defined in Driver.cpp)
 extern bool useDPHeuristic;
+
+// Global heuristic type (defined in Driver.cpp)
+extern P_RCPSP::HeuristicType activeHeuristic;
 
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
@@ -267,8 +276,10 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       }
     }
 
-    // Heuristic calculation: DP or non-DP based on configuration
-    if (useDPHeuristic) {
+    // Heuristic calculation based on selected heuristic type
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+      state1.h = computeLBCS(tempUnstarted, state1.activeTransitionIndices);
+    } else if (useDPHeuristic) {
       state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
     } else {
       state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
@@ -706,8 +717,11 @@ int lastActivityId = -1;
       finishedActivitiysnew[actIdx] = 0;
     }
 
-    // Heuristic calculation: DP or non-DP based on configuration
-    if (useDPHeuristic) {
+    // Heuristic calculation based on selected heuristic type
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+      return std::max(computeLBCS_TT(tempUnstarted) - unkTime,
+             computeLBCS_TT(newUnstartedTransitions));
+    } else if (useDPHeuristic) {
       return std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
              getForwardHcostDP_TT(newUnstartedTransitions));
     } else {
@@ -716,7 +730,9 @@ int lastActivityId = -1;
     }
   } else {
     // Fallback if no finished activities
-    if (useDPHeuristic) {
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+      return computeLBCS_TT(tempUnstarted);
+    } else if (useDPHeuristic) {
       return getForwardHcostDP_TT(tempUnstarted);
     } else {
       return getForwardHcost_TT(tempUnstarted);

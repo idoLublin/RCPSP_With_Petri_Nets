@@ -50,10 +50,11 @@ struct Config {
     
     // Algorithm options
     bool useCS = true;
+    std::string heuristic = "cp";  // Heuristic: "cp" (critical path), "lbcc" (critical capacity)
     bool sortResults = true;
     bool writeHeader = true;
     int timeLimit = 300;  // Time limit per problem in seconds (default: 300 = 5 minutes)
-    
+
     // Display help
     bool showHelp = false;
 };
@@ -84,6 +85,7 @@ void printUsage(const char* programName) {
               << "  --time-limit N     Time limit per problem in seconds (default: 300)\n"
               << "  --use-cs           Enable CS optimization (default: true)\n"
               << "  --no-cs            Disable CS optimization\n"
+              << "  --heuristic NAME   Heuristic to use: cp (critical path, default), cc (critical capacity)\n"
               << "  --no-sort          Disable result sorting\n"
               << "  --no-header        Don't write CSV header\n"
               << "  --help, -h         Show this help message\n\n"
@@ -92,7 +94,7 @@ void printUsage(const char* programName) {
               << "  RCPSP_EXAM_START, RCPSP_EXAM_END\n"
               << "  RCPSP_PROBLEM_TYPE, RCPSP_METHOD\n"
               << "  RCPSP_OUTPUT_FOLDER, RCPSP_OUTPUT_FILE, RCPSP_TAG\n"
-              << "  RCPSP_USE_CS (0 or 1), RCPSP_TIME_LIMIT\n\n"
+              << "  RCPSP_USE_CS (0 or 1), RCPSP_HEURISTIC (cp, cc), RCPSP_TIME_LIMIT\n\n"
               << "Examples:\n"
               << "  " << programName << " --group-start 1 --group-end 5 --method tp\n"
               << "  " << programName << " --problem-type j60 --output-file my_results.csv\n"
@@ -136,6 +138,7 @@ Config parseArgs(int argc, char* argv[]) {
     config.outputFile = getEnvOrDefault("RCPSP_OUTPUT_FILE", config.outputFile);
     config.tag = getEnvOrDefault("RCPSP_TAG", config.tag);
     config.useCS = getEnvOrDefault("RCPSP_USE_CS", config.useCS);
+    config.heuristic = getEnvOrDefault("RCPSP_HEURISTIC", config.heuristic);
     config.timeLimit = getEnvOrDefault("RCPSP_TIME_LIMIT", config.timeLimit);
     
     // Parse command-line arguments (override env vars)
@@ -168,6 +171,8 @@ Config parseArgs(int argc, char* argv[]) {
             config.useCS = true;
         } else if (arg == "--no-cs") {
             config.useCS = false;
+        } else if (arg == "--heuristic" && i + 1 < argc) {
+            config.heuristic = argv[++i];
         } else if (arg == "--no-sort") {
             config.sortResults = false;
         } else if (arg == "--no-header") {
@@ -460,11 +465,13 @@ void runSolver(const Config& config) {
     std::cout << "  Method: " << config.method << "\n";
     std::cout << "  Output: " << filename << "\n";
     std::cout << "  Use CS: " << (config.useCS ? "Yes" : "No") << "\n";
+    std::cout << "  Heuristic: " << config.heuristic << "\n";
     std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
-    
-    // Set global useCS flag
+
+    // Set global flags
     useCS = config.useCS;
+    activeHeuristic = config.heuristic;
     
     // Open output file
     std::ofstream file(filename);
@@ -486,6 +493,7 @@ void runSolver(const Config& config) {
             petri.reset();
             RCPSPex.reset();
             heuristicDPInitialized = false;  // Reset DP cache for new problem
+            lbccInitialized = false;         // Reset LBcc cache for new problem
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {

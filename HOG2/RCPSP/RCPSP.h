@@ -18,6 +18,18 @@ double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions);
 void initializeHeuristicDP();
 extern thread_local bool heuristicDPInitialized;
 
+// Forward declarations for LBcc (Critical Capacity Lower Bound)
+void initializeLBcc();
+double computeCriticalCapacityLB(
+    const std::vector<short>& unfinishedActivities,
+    const std::vector<std::pair<short, short>>& activeTransitions,
+    int currentMakespan
+);
+extern thread_local bool lbccInitialized;
+
+// Heuristic selector: "cp", "cc", etc.
+extern std::string activeHeuristic;
+
 //creted the RCPSPState in searchgraph
 // class RCPSPState{
 // searchNode node;
@@ -259,8 +271,19 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       }
     }
 
-    // DP-based heuristic: Uses precomputed values instead of recalculating from scratch
-    state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+    // Dispatch based on selected heuristic
+    if (activeHeuristic == "cc") {
+      double cpH = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+      double lbccH = computeCriticalCapacityLB(
+          tempUnstarted,
+          state1.activeTransitionIndices,
+          state1.g
+      );
+      state1.h = std::max(cpH, lbccH);
+    } else {
+      // Default: "cp" (critical path)
+      state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+    }
     return state1.h;
   }
   //return state1.h;

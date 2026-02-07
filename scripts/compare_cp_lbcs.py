@@ -33,8 +33,9 @@ def load_rs(filepath):
 
 def main():
     base = "data/"
-    cp_file = base + "2026-02-01_j30_g1-48_e1-10_tt_cp_dp.csv"
-    lbcs_file = base + "2026-02-02_j30_g1-48_e1-10_tt_lbcs.csv"
+    base_date = base + "real_data/"
+    cp_file = base_date + "2026-02-01_j30_g1-48_e1-10_tt_cp_dp.csv"
+    lbcs_file = base_date + "2026-02-02_j30_g1-48_e1-10_tt_lbcs.csv"
     rs_file = base + "TT_ido.csv"
 
     cp = load_results(cp_file)
@@ -85,23 +86,6 @@ def main():
         for key in cp_only:
             rs = rs_map.get(key, -1)
             print(f"  g{key[0]:2d} e{key[1]:2d}  RS={rs:.2f}  CP: {cp[key]['time']:.1f}s  expanded={cp[key]['expanded']}")
-        print()
-
-    if neither:
-        print("--- Neither solved (both timed out) ---")
-        for key in neither:
-            rs = rs_map.get(key, -1)
-            print(f"  g{key[0]:2d} e{key[1]:2d}  RS={rs:.2f}  CP expanded={cp[key]['expanded']:,}  LBCS expanded={lbcs[key]['expanded']:,}")
-        print()
-
-    # Also check: problems CP solved but LBCS hasn't attempted yet
-    cp_only_not_attempted = sorted(set(cp.keys()) - set(lbcs.keys()))
-    if cp_only_not_attempted:
-        # Group by solved/unsolved in CP
-        cp_solved_not_in_lbcs = [k for k in cp_only_not_attempted if cp[k]['finished']]
-        cp_unsolved_not_in_lbcs = [k for k in cp_only_not_attempted if not cp[k]['finished']]
-        print(f"--- CP attempted but LBCS hasn't reached yet: {len(cp_only_not_attempted)} problems ---")
-        print(f"    Of which CP solved: {len(cp_solved_not_in_lbcs)}, CP unsolved: {len(cp_unsolved_not_in_lbcs)}")
         print()
 
     # For both_solved: compare node expansions

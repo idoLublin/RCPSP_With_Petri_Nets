@@ -93,7 +93,16 @@ inline size_t getcomper2(const RCPSPState_TT& state) {
 	}
 	return count;
 }
-
+inline size_t getcomper1(const RCPSPState_Bi& state) {
+	return 0;
+}
+inline size_t getcomper2(const RCPSPState_Bi& state) {
+	size_t count = 0;
+	for (int t : state.finishedActivitiys) {
+		if (t != -1) count++;
+	}
+	return count;
+}
 // --- 3. RCPSPState_TT2 (New Optimized) ---
 inline size_t getcomper2(const RCPSPState_TT2& state) {
 	return state.activeTransitionIndices.size();

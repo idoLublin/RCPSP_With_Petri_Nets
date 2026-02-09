@@ -29,6 +29,13 @@ double computeLBCS(const std::vector<short>& unstartedTransitions,
                    const std::vector<std::pair<short, short>>& activeTransitionIndices);
 double computeLBCS_TT(const std::vector<short>& unstartedTransitions);
 
+// Forward declarations for LBcc heuristic
+void initializeLBcc();
+double computeCriticalCapacityLB(
+    const std::vector<short>& unfinishedActivities,
+    const std::vector<std::pair<short, short>>& activeTransitions,
+    int currentMakespan);
+
 // Global DP toggle (defined in Driver.cpp)
 extern bool useDPHeuristic;
 
@@ -277,7 +284,11 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
     }
 
     // Heuristic calculation based on selected heuristic type
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
+      double cpH = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+      double lbccH = computeCriticalCapacityLB(tempUnstarted, state1.activeTransitionIndices, state1.g);
+      state1.h = std::max(cpH, lbccH);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       state1.h = computeLBCS(tempUnstarted, state1.activeTransitionIndices);
     } else if (useDPHeuristic) {
       state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
@@ -718,7 +729,14 @@ int lastActivityId = -1;
     }
 
     // Heuristic calculation based on selected heuristic type
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
+      double cpVal = std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
+                              getForwardHcostDP_TT(newUnstartedTransitions));
+      std::vector<std::pair<short, short>> emptyActive;
+      double lbccVal = std::max(computeCriticalCapacityLB(tempUnstarted, emptyActive, state1.g) - unkTime,
+                                computeCriticalCapacityLB(newUnstartedTransitions, emptyActive, state1.g));
+      return std::max(cpVal, lbccVal);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return std::max(computeLBCS_TT(tempUnstarted) - unkTime,
              computeLBCS_TT(newUnstartedTransitions));
     } else if (useDPHeuristic) {
@@ -730,7 +748,12 @@ int lastActivityId = -1;
     }
   } else {
     // Fallback if no finished activities
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
+      double cpVal = getForwardHcostDP_TT(tempUnstarted);
+      std::vector<std::pair<short, short>> emptyActive;
+      double lbccVal = computeCriticalCapacityLB(tempUnstarted, emptyActive, state1.g);
+      return std::max(cpVal, lbccVal);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return computeLBCS_TT(tempUnstarted);
     } else if (useDPHeuristic) {
       return getForwardHcostDP_TT(tempUnstarted);

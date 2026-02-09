@@ -104,7 +104,7 @@ struct Config {
     bool sortResults = true;
     bool writeHeader = true;
     int timeLimit = 300;  // Time limit per problem in seconds (default: 300 = 5 minutes)
-    
+
     // Display help
     bool showHelp = false;
 };
@@ -561,14 +561,6 @@ void runSolver(const Config& config) {
     activeHeuristic = config.heuristic;
     useDPHeuristic = config.useDP;
 
-    // Warn if selected heuristic is not yet implemented (LBCS is now implemented)
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
-        std::cerr << "WARNING: Heuristic '"
-                  << P_RCPSP::heuristicTypeToString(activeHeuristic)
-                  << "' is not yet implemented. Falling back to Critical Path (CP).\n";
-        activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
-    }
-
     // Load optimal makespan for validation
     optimalMakespan = loadOptimalMakespan(config.problemType);
 
@@ -592,6 +584,7 @@ void runSolver(const Config& config) {
             petri.reset();
             RCPSPex.reset();
             heuristicDPInitialized = false;  // Reset DP cache for new problem
+            lbccInitialized = false;         // Reset LBcc cache for new problem
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {

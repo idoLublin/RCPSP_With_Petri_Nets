@@ -2194,7 +2194,9 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
     activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
-
+    // ✅ CORRECT: Child gets fresh cache
+    transitionsCached = false;
+    AvailableTransitionIndices_TT2.clear(); // or just leave empty
     // 3. TIME SHIFT (Update "Remaining Time")
     if (firingTime > 0) {
         // Update resource tokens

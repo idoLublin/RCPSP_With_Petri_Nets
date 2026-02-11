@@ -92,30 +92,35 @@ size_t getFinishedCountGeneric(const T& data) {
 // ---------------------------------------------------------
 template <class state>
 struct EPEAStarCompare {
+	// --- 1. Standard RCPSPState ---
+
 	bool operator()(const EPEAOpenClosedData<state> &i1, const EPEAOpenClosedData<state> &i2) const
 	{
-		double f1 = i1.g + i1.h;
-		double f2 = i2.g + i2.h;
+		// 1. Primary: f_score
+		short f1 = i1.g+i1.h;
+		short f2 = i2.g+i2.h;
+		if (f1 != f2) return f1> f2;
 
-		// Use DIRECT comparison like TemplateAStar
-		if (f1 != f2) {
-			return f1 > f2;  // Min f
-		}
+		// 2. Secondary: g_score
+		if (i1.g != i2.g) return i1.g < i2.g;
 
-		if (i1.g != i2.g) {
-			return i1.g < i2.g;  // Max g
-		}
+		// 3. Tertiary: Started Count (Uses Helper)
+		size_t start1 = getcomper1(i1.data);
+		size_t start2 = getcomper1(i2.data);
 
-		size_t start1 = getStartedCount(i1.data);
-		size_t start2 = getStartedCount(i2.data);
 		if (start1 != start2) {
 			return start1 < start2;
 		}
 
-		size_t finish1 = getFinishedCountGeneric(i1.data);
-		size_t finish2 = getFinishedCountGeneric(i2.data);
+		// 4. Quaternary: Finished Count (Uses Helper)
+		// This will now correctly call .count() for TT2 (bitset)
+		// and the loop for others (array/vector).
+		size_t finish1 = getcomper2(i1.data);
+		size_t finish2 = getcomper2(i2.data);
+
 		return finish1 < finish2;
 	}
+
 
 };
 

@@ -425,8 +425,8 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     RCPSP_TT2 as1;
 
-    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
-    //EPEAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    //TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    EPEAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
     std::vector<RCPSPState_TT2> path;
 
     // astar.SetReopenNodes(true);  // ← ADD THIS!
@@ -434,34 +434,34 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
-   astar.GetPath(&as1, first, last, path);
+   //astar.GetPath(&as1, first, last, path);
     // 1. Setup the search
-    // astar.InitializeSearch(&as1, first, last, path);
-    //
-    // // 2. Setup the timer
-    // auto startTime = std::chrono::steady_clock::now();
-    // auto timeLimit = std::chrono::minutes(5);
-    //
-    // // 3. Run the loop manually
-    // bool found = false;
-    // while (!astar.DoSingleSearchStep(path))
-    // {
-    //     // Check time every step (or every 1000 steps for speed)
-    //     auto currentTime = std::chrono::steady_clock::now();
-    //     if (currentTime - startTime > timeLimit) {
-    //         printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
-    //         break;
-    //     }
-    // }
-    //
-    // // 4. Check if we actually found a path
-    // if (path.size() > 0) {
-    //     printf("Solution found! Length: %llu\n", path.size());
-    // } else {
-    //     printf("Failed to find solution (Timeout or No Path).\n");
-    // }
-    //
-    //
+    astar.InitializeSearch(&as1, first, last, path);
+
+    // 2. Setup the timer
+    auto startTime = std::chrono::steady_clock::now();
+    auto timeLimit = std::chrono::minutes(5);
+
+    // 3. Run the loop manually
+    bool found = false;
+    while (!astar.DoSingleSearchStep(path))
+    {
+        // Check time every step (or every 1000 steps for speed)
+        auto currentTime = std::chrono::steady_clock::now();
+        if (currentTime - startTime > timeLimit) {
+            printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+            break;
+        }
+    }
+
+    // 4. Check if we actually found a path
+    if (path.size() > 0) {
+        printf("Solution found! Length: %llu\n", path.size());
+    } else {
+        printf("Failed to find solution (Timeout or No Path).\n");
+    }
+
+
 
 
 
@@ -742,9 +742,9 @@ void runBenchmark() {
     // solveRCPSP_TT(16, 9, filename, "j30");
 //solveRCPSP_TT2(16,8,filename,"j30");
 // solveRCPSP(16,9,filename,"j30");
- solveRCPSP_TT2(3,1,filename,"j30");
-// //solveRCPSP_TT2(16,4,filename,"j30");
-//    // solveRCPSP_TT(16,8,filename,"j30");
+ //solveRCPSP_TT2(3,1,filename,"j30");
+// solveRCPSP_TT2(16,2,filename,"j30");
+//     solveRCPSP_TT(16,2,filename,"j30");
    //  solveRCPSP_TT(16,9,filename,"j30");
    // solveRCPSP_TT(16,4,filename,"j30");
     // for(int i = 1; i < 49; i++) {
@@ -777,7 +777,7 @@ void runBenchmark() {
     // }
 
 
-    // for(int i = 16; i < 17; i++) {
+    // for(int i = 16; i < 20; i++) {
     //     for(int j = 1; j < 11; j++) {
     //
     //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
@@ -786,7 +786,7 @@ void runBenchmark() {
     //
     //         // 2. SOLVE
     //         //        solveRCPSP(i, j, filename, "j30");
-    //         solveRCPSP_TT(i, j, filename, "j30");
+    //         solveRCPSP_TT2(i, j, filename, "j30");
     //     }
     // }
     // solveRCPSP_TT(9, 1, filename, "j30");

@@ -175,6 +175,7 @@ struct AStarCompareWithF {
 
 		return finish1 < finish2;
 	}
+
 };
 /*
 struct AStarCompareWithF {

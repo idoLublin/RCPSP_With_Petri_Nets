@@ -1564,14 +1564,14 @@ inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
 
   // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
   // Must verify these are SORTED in the state constructor!
-  // for (const auto& active : node.activeTransitionIndices) {
-  //   // Hash the Task ID
-  //   seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   // Hash the Remaining Time (Crucial!)
-  //   seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
-  // seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  for (const auto& active : node.activeTransitionIndices) {
+    // Hash the Task ID
+    seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // Hash the Remaining Time (Crucial!)
+    seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+  seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 
   return seed;
 }
@@ -1580,27 +1580,8 @@ inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPS
                       RCPSPState_TT2 &next, double parentH,
                       uint64_t &special, bool &validMove) const
 {
-
-  // Cache for storing transition lists per node
-  static std::unordered_map<uint64_t, std::vector<std::pair<short, short>>> transitionCache;
-
-  // Compute a hash for the current state
-  uint64_t nodeHash = 0;
-  for (size_t i = 0; i < curr.finishedActivitiys.size(); i++) {
-    nodeHash = nodeHash * 31 + (curr.finishedActivitiys[i] + 1000); // +1000 to handle -1 values
-  }
-  // Add resource state to hash for uniqueness
-  for (size_t i = 0; i < curr.resource_nodes.size(); i++) {
-    for (const auto& [amt, time] : curr.resource_nodes[i]) {
-      nodeHash = nodeHash * 31 + amt;
-      nodeHash = nodeHash * 31 + time;
-    }
-  }
-
-  std::vector<std::pair<short, short>> avilableTransitionIndices;
-
-  if (special == 0) {
-    // First call for this node - generate the transition list
+  if (special == 0 && !curr.transitionsCached) {
+    // First call for this node - generate and cache
     std::vector<short> tempUnstarted;
     tempUnstarted.reserve(petri.Transitions.size());
 
@@ -1611,57 +1592,42 @@ inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPS
       }
     }
 
-    avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, curr.finishedActivitiys,
-                                                                  curr.resource_nodes, curr.activity_nodes,curr.activeTransitionIndices);
+    curr.AvailableTransitionIndices_TT2 = getAvailableTransitionIndices_TT2(tempUnstarted,
+                                                                curr.finishedActivitiys,
+                                                                curr.resource_nodes,
+                                                                curr.activity_nodes,
+                                                                curr.activeTransitionIndices);
 
-    // Optional: Sort for determinism (use this if sorting by time works for you)
-    if (avilableTransitionIndices.size() > 1) {
-      std::sort(avilableTransitionIndices.begin(), avilableTransitionIndices.end(),
+    // Sort for determinism
+    if (curr.AvailableTransitionIndices_TT2.size() > 1) {
+      std::sort(curr.AvailableTransitionIndices_TT2.begin(), curr.AvailableTransitionIndices_TT2.end(),
         [](const std::pair<short, short>& a, const std::pair<short, short>& b) {
-           // if (a.second != b.second) return a.second < b.second;  // By firing time
-            return a.first < b.first;  // Then by transition ID
+            return a.first < b.first;
         });
     }
 
-    // Cache the transition list
-    transitionCache[nodeHash] = avilableTransitionIndices;
-  } else {
-    // Subsequent calls - retrieve from cache
-    auto it = transitionCache.find(nodeHash);
-    if (it != transitionCache.end()) {
-      avilableTransitionIndices = it->second;
-    } else {
-      // This shouldn't happen, but handle it gracefully
-      std::cerr << "ERROR: Cache miss for node hash " << nodeHash << " with special=" << special << std::endl;
-      validMove = false;
-      return false;
-    }
+    curr.transitionsCached = true;
   }
 
   unsigned int index = (unsigned int)special;
 
   // Check if we have run out of moves
-  if (index >= avilableTransitionIndices.size()) {
-    // Clean up cache when node is fully expanded
-    transitionCache.erase(nodeHash);
+  if (index >= curr.AvailableTransitionIndices_TT2.size()) {
     validMove = false;
     return false;
   }
 
   // Retrieve the specific pair for this step
-  std::pair<short, short> selectedMove = avilableTransitionIndices[index];
+  std::pair<short, short> selectedMove = curr.AvailableTransitionIndices_TT2[index];
 
-  // Generate the full state ONLY for this move
+  // Generate the next state for this move
   next = RCPSPState_TT2(curr, selectedMove.first, selectedMove.second);
 
-  // Mark as valid and increment index
   validMove = true;
   special++;
 
-  // Return true if there are more moves in the list
-  return (index + 1 < avilableTransitionIndices.size());
+  return (index + 1 < curr.AvailableTransitionIndices_TT2.size());
 }
-
 
 inline uint64_t RCPSP_TT2::GetActionHash(int act) const {
   // Example hash for an action

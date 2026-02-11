@@ -159,6 +159,11 @@ public:
     // You want to keep this for now.
     // WARNING: This is redundant data (derived from the nodes above).
     std::vector<std::pair<short, short>> activeTransitionIndices;
+
+    // Add these for caching transitions
+    mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
+    mutable bool transitionsCached = false;
+
     bool isDeltaZero;
     short g = 0;
     short g_pre = 0;

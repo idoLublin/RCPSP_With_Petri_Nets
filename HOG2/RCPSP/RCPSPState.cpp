@@ -283,63 +283,62 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 }
 
 double getBackwardHcost(std::vector<short> unstartedTransitions,
-    std::vector<std::pair<short, short>> activeTransitionIndices) {
-// Map to store Early Finish Time (EFT) relative to Start (Time 0)
-    std::unordered_map<int, int> earlyFinishMap;
+                        std::vector<std::pair<short, short>> activeTransitionIndices) {
+
+    std::map<int, int> earlyfinishMap2;
     double h = 0;
 
-    // 1. Process Fully Start-Side Tasks
-    // We assume startSideTransitions is sorted topologically (1..N).
-    // These are tasks that have "Finished" in the Start->Current view.
-    for (short activityId : unstartedTransitions) {
-        int maxPredTime = 0;
+    // 1. FILL THE MAP BASED ON CURRENT STATE
+    for (int activityId = 1; activityId <= RCPSPex.activities.size(); ++activityId) {
+        int maxParentFinish = 0;
+        int idx = activityId - 1;
 
-        // Check all predecessors (Standard dependencies)
-        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
-            // If predecessor is in our set, we use its calculated time.
-            // If not, it means it's a Source or not in the cut (which shouldn't happen for valid subsets)
-            if (earlyFinishMap.count(dep)) {
-                maxPredTime = std::max(maxPredTime, earlyFinishMap[dep]);
-            }
+        // Standard Forward Pass
+        for (int dep : RCPSPex.backword_dependencies[idx]) {
+            maxParentFinish = std::max(maxParentFinish, earlyfinishMap2[dep]);
         }
 
-        int duration = RCPSPex.activities[activityId - 1].duration;
-        int finish = maxPredTime + duration;
+        // --- THE DYNAMIC DURATION LOGIC ---
+        int effectiveDuration = 0;
 
-        earlyFinishMap[activityId] = finish;
-        h = std::max(h, (double)finish);
+        // Is this task Active?
+        int remaining = getTransitionDuration2(activeTransitionIndices, activityId);
+
+        if (remaining != -1) {
+            // Task is partially undone. Its "length" from the start is Total - Remaining.
+           // effectiveDuration = RCPSPex.activities[idx].duration - remaining;
+            effectiveDuration = remaining;
+        }
+        else if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), activityId) != unstartedTransitions.end()) {
+            // Task is still fully Finished (1). Use full duration.
+            effectiveDuration = RCPSPex.activities[idx].duration;
+        }
+        else {
+            // Task is already Un-finished (0). It effectively has 0 duration now.
+            effectiveDuration = 0;
+        }
+
+        earlyfinishMap2[activityId] = maxParentFinish + effectiveDuration;
     }
 
-    // 2. Process Active Tasks (The Current Frontier)
-    // These tasks are currently "running". We only count the part that has finished.
-    for (const auto& entry : activeTransitionIndices) {
-        short activityId = entry.first;
-        short remaining = entry.second;
+    // 2. RETURN THE HIGH-WATER MARK
+    if (earlyfinishMap2.empty()) return 0;
 
-        int maxPredTime = 0;
-        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
-            if (earlyFinishMap.count(dep)) {
-                maxPredTime = std::max(maxPredTime, earlyFinishMap[dep]);
-            }
+    // We only care about the finish times of tasks that are still "in" the project
+    for (int activityId : unstartedTransitions) {
+        if (earlyfinishMap2[activityId] > h) {
+            h = (double)earlyfinishMap2[activityId];
         }
+    }
 
-        int totalDuration = RCPSPex.activities[activityId - 1].duration;
-
-        // "Effective Duration" = How much of the task has completed so far
-        int effectiveDuration = std::max(0, totalDuration - remaining);
-
-        int finish = maxPredTime + effectiveDuration;
-
-        // We update h, but we generally don't add active tasks to the map
-        // because no other task in this cut should depend on an incomplete active task.
-        h = std::max(h, (double)finish);
+    // Also check active tasks specifically (though they should be in unstartedTransitions)
+    for (const auto& [taskID, remainingTime] : activeTransitionIndices) {
+        if (earlyfinishMap2[taskID] > h) {
+            h = (double)earlyfinishMap2[taskID];
+        }
     }
 
     return h;
-
-
-
-
 }
 
 std::vector<int> getCriticalPath(const std::map<int, int>& earlyfinishTimes,
@@ -2542,7 +2541,8 @@ if (direction) {
     //     i++;
     // }
 }
-    else {
+
+else {
     isDeltaZero = (firingTime == 0);
     g = prev.g + firingTime;
     predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization

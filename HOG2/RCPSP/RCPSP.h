@@ -1785,7 +1785,7 @@ inline double RCPSP_TT2_Backward::HCost(const RCPSPState_TT2 &state1, const RCPS
   for (int i = 0; i < petri.Transitions.size(); i++) {
     short taskID = i + 1;
     // FIX: Use .test() for bitset
-    if (!state1.finishedActivitiys.test(taskID)) {
+    if (state1.finishedActivitiys.test(taskID)) {//no ! unlike forward
       tempUnstarted.push_back(taskID);
     }
   }
@@ -1795,12 +1795,16 @@ inline double RCPSP_TT2_Backward::HCost(const RCPSPState_TT2 &state1, const RCPS
                                   state1.activeTransitionIndices//,
                                 //  state1.finishedActivitiys
                                   );  // ← ADD THIS
-
+// if (state1.g+state1.h <44 ) {
+//   std::cout<<"unadmissable";
+// }
   return state1.h;
 }
+
 inline double RCPSP_TT2_Backward::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
   return state2.g-state1.g;//+state1.g
 }
+
 inline uint64_t RCPSP_TT2_Backward::GetStateHash(const RCPSPState_TT2 &node) const {
   std::size_t seed = 0;
 

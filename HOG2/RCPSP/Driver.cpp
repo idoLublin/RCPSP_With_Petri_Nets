@@ -451,8 +451,8 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     RCPSP_TT2 as1;
 
-    //TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
-    EPEAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    //EPEAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
     std::vector<RCPSPState_TT2> path;
 
     // astar.SetReopenNodes(true);  // ← ADD THIS!
@@ -460,33 +460,33 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
-   //astar.GetPath(&as1, first, last, path);
-    // 1. Setup the search
-    astar.InitializeSearch(&as1, first, last, path);
-
-    // 2. Setup the timer
-    auto startTime = std::chrono::steady_clock::now();
-    auto timeLimit = std::chrono::minutes(5);
-
-    // 3. Run the loop manually
-    bool found = false;
-    while (!astar.DoSingleSearchStep(path))
-    {
-        // Check time every step (or every 1000 steps for speed)
-        auto currentTime = std::chrono::steady_clock::now();
-        if (currentTime - startTime > timeLimit) {
-            printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
-            break;
-        }
-    }
-
-    // 4. Check if we actually found a path
-    if (path.size() > 0) {
-        printf("Solution found! Length: %llu\n", path.size());
-    } else {
-        printf("Failed to find solution (Timeout or No Path).\n");
-    }
-
+   astar.GetPath(&as1, first, last, path);
+    // // 1. Setup the search
+    // astar.InitializeSearch(&as1, first, last, path);
+    //
+    // // 2. Setup the timer
+    // auto startTime = std::chrono::steady_clock::now();
+    // auto timeLimit = std::chrono::minutes(5);
+    //
+    // // 3. Run the loop manually
+    // bool found = false;
+    // while (!astar.DoSingleSearchStep(path))
+    // {
+    //     // Check time every step (or every 1000 steps for speed)
+    //     auto currentTime = std::chrono::steady_clock::now();
+    //     if (currentTime - startTime > timeLimit) {
+    //         printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+    //         break;
+    //     }
+    // }
+    //
+    // // 4. Check if we actually found a path
+    // if (path.size() > 0) {
+    //     printf("Solution found! Length: %llu\n", path.size());
+    // } else {
+    //     printf("Failed to find solution (Timeout or No Path).\n");
+    // }
+    //
 
 
 
@@ -614,7 +614,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     // 4. Set Heuristic
     // 4. Set Heuristic properly using the Environment
     // This calculates the Critical Path from "End" to "Start"
-    backward_start.h = HCost_TT2(backward_goal, backward_start);
+    backward_start.h = HCost_TT2_Backward(backward_start, backward_goal);
     backward_start.predessesor_h = backward_start.h;
     // 4. Run A* (Backward)
     // Start at "Project End", go to "Project Start"
@@ -941,21 +941,21 @@ void runBenchmark() {
 // solveRCPSP_TT2(16,2,filename,"j30");
 //     solveRCPSP_TT(16,2,filename,"j30");
      //
-     solveRCPSP_TT2_Backward(16,9,filename,"j30");
+   //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
-    // for(int i = 16; i < 17; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //     }
-    // }
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
+
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
+        }
+    }
 
 
     // for(int i = 1; i < 49; i++) {

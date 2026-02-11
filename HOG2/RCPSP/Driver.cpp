@@ -188,6 +188,32 @@ double HCost_TT2(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) {
 
 }
 
+double HCost_TT2_Backward(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) {
+    if (state1.isDeltaZero) {
+        state1.h = state1.predessesor_h;
+        return state1.h;
+    }
+
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
+
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+        short taskID = i + 1;
+        // FIX: Use .test() for bitset
+        if (!state1.finishedActivitiys.test(taskID)) {
+            tempUnstarted.push_back(taskID);
+        }
+    }
+
+    state1.h = getBackwardHcost(tempUnstarted,
+                                    //state1.activity_nodes,
+                                    state1.activeTransitionIndices//,
+                                  //  state1.finishedActivitiys
+                                    );  // ← ADD THIS
+
+    return state1.h;
+
+}
 
 
 int solveRCPSP(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
@@ -535,6 +561,175 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     return 0;
 }
 
+ int solveRCPSP_TT2_Backward(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
+    std::cout << "started solving TT2 Backward: " << group<<":"<<exam << std::endl;
+    count=0;
+    getPetri(petri, group, exam,problemType);
+    getRCPSP(RCPSPex, group, exam,problemType);
+
+// 1. Initialize Goal (Project Start)
+    // The constructor already creates the "Project Start" state (Source token, 0 finished).
+    // --- BACKWARD SEARCH SETUP ---
+
+    // 1. Goal Node = Project Start (Everything "Reverse Scheduled" / Done)
+    RCPSPState_TT2 backward_goal;
+    backward_goal.finishedActivitiys.reset(); // Goal is All 1s
+    backward_goal.g = 0;
+    backward_goal.h = 0;
+
+    // 2. Start Node = Project End (Nothing "Reverse Scheduled" yet)
+    RCPSPState_TT2 backward_start;
+    // Clear all bits first (Ensure unused bits 33-127 are 0)
+    backward_start.finishedActivitiys.reset();
+
+    // Set ONLY the bits for actual tasks (1..N) to 1
+    for (int i = 1; i <= petri.Transitions.size(); ++i) {
+        backward_start.finishedActivitiys.set(i);
+    }
+
+    // 3. Move Token to Sink (Project End)
+    // The default constructor puts the token at Source. We must move it to Sink.
+    int act_idx = 0;
+    int source_idx = -1;
+    int sink_idx = -1;
+
+    std::unordered_map<int, int> place_to_res_check;
+    int r_c = 0;
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        place_to_res_check[petri.place_name_to_id.at(resName)] = r_c++;
+    }
+
+    for (int i = 0; i < petri.places.size(); ++i) {
+        if (place_to_res_check.count(i)) continue; // Skip resources
+
+        if (petri.places[i].arcs_in.empty()) source_idx = act_idx; // Source
+        if (petri.places[i].arcs_out.empty()) sink_idx = act_idx;   // Sink
+        act_idx++;
+    }
+
+    // Perform the Swap
+    if (source_idx != -1) backward_start.activity_nodes[source_idx] = {0, 0}; // Remove from Source
+    if (sink_idx != -1)   backward_start.activity_nodes[sink_idx]   = {1, 0}; // Add to Sink
+
+    // 4. Set Heuristic
+    // 4. Set Heuristic properly using the Environment
+    // This calculates the Critical Path from "End" to "Start"
+    backward_start.h = HCost_TT2(backward_goal, backward_start);
+    backward_start.predessesor_h = backward_start.h;
+    // 4. Run A* (Backward)
+    // Start at "Project End", go to "Project Start"
+   // astar.GetPath(&as1, startNode, goalNode, path);
+    RCPSP_TT2_Backward as1;
+
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2_Backward> astar;
+    //EPEAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+
+    // astar.SetReopenNodes(true);  // ← ADD THIS!
+
+    std::chrono::duration<double> elapsed;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&as1, backward_start, backward_goal, path);
+    // 1. Setup the search
+    // astar.InitializeSearch(&as1, first, last, path);
+    //
+    // // 2. Setup the timer
+    // auto startTime = std::chrono::steady_clock::now();
+    // auto timeLimit = std::chrono::minutes(5);
+    //
+    // // 3. Run the loop manually
+    // bool found = false;
+    // while (!astar.DoSingleSearchStep(path))
+    // {
+    //     // Check time every step (or every 1000 steps for speed)
+    //     auto currentTime = std::chrono::steady_clock::now();
+    //     if (currentTime - startTime > timeLimit) {
+    //         printf("TIMEOUT: EPEA* search exceeded 5 minutes.\n");
+    //         break;
+    //     }
+    // }
+    //
+    // // 4. Check if we actually found a path
+    // if (path.size() > 0) {
+    //     printf("Solution found! Length: %llu\n", path.size());
+    // } else {
+    //     printf("Failed to find solution (Timeout or No Path).\n");
+    // }
+
+
+
+
+
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+
+    int makespan = 0;
+
+    if (!path.empty()) {
+        std::cout << "Path found!" << std::endl;
+        std::cout << "{'scheduling': {";
+
+        bool first = true;
+        int realJobCount = 0;
+
+        for (const auto& state : path) {
+            // Skip the root node (Action -1) or Dummy Source (0) if you don't want it counted
+            // Adjust 'state.lastTransitionId > 0' if Task 0 is a real job in your system.
+            if (state.lastTransitionId <= 0) continue;
+
+            if (!first) std::cout << ", ";
+            std::cout << "'" << state.lastTransitionId << "': " << state.g<<","<<state.h;
+
+            first = false;
+            realJobCount++;
+        }
+
+        std::cout << "}, ";
+
+        // 2. Print Statistics
+        makespan = path.back().g; // Final state G is the makespan
+
+        std::cout << "'total_jobs_scheduled': " << realJobCount << ", ";
+        std::cout << "'makespan': " << makespan << ", ";
+        std::cout << "'solved': True, ";
+        std::cout << "}" << std::endl;
+        //for (const auto& state : path) {
+        RCPSPState_TT2 state=path.back();
+            //std::cout << "g: " << state.g;
+
+            // for (const auto& [actId, startTime] : state.startedActivitiys) {
+            //     std::cout << actId << ":" << startTime << " ";
+            // }
+
+            std::cout << std::endl;
+            makespan = state.g;
+        //}
+
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+    }
+     else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+   std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+   // std::cout << "Nodes Touched: " << astar.GetUniqueNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+         << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+        << "TT2_backward"<< ","
+        << problemType<< ","
+         << (useCS ? "True" : "False")<< ","
+         << "\n";
+
+    return 0;
+}
 
 
 //not working
@@ -745,9 +940,10 @@ void runBenchmark() {
  //solveRCPSP_TT2(3,1,filename,"j30");
 // solveRCPSP_TT2(16,2,filename,"j30");
 //     solveRCPSP_TT(16,2,filename,"j30");
-   //  solveRCPSP_TT(16,9,filename,"j30");
-   // solveRCPSP_TT(16,4,filename,"j30");
-    // for(int i = 1; i < 49; i++) {
+     //
+     solveRCPSP_TT2_Backward(16,9,filename,"j30");
+  // solveRCPSP_TT(16,4,filename,"j30");
+    // for(int i = 16; i < 17; i++) {
     //     for(int j = 1; j < 11; j++) {
     //
     //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
@@ -755,7 +951,8 @@ void runBenchmark() {
     //         RCPSPex.reset();
     //
     //         // 2. SOLVE
-    //         solveRCPSP(i, j, filename, "j30");
+    //         solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         solveRCPSP_TT2(i, j, filename, "j30");
     //         //solveRCPSP_TT(i, j, filename, "j30");
     //     }
     // }

@@ -281,6 +281,67 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
  return h;
 
 }
+
+double getBackwardHcost(std::vector<short> unstartedTransitions,
+    std::vector<std::pair<short, short>> activeTransitionIndices) {
+// Map to store Early Finish Time (EFT) relative to Start (Time 0)
+    std::unordered_map<int, int> earlyFinishMap;
+    double h = 0;
+
+    // 1. Process Fully Start-Side Tasks
+    // We assume startSideTransitions is sorted topologically (1..N).
+    // These are tasks that have "Finished" in the Start->Current view.
+    for (short activityId : unstartedTransitions) {
+        int maxPredTime = 0;
+
+        // Check all predecessors (Standard dependencies)
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+            // If predecessor is in our set, we use its calculated time.
+            // If not, it means it's a Source or not in the cut (which shouldn't happen for valid subsets)
+            if (earlyFinishMap.count(dep)) {
+                maxPredTime = std::max(maxPredTime, earlyFinishMap[dep]);
+            }
+        }
+
+        int duration = RCPSPex.activities[activityId - 1].duration;
+        int finish = maxPredTime + duration;
+
+        earlyFinishMap[activityId] = finish;
+        h = std::max(h, (double)finish);
+    }
+
+    // 2. Process Active Tasks (The Current Frontier)
+    // These tasks are currently "running". We only count the part that has finished.
+    for (const auto& entry : activeTransitionIndices) {
+        short activityId = entry.first;
+        short remaining = entry.second;
+
+        int maxPredTime = 0;
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+            if (earlyFinishMap.count(dep)) {
+                maxPredTime = std::max(maxPredTime, earlyFinishMap[dep]);
+            }
+        }
+
+        int totalDuration = RCPSPex.activities[activityId - 1].duration;
+
+        // "Effective Duration" = How much of the task has completed so far
+        int effectiveDuration = std::max(0, totalDuration - remaining);
+
+        int finish = maxPredTime + effectiveDuration;
+
+        // We update h, but we generally don't add active tasks to the map
+        // because no other task in this cut should depend on an incomplete active task.
+        h = std::max(h, (double)finish);
+    }
+
+    return h;
+
+
+
+
+}
+
 std::vector<int> getCriticalPath(const std::map<int, int>& earlyfinishTimes,
                                  int lastActivityId) {
     std::vector<int> criticalPath;
@@ -2107,6 +2168,88 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
 
     return available;
 }
+
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2_backward(
+    const std::vector<short> &unstartedTransitions,
+    const std::bitset<128> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes,
+    const std::vector<std::pair<short, short>> &activeTransitionIndices) {
+
+    std::vector<std::pair<short, short>> available;
+
+    std::unordered_set<short> activeTasks;
+    for (const auto& [taskID, _] : activeTransitionIndices) {
+        activeTasks.insert(taskID);
+    }
+
+    for (short transId : unstartedTransitions) {
+        if (activeTasks.count(transId) > 0) continue;
+
+        // CRITICAL FIX: Use Successors (Forward Dependencies)
+        // In Backward search, "Predecessors" are the tasks that come AFTER (Successors)
+        const auto& dependencies = RCPSPex.dependencies[transId - 1];
+
+        const Activity &act = RCPSPex.activities[transId - 1];
+
+        // std::vector<int> dependencies = getSuccessors(transId);
+
+        bool canUnfinish = true;
+        int maxSuccFinishTime = 0;
+
+        for (int succId : dependencies) {
+
+            // --- THE LOGIC FLIP IS HERE ---
+
+            // Forward Logic: if (finished.test(id)) continue; (GOOD)
+            // Backward Logic: if (finished.test(id)) BREAK; (BAD)
+
+            if (finishedActivitiys.test(succId)) {
+                // My child is still currently 'Scheduled' (1).
+                // It relies on me being finished.
+                // I CANNOT un-finish myself yet.
+                canUnfinish = false;
+                break;
+            }
+
+            // Check if Successor is currently active (being un-finished)
+            bool isActive = false;
+            int activeRemainingTime = 0;
+            for (const auto& [activeID, remaining] : activeTransitionIndices) {
+                if (activeID == succId) {
+                    isActive = true;
+                    activeRemainingTime = remaining;
+                    break;
+                }
+            }
+
+            if (isActive) {
+                // Successor is fading out, we must wait for it to be gone (0)
+                maxSuccFinishTime = std::max(maxSuccFinishTime, activeRemainingTime);
+            }
+            // Note: If it's NOT active and NOT finished (bit 0), it is "Unfinished".
+            // This is GOOD. We do nothing.
+        }
+
+        if (!canUnfinish)
+            continue; // This task is blocked by a finished successor
+        // 2. Resource Check (Identical logic to Forward)
+        // ... [Your existing resource logic is correct here] ...
+        // ... Just ensure 'maxResourceTime' initializes with 'maxSuccFinishTime' ...
+
+        // (Copy-paste your resource block here, it works symmetrically)
+        bool resourcesOK = true;
+        int maxResourceTime = maxSuccFinishTime;
+
+        // ... [Insert Resource Loop Code] ...
+
+        if (resourcesOK) {
+            available.emplace_back(transId, maxResourceTime);
+        }
+    }
+    return available;
+}
+
 RCPSPState_TT2::RCPSPState_TT2() {
     // Build mapping: resource name -> index (0-3)
     std::unordered_map<int, int> place_to_resource_idx;
@@ -2182,9 +2325,10 @@ RCPSPState_TT2::RCPSPState_TT2() {
     g = 0;
 }
 
-RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime) {
+RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime,bool Direction) {
     // 1. Update Global Cost (G)
-
+    direction=Direction;
+if (direction) {
     isDeltaZero = (firingTime == 0);
     g = prev.g + firingTime;
     predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization
@@ -2274,11 +2418,11 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
 
     // 5. Consume Input Dependency Token (Activity Nodes)
     for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
-         if (placeID >= 4) {
-             short idx = placeID - 4;
-             activity_nodes[idx].first = 0;
-             activity_nodes[idx].second = 0;
-         }
+        if (placeID >= 4) {
+            short idx = placeID - 4;
+            activity_nodes[idx].first = 0;
+            activity_nodes[idx].second = 0;
+        }
     }
 
     // 6. ADD TO ACTIVE LIST (instead of marking as finished immediately)
@@ -2397,7 +2541,227 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, s
     //     int i;
     //     i++;
     // }
+}
+    else {
+    isDeltaZero = (firingTime == 0);
+    g = prev.g + firingTime;
+    predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization
+    lastTransitionId=transitionId;
+    // 2. Copy State
+    finishedActivitiys = prev.finishedActivitiys;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
+    activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
+    // ✅ CORRECT: Child gets fresh cache
+    transitionsCached = false;
+    AvailableTransitionIndices_TT2.clear(); // or just leave empty
+    // 3. TIME SHIFT (Update "Remaining Time")
+    finishedActivitiys[transitionId] = 0;
 
+    if (firingTime > 0) {
+        // Update resource tokens
+        for (auto& resVec : resource_nodes) {
+            for (auto& token : resVec) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // Update activity node tokens
+        for (auto& token : activity_nodes) {
+            if (token.first > 0) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // ========== UPDATE ACTIVE LIST ==========
+        // Decrement remaining time for all active activities
+        auto it = activeTransitionIndices.begin();
+        while (it != activeTransitionIndices.end()) {
+            it->second -= firingTime;  // Reduce remaining time
+
+            if (it->second <= 0) {
+                // Activity finished - mark it as complete
+                short completedTaskID = it->first;
+
+                // Produce output tokens for this completed activity
+                const Transition& completedTransition = petri.Transitions[completedTaskID - 1];
+                // for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
+                //     if (placeID < 4) {
+                //         // Resource output
+                //         resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
+                //     } else {
+                //         // Activity dependency output
+                //         short idx = placeID - 4;
+                //         activity_nodes[idx] = {outAmount, 0};  // Available NOW
+                //     }
+                // }
+
+                // Remove from active list
+                it = activeTransitionIndices.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // 4. Consume Resources (Standard Resources Only)
+    const Transition& transition = petri.Transitions[transitionId - 1];
+    const Activity& act = RCPSPex.activities[transitionId - 1];
+    short duration = act.duration;
+
+    for (const auto& [resName, demand] : act.resource_demands) {
+        if (demand > 0) {
+            short resID = petri.place_name_to_id.at(resName);
+            auto& tokens = resource_nodes[resID];
+
+            std::sort(tokens.begin(), tokens.end(),
+                     [](const auto& a, const auto& b) { return a.second < b.second; });
+
+            int remainingDemand = demand;
+            auto it = tokens.begin();
+            while (remainingDemand > 0 && it != tokens.end()) {
+                if (it->first > remainingDemand) {
+                    it->first -= remainingDemand;
+                    remainingDemand = 0;
+                } else {
+                    remainingDemand -= it->first;
+                    it = tokens.erase(it);
+                }
+            }
+        }
+    }
+
+    // 5. Consume Input Dependency Token (Activity Nodes)
+    for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
+        if (placeID >= 4) {
+            short idx = placeID - 4;
+            activity_nodes[idx].first = 0;
+            activity_nodes[idx].second = 0;
+        }
+    }
+
+    // 6. ADD TO ACTIVE LIST (instead of marking as finished immediately)
+    // 6. ADD TO ACTIVE LIST & GENERATE FUTURE EVENTS
+    if (duration > 0) {
+        // A. Track the Task (for "Finished" status logic)
+        activeTransitionIndices.emplace_back(transitionId, duration);
+
+        // B. THE FIX: Immediately return outputs as "Future Events"
+        // We put resources back NOW, but marked as "Available in 'duration' seconds"
+        const Transition& currentTrans = petri.Transitions[transitionId - 1];
+
+        for (const auto& [placeID, outAmount] : currentTrans.arcs_out_indices) {
+            if (placeID < 4) {
+                // RESOURCE: Return it now with a delay
+                resource_nodes[placeID].emplace_back(outAmount, duration);
+            }
+            else {
+                // ACTIVITY TOKEN: Produce it now with a delay
+                // (Be careful with index math: placeID 4 is index 0 in activity_nodes?)
+                // Assuming your activity_nodes starts from Place 4:
+                short idx = placeID - 4;
+                // Only add if not already there (or handled by your specific logic)
+                // For TT, usually we just set the availability time:
+                if (idx < activity_nodes.size()) {
+                    if (activity_nodes[idx].first == 0 || activity_nodes[idx].second > duration) {
+                        activity_nodes[idx] = {outAmount, duration};
+                    }
+                }
+            }
+        }
+
+        // Optional: Sort active list
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+
+    } else {
+        // Duration is 0 - finish immediately (Existing Logic)
+        finishedActivitiys[transitionId] = 0;
+
+        for (const auto& [placeID, outAmount] : petri.Transitions[transitionId-1].arcs_out_indices) {
+            if (placeID < 4) {
+                resource_nodes[placeID].emplace_back(outAmount, 0);
+            } else {
+                short idx = placeID - 4;
+                if(idx < activity_nodes.size()) activity_nodes[idx] = {outAmount, 0};
+            }
+        }
+    }
+    // NOTE: If duration > 0, outputs are produced when activity completes (in TIME SHIFT section above)
+
+    // 8. Canonical Sort & Merge (Only for Resources)
+    // 8. Canonical Sort & Merge (CRITICAL FIX)
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        // A. Sort by Time (Ascending)
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+             if (a.second != b.second) return a.second < b.second;
+             return a.first > b.first; // Optional: put larger chunks first
+        });
+
+        // B. Merge split groups with the same time
+        // This converts [(5,0), (5,0)] -> [(10,0)]
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            if (it->second == next->second) {
+                // Same time? Merge them!
+                it->first += next->first;
+                // Remove the second one
+                resVec.erase(next);
+                // Don't increment 'it', check the new neighbor
+            } else {
+                ++it;
+            }
+        }
+    }
+    if (!activeTransitionIndices.empty()) {
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+        // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
+    }
+
+    // 2. SORT ACTIVITY TOKENS
+    // Ensures tokens in "waiting places" are always in the same order
+    if (!activity_nodes.empty()) {
+        std::sort(activity_nodes.begin(), activity_nodes.end());
+    }
+
+    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        // Step A: Sort by Time (Availability Time)
+        // If times are equal, sort by Amount (to be deterministic)
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second < b.second; // Earliest time first
+            return a.first < b.first; // Then smallest amount
+        });
+
+        // Step B: Merge Adjacent Duplicates (The "Split Resource" Fix)
+        // Converts [(5,0), (5,0)] -> [(10,0)]
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            // If they become available at the exact same time...
+            if (it->second == next->second) {
+                it->first += next->first; // Merge amounts
+                resVec.erase(next);       // Delete the duplicate
+                // Do not increment 'it', check the new neighbor
+            } else {
+                ++it;
+            }
+        }
+    }
+    // if (firingTime==7&&transitionId != 26) {
+    //     int i;
+    //     i++;
+    // }
+
+
+
+
+
+    }
 }
 
 short getForwardHcost_TT2(

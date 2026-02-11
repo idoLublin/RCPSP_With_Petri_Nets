@@ -163,7 +163,7 @@ public:
     // Add these for caching transitions
     mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
     mutable bool transitionsCached = false;
-
+    bool direction=1;
     bool isDeltaZero;
     short g = 0;
     short g_pre = 0;
@@ -171,7 +171,7 @@ public:
     short predessesor_h = 0;
     short lastTransitionId=0; // <--- SAVE IT HERE
     RCPSPState_TT2();
-    RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime);
+    RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime,bool Direction =1);
 
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_TT2& other) const {
@@ -202,6 +202,15 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<std::pair<short, short>> &activeTransitionIndices
 );
 
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2_backward(
+    const std::vector<short> &unstartedTransitions,
+    const std::bitset<128> &finishedActivitiys,  // ← Changed to bitset
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes,
+    const std::vector<std::pair<short, short>> &activeTransitionIndices
+);
+
+
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<short> &unstartedTransitions,
     const std::vector<short> &finishedActivitiys,
@@ -212,11 +221,17 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions);
 double getForwardHcost(std::vector<short>unstartedTransitions,
                       std::vector<std::pair<short, short>>activeTransitionIndices
                       );
+double getBackwardHcost(std::vector<short>unstartedTransitions,
+                      std::vector<std::pair<short, short>>activeTransitionIndices
+                      );
 short getForwardHcost_TT2(
     const std::vector<short>& unstartedTransitions,
     const std::vector<std::pair<short, short>>& activity_tokens,
     const std::vector<std::pair<short, short>>& active_activities,
     const std::bitset<128>& finishedActivitiys) ;
 double getForwardHcost_TT(const std::array<short, 128>& unstartedTransitions);
+
+
+
 
 #endif // RCPSPSTATE_H

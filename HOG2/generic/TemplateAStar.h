@@ -103,7 +103,7 @@ inline size_t getcomper2(const RCPSPState_Bi& state) {
 	}
 	return count;
 }
-// --- 3. RCPSPState_TT2 (New Optimized) ---
+// // --- 3. RCPSPState_TT2 (New Optimized) ---
 inline size_t getcomper2(const RCPSPState_TT2& state) {
 	if (state.direction) {
 		return state.activeTransitionIndices.size()+state.finishedActivitiys.count();
@@ -122,7 +122,28 @@ if (state.direction) {
 		return -state.finishedActivitiys.count();
 	}
 }
-
+// inline size_t getcomper1(const RCPSPState_TT2& state) {
+// 	if (state.direction == 1) { // FORWARD
+// 		// We want MORE bits (closer to end).
+// 		// Returning negative makes the "min" priority queue pick the largest count.
+// 		return -(size_t)state.finishedActivitiys.count();
+// 	}
+// 	else { // BACKWARD (0)
+// 		// We want FEWER bits (closer to start).
+// 		// Returning positive makes the "min" priority queue pick the smallest count.
+// 		return (size_t)state.finishedActivitiys.count();
+// 	}
+// }
+//
+// inline size_t getcomper2(const RCPSPState_TT2& state) {
+// 	size_t totalWeight = state.activeTransitionIndices.size() + state.finishedActivitiys.count();
+// 	if (state.direction == 1) { // FORWARD
+// 		return -totalWeight;
+// 	}
+// 	else { // BACKWARD (0)
+// 		return totalWeight;
+// 	}
+// }
 // =========================================================
 std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 //ido lublin 28.4 A*

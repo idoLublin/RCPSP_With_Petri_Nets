@@ -688,7 +688,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         std::cout << "}, ";
 
         // 2. Print Statistics
-        makespan = path.back().g; // Final state G is the makespan
+        makespan = path.back().g+path.back().h; // Final state G is the makespan
 
         std::cout << "'total_jobs_scheduled': " << realJobCount << ", ";
         std::cout << "'makespan': " << makespan << ", ";
@@ -943,7 +943,7 @@ void runBenchmark() {
      //
    //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
-    for(int i = 16; i < 17; i++) {
+    for(int i = 1; i < 2; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)

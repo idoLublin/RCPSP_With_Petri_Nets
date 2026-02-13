@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>RCPSP Lower Bound Computation Trace</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { margin: 0; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useMemo, useCallback } = React;
+
+function computeES(acts) {
+  const es = {};
+  for (const a of [...acts].sort((a, b) => a.id - b.id)) {
+    es[a.id] = a.pred.length === 0 ? 0 : Math.max(...a.pred.map(p => es[p] + acts.find(x => x.id === p).dur));
+  }
+  return es;
+}
+
+function computeLF(acts, T) {
+  const lf = {};
+  const succs = {};
+  for (const a of acts) succs[a.id] = [];
+  for (const a of acts) for (const p of a.pred) succs[p].push(a.id);
+  for (const a of [...acts].sort((a, b) => b.id - a.id)) {
+    lf[a.id] = succs[a.id].length === 0 ? T : Math.min(...succs[a.id].map(s => lf[s] - acts.find(x => x.id === s).dur));
+  }
+  return lf;
+}
+
+function getCPSet(acts) {
+  const es = computeES(acts);
+  const end = acts[acts.length - 1];
+  const cpSet = new Set();
+  const trace = (id) => {
+    cpSet.add(id);
+    const a = acts.find(x => x.id === id);
+    for (const p of a.pred) {
+      if (es[p] + acts.find(x => x.id === p).dur === es[id]) { trace(p); break; }
+    }
+  };
+  trace(end.id);
+  return cpSet;
+}
+
+function buildLBCPSteps(acts) {
+  const es = computeES(acts);
+  const end = acts[acts.length - 1];
+  const cpSet = getCPSet(acts);
+  const cpActs = [...cpSet].filter(id => acts.find(a => a.id === id).dur > 0).sort((a, b) => es[a] - es[b]);
+  const steps = [];
+  let cum = 0;
+  steps.push({ text: "Start: find the longest path through the precedence network (ignoring resources).", highlight: new Set([acts[0].id]), cumVal: 0 });
+  for (const id of cpActs) {
+    const a = acts.find(x => x.id === id);
+    cum += a.dur;
+    steps.push({
+      text: `Activity ${a.name}: duration = ${a.dur}. Cumulative path length = ${cum}.`,
+      highlight: new Set([...cpActs.filter(c => es[c] <= es[id]), acts[0].id]),
+      cumVal: cum,
+    });
+  }
+  steps.push({ text: `LBCP = ${cum}. The critical path determines the minimum project duration ignoring resources.`, highlight: cpSet, cumVal: cum, isFinal: true });
+  return { steps, value: cum };
+}
+
+function buildLBCCSteps(acts, cap) {
+  const es = computeES(acts);
+  const real = acts.filter(a => a.dur > 0);
+  const esTimes = [...new Set(real.map(a => es[a.id]))].sort((a, b) => a - b);
+  const steps = [];
+  let work = 0;
+  let t = 0;
+  let esIdx = 0;
+  let result = 0;
+  steps.push({ text: `Start: walk time unit by unit. Resource availability = ${cap}/period. Add work content (dur\u00d7res) at each activity's earliest start.`, highlight: new Set(), cumVal: 0 });
+  while (esIdx < esTimes.length || work > 0) {
+    if (esIdx < esTimes.length && t === esTimes[esIdx]) {
+      const batch = real.filter(a => es[a.id] === t);
+      const added = batch.reduce((s, a) => s + a.dur * a.res, 0);
+      work += added;
+      const names = batch.map(a => a.name);
+      const hl = new Set(batch.map(a => a.id));
+      steps.push({ text: `t=${t}: ES of [${names.join(", ")}]. Add WC = ${batch.map(a => `${a.dur}\u00d7${a.res}`).join(" + ")} = +${added}. Accumulated WC = ${work}.`, highlight: hl, cumVal: work });
+      esIdx++;
+    }
+    if (work > 0) {
+      const before = work;
+      work -= cap;
+      result = t + 1;
+      if (work <= 0) {
+        steps.push({ text: `t=${t}\u2192${t + 1}: consume ${cap}. WC: ${before} \u2192 ${work} \u2264 0. Work exhausted at t=${result}.`, highlight: new Set(), cumVal: Math.max(work, 0), isFinal: esIdx >= esTimes.length });
+        if (esIdx >= esTimes.length) break;
+      } else if (esIdx < esTimes.length && t + 1 === esTimes[esIdx]) {
+        steps.push({ text: `t=${t}\u2192${t + 1}: consume ${cap}. WC: ${before} \u2192 ${work}. Next ES arriving.`, highlight: new Set(), cumVal: work });
+      } else {
+        const periodsLeft = Math.ceil(work / cap);
+        if (esIdx >= esTimes.length && periodsLeft > 2) {
+          result = t + 1 + periodsLeft;
+          steps.push({ text: `t=${t + 1}\u2192${t + 1 + periodsLeft}: consume ${cap}/period for ${periodsLeft} periods. WC \u2192 ${work - periodsLeft * cap}. Exhausted at t=${result}.`, highlight: new Set(), cumVal: 0, isFinal: true });
+          work = 0;
+          break;
+        }
+      }
+    }
+    if (work <= 0 && esIdx < esTimes.length) t = esTimes[esIdx]; else t++;
+    if (t > 200) break;
+  }
+  steps.push({ text: `LBCC = ${result}. The critical capacity bound accounts for both precedence timing (ES) and aggregate resource load.`, highlight: new Set(), cumVal: result, isFinal: true });
+  return { steps, value: result };
+}
+
+function buildLBCSSteps(acts, cap) {
+  const es = computeES(acts);
+  const lbcp = buildLBCPSteps(acts).value;
+  const lf = computeLF(acts, lbcp);
+  const cpSet = getCPSet(acts);
+  const cpProfile = new Array(lbcp).fill(0);
+  for (const id of cpSet) {
+    const a = acts.find(x => x.id === id);
+    for (let t = es[id]; t < es[id] + a.dur; t++) if (t < lbcp) cpProfile[t] += a.res;
+  }
+  const steps = [];
+  steps.push({ text: `Start: LBCS begins from LBCP = ${lbcp}. Build the CP resource profile (resource used by CP activities at each time slot).`, highlight: cpSet, cumVal: lbcp });
+
+  const cpActNames = [...cpSet].filter(id => acts.find(a => a.id === id).dur > 0).map(id => acts.find(a => a.id === id).name);
+  const profileStr = cpProfile.map((v, i) => `t${i}:${v}`).join(", ");
+  steps.push({ text: `CP activities [${cpActNames.join(",")}] use resources: [${profileStr}]. Capacity=${cap}, so residual=[${cpProfile.map(v => cap - v).join(",")}].`, highlight: cpSet, cumVal: lbcp });
+
+  let maxDelta = 0;
+  let maxAct = null;
+  const nonCp = acts.filter(a => !cpSet.has(a.id) && a.dur > 0);
+  for (const a of nonCp) {
+    const aES = es[a.id];
+    const aLF = lf[a.id];
+    let e = 0;
+    const slots = [];
+    for (let t = aES; t < aLF; t++) {
+      const residual = t < lbcp ? cap - cpProfile[t] : cap;
+      const fits = residual >= a.res;
+      if (fits) { e++; slots.push(t); }
+    }
+    const delta = Math.max(0, a.dur - e);
+    const hl = new Set([a.id]);
+    steps.push({
+      text: `Activity ${a.name} (d=${a.dur}, r=${a.res}): window [ES=${aES}, LF=${aLF}). Slots with residual \u2265 ${a.res}: ${e > 0 ? slots.map(s => `t${s}`).join(",") : "none"} \u2192 e\u1d62=${e}. \u03b4\u1d62 = max(0, ${a.dur}\u2212${e}) = ${delta}.`,
+      highlight: hl,
+      cumVal: lbcp + delta,
+    });
+    if (delta > maxDelta) { maxDelta = delta; maxAct = a; }
+  }
+
+  const finalHL = maxAct ? new Set([...cpSet, maxAct.id]) : cpSet;
+  steps.push({ text: `Max \u03b4 = ${maxDelta}${maxAct ? ` (activity ${maxAct.name})` : ""}. LBCS = LBCP + max(\u03b4) = ${lbcp} + ${maxDelta} = ${lbcp + maxDelta}.`, highlight: finalHL, cumVal: lbcp + maxDelta, isFinal: true });
+  return { steps, value: lbcp + maxDelta };
+}
+
+const scenarios = [
+  {
+    id: "lbcp", title: "Graph 1: LBCP Dominates", subtitle: "Deep chain, light resources",
+    resource_cap: 6,
+    activities: [
+      { id: 0, name: "S", dur: 0, res: 0, pred: [] },
+      { id: 1, name: "1", dur: 4, res: 2, pred: [0] },
+      { id: 2, name: "2", dur: 5, res: 2, pred: [1] },
+      { id: 3, name: "3", dur: 3, res: 2, pred: [2] },
+      { id: 4, name: "4", dur: 4, res: 2, pred: [3] },
+      { id: 5, name: "5", dur: 3, res: 2, pred: [4] },
+      { id: 6, name: "6", dur: 2, res: 2, pred: [0] },
+      { id: 7, name: "7", dur: 1, res: 1, pred: [0] },
+      { id: 8, name: "E", dur: 0, res: 0, pred: [5, 6, 7] },
+    ],
+    pos: { 0:{x:40,y:170}, 1:{x:140,y:80}, 2:{x:250,y:80}, 3:{x:360,y:80}, 4:{x:470,y:80}, 5:{x:580,y:80}, 6:{x:200,y:250}, 7:{x:200,y:330}, 8:{x:680,y:170} },
+  },
+  {
+    id: "lbcc", title: "Graph 2: LBCC Dominates", subtitle: "Heavy work content at same ES",
+    resource_cap: 5,
+    activities: [
+      { id: 0, name: "S", dur: 0, res: 0, pred: [] },
+      { id: 1, name: "1", dur: 2, res: 2, pred: [0] },
+      { id: 2, name: "2", dur: 3, res: 4, pred: [1] },
+      { id: 3, name: "3", dur: 3, res: 4, pred: [1] },
+      { id: 4, name: "4", dur: 3, res: 4, pred: [1] },
+      { id: 5, name: "5", dur: 3, res: 4, pred: [1] },
+      { id: 6, name: "6", dur: 2, res: 3, pred: [1] },
+      { id: 7, name: "E", dur: 0, res: 0, pred: [2, 3, 4, 5, 6] },
+    ],
+    pos: { 0:{x:40,y:190}, 1:{x:150,y:190}, 2:{x:310,y:50}, 3:{x:310,y:120}, 4:{x:310,y:190}, 5:{x:310,y:260}, 6:{x:310,y:330}, 7:{x:470,y:190} },
+  },
+  {
+    id: "lbcs", title: "Graph 3: LBCS Dominates", subtitle: "CP + resource conflict forces extension",
+    resource_cap: 5,
+    activities: [
+      { id: 0, name: "S", dur: 0, res: 0, pred: [] },
+      { id: 1, name: "1", dur: 3, res: 3, pred: [0] },
+      { id: 2, name: "2", dur: 4, res: 3, pred: [1] },
+      { id: 3, name: "3", dur: 2, res: 3, pred: [2] },
+      { id: 4, name: "4", dur: 5, res: 4, pred: [0] },
+      { id: 5, name: "5", dur: 5, res: 4, pred: [0] },
+      { id: 6, name: "E", dur: 0, res: 0, pred: [3, 4, 5] },
+    ],
+    pos: { 0:{x:50,y:170}, 1:{x:180,y:80}, 2:{x:330,y:80}, 3:{x:480,y:80}, 4:{x:280,y:230}, 5:{x:280,y:320}, 6:{x:600,y:170} },
+  },
+];
+
+function Arrow({ from, to, bright }) {
+  const dx = to.x - from.x, dy = to.y - from.y;
+  const len = Math.sqrt(dx * dx + dy * dy);
+  const r = 24, aL = 9, ux = dx / len, uy = dy / len;
+  const sx = from.x + ux * r, sy = from.y + uy * r;
+  const ex = to.x - ux * (r + 2), ey = to.y - uy * (r + 2);
+  const c = bright ? "#94a3b8" : "#334155";
+  return (
+    <g>
+      <line x1={sx} y1={sy} x2={ex} y2={ey} stroke={c} strokeWidth={1.5} />
+      <polygon points={`${ex},${ey} ${ex-aL*ux+4*uy},${ey-aL*uy-4*ux} ${ex-aL*ux-4*uy},${ey-aL*uy+4*ux}`} fill={c} />
+    </g>
+  );
+}
+
+function Graph({ scenario, highlighted, cpSet }) {
+  const { activities: acts, pos } = scenario;
+  const edges = [];
+  acts.forEach(a => a.pred.forEach(p => edges.push({ from: p, to: a.id })));
+  return (
+    <svg viewBox="0 0 740 380" style={{ width: "100%", maxWidth: 740, background: "#0f172a", borderRadius: 12 }}>
+      {edges.map((e, i) => {
+        const bothHL = highlighted.has(e.from) && highlighted.has(e.to);
+        const bothCP = cpSet.has(e.from) && cpSet.has(e.to);
+        return <Arrow key={i} from={pos[e.from]} to={pos[e.to]} bright={bothHL || bothCP} />;
+      })}
+      {acts.map(a => {
+        const p = pos[a.id];
+        const isHL = highlighted.has(a.id);
+        const isCP = cpSet.has(a.id);
+        const fill = isHL ? "#1e3a5f" : "#1e293b";
+        const stroke = isHL ? "#60a5fa" : isCP ? "#475569" : "#334155";
+        const sw = isHL ? 3 : 1.5;
+        const glow = isHL ? "drop-shadow(0 0 8px rgba(96,165,250,0.6))" : "none";
+        return (
+          <g key={a.id} style={{ filter: glow }}>
+            <circle cx={p.x} cy={p.y} r={24} fill={fill} stroke={stroke} strokeWidth={sw} />
+            {isHL && <circle cx={p.x} cy={p.y} r={28} fill="none" stroke="#60a5fa" strokeWidth={1} opacity={0.4} />}
+            <text x={p.x} y={p.y + 1} textAnchor="middle" dominantBaseline="middle" fill={isHL ? "#fff" : "#94a3b8"} fontSize={14} fontWeight="bold">{a.name}</text>
+            {a.dur > 0 && (
+              <>
+                <text x={p.x} y={p.y - 32} textAnchor="middle" fill={isHL ? "#93c5fd" : "#475569"} fontSize={11} fontWeight={isHL ? 700 : 400}>d={a.dur}</text>
+                <text x={p.x} y={p.y + 38} textAnchor="middle" fill={isHL ? "#86efac" : "#475569"} fontSize={11} fontWeight={isHL ? 700 : 400}>r={a.res}</text>
+              </>
+            )}
+          </g>
+        );
+      })}
+      <text x={10} y={370} fill="#475569" fontSize={10}>Resource capacity = {scenario.resource_cap}</text>
+    </svg>
+  );
+}
+
+function StepNavigator({ steps, stepIdx, setStepIdx, color }) {
+  const s = steps[stepIdx];
+  return (
+    <div style={{ background: "#1e293b", borderRadius: 12, padding: 16, marginTop: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 12, color: "#64748b" }}>Step {stepIdx + 1} / {steps.length}</span>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button onClick={() => setStepIdx(0)} disabled={stepIdx === 0}
+            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: stepIdx === 0 ? "#334155" : "#94a3b8", cursor: stepIdx === 0 ? "default" : "pointer", fontSize: 12 }}>{"\u23EE"}</button>
+          <button onClick={() => setStepIdx(Math.max(0, stepIdx - 1))} disabled={stepIdx === 0}
+            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: stepIdx === 0 ? "#334155" : "#94a3b8", cursor: stepIdx === 0 ? "default" : "pointer", fontSize: 12 }}>{"\u25C0\uFE0F Prev"}</button>
+          <button onClick={() => setStepIdx(Math.min(steps.length - 1, stepIdx + 1))} disabled={stepIdx === steps.length - 1}
+            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: stepIdx === steps.length - 1 ? "#334155" : "#94a3b8", cursor: stepIdx === steps.length - 1 ? "default" : "pointer", fontSize: 12 }}>{"Next \u25B6\uFE0F"}</button>
+          <button onClick={() => setStepIdx(steps.length - 1)} disabled={stepIdx === steps.length - 1}
+            style={{ padding: "4px 10px", borderRadius: 6, border: "1px solid #334155", background: "transparent", color: stepIdx === steps.length - 1 ? "#334155" : "#94a3b8", cursor: stepIdx === steps.length - 1 ? "default" : "pointer", fontSize: 12 }}>{"\u23ED"}</button>
+        </div>
+      </div>
+      <div style={{ width: "100%", height: 4, background: "#0f172a", borderRadius: 2, marginBottom: 12 }}>
+        <div style={{ width: `${((stepIdx + 1) / steps.length) * 100}%`, height: "100%", background: color, borderRadius: 2, transition: "width 0.3s" }} />
+      </div>
+      <p style={{ fontSize: 14, lineHeight: 1.7, color: s.isFinal ? color : "#e2e8f0", fontWeight: s.isFinal ? 700 : 400 }}>{s.text}</p>
+    </div>
+  );
+}
+
+const lbMeta = [
+  { key: "cp", label: "LBCP", color: "#3b82f6", builder: (a, c) => buildLBCPSteps(a) },
+  { key: "cc", label: "LBCC", color: "#22c55e", builder: (a, c) => buildLBCCSteps(a, c) },
+  { key: "cs", label: "LBCS", color: "#f59e0b", builder: (a, c) => buildLBCSSteps(a, c) },
+];
+
+function App() {
+  const [scIdx, setScIdx] = useState(0);
+  const [lbIdx, setLbIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
+
+  const sc = scenarios[scIdx];
+  const cpSet = useMemo(() => getCPSet(sc.activities), [scIdx]);
+  const allBuilt = useMemo(() => lbMeta.map(m => m.builder(sc.activities, sc.resource_cap)), [scIdx]);
+  const curLB = lbMeta[lbIdx];
+  const built = allBuilt[lbIdx];
+  const clampedStep = Math.min(stepIdx, built.steps.length - 1);
+  const curStep = built.steps[clampedStep];
+  const best = Math.max(...allBuilt.map(b => b.value));
+
+  const switchSc = useCallback((i) => { setScIdx(i); setStepIdx(0); }, []);
+  const switchLB = useCallback((i) => { setLbIdx(i); setStepIdx(0); }, []);
+
+  return (
+    <div style={{ fontFamily: "system-ui, sans-serif", background: "#0f172a", color: "#e2e8f0", minHeight: "100vh", padding: "20px 16px" }}>
+      <h1 style={{ fontSize: 22, fontWeight: 700, textAlign: "center", marginBottom: 4 }}>RCPSP Lower Bound Computation Trace</h1>
+      <p style={{ textAlign: "center", color: "#64748b", fontSize: 13, marginBottom: 16 }}>Step through each algorithm and see which nodes are involved</p>
+
+      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 12, flexWrap: "wrap" }}>
+        {scenarios.map((s, i) => (
+          <button key={s.id} onClick={() => switchSc(i)}
+            style={{ padding: "7px 14px", borderRadius: 8, border: scIdx === i ? "2px solid #60a5fa" : "1px solid #334155", background: scIdx === i ? "#1e3a5f" : "#1e293b", color: scIdx === i ? "#fff" : "#94a3b8", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+            {s.title.replace("Graph ", "")}
+          </button>
+        ))}
+      </div>
+
+      <p style={{ textAlign: "center", color: "#94a3b8", fontSize: 13, marginBottom: 16 }}>{sc.subtitle} {"\u00b7"} Capacity = {sc.resource_cap}</p>
+
+      <Graph scenario={sc} highlighted={curStep.highlight} cpSet={cpSet} />
+
+      <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 16, flexWrap: "wrap" }}>
+        {lbMeta.map((m, i) => {
+          const v = allBuilt[i].value;
+          const isWinner = v === best && sc.id === m.key.replace("cp", "lbcp").replace("cc", "lbcc").replace("cs", "lbcs");
+          return (
+            <button key={m.key} onClick={() => switchLB(i)}
+              style={{ padding: "8px 16px", borderRadius: 8, border: lbIdx === i ? `2px solid ${m.color}` : "1px solid #334155", background: lbIdx === i ? m.color + "22" : "#1e293b", color: lbIdx === i ? m.color : "#94a3b8", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
+              {m.label} = {v} {v === best ? "\u2B50" : ""}
+            </button>
+          );
+        })}
+      </div>
+
+      <div style={{ textAlign: "center", marginTop: 8 }}>
+        <span style={{ fontSize: 12, color: "#64748b" }}>Best LB = max({allBuilt.map(b => b.value).join(", ")}) = <strong style={{ color: "#f1f5f9" }}>{best}</strong></span>
+      </div>
+
+      <StepNavigator steps={built.steps} stepIdx={clampedStep} setStepIdx={setStepIdx} color={curLB.color} />
+
+      <div style={{ marginTop: 20, background: "#1e293b", borderRadius: 12, padding: 16 }}>
+        <h3 style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>Algorithm Summary</h3>
+        <div style={{ fontSize: 13, lineHeight: 1.8, color: "#cbd5e1" }}>
+          <p><strong style={{ color: "#3b82f6" }}>LBCP</strong>: Longest precedence path. Ignores resources.</p>
+          <p><strong style={{ color: "#22c55e" }}>LBCC</strong>: At each ES time, accumulate work content (d{"\u00d7"}r). Consume at rate a{"\u2096"}/period. LB = time when all work is consumed. Merges CP timing + resource load.</p>
+          <p><strong style={{ color: "#f59e0b" }}>LBCS</strong>: From LBCP, for each non-CP activity check residual capacity in its window. e{"\u1d62"} = fitting slots. {"\u03b4\u1d62"} = d{"\u1d62"} {"\u2212"} e{"\u1d62"}. LBCS = LBCP + max({"\u03b4\u1d62"}).</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RCPSP — רשת פטרי וחסמים תחתונים</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+html{direction:rtl}
+body{
+  background:#FFFFFF;
+  font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','SF Pro Text','Helvetica Neue',system-ui,sans-serif;
+  color:#1D1D1F;min-height:100vh;overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+}
+::selection{background:#007AFF33;color:#1D1D1F}
+.container{max-width:1080px;margin:0 auto;padding:40px 24px 60px}
+
+/* Apple Cards */
+.card{
+  background:#F2F2F7;border:1px solid #D1D1D6;border-radius:16px;
+  padding:28px;margin-bottom:24px;
+  transition:transform 0.3s cubic-bezier(.4,0,.2,1),border-color 0.3s;
+}
+.card:hover{border-color:#C7C7CC}
+
+/* Animations */
+@keyframes fadeIn{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeText{from{opacity:0}to{opacity:1}}
+@keyframes glowPulse{0%,100%{box-shadow:0 0 8px var(--glow-color,#007AFF33)}50%{box-shadow:0 0 24px var(--glow-color,#007AFF66)}}
+@keyframes float1{0%{transform:translate(0,0)}50%{transform:translate(30px,-20px)}100%{transform:translate(0,0)}}
+@keyframes float2{0%{transform:translate(0,0)}50%{transform:translate(-25px,15px)}100%{transform:translate(0,0)}}
+@keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+@keyframes barEntry{from{width:0%}to{width:var(--bar-w)}}
+.fade-in{animation:fadeIn 0.5s ease-out both}
+
+/* Typography */
+.hero-title{
+  font-size:44px;font-weight:700;letter-spacing:-0.03em;
+  text-align:center;margin-bottom:4px;
+  background:linear-gradient(135deg,#007AFF,#30D158,#FF9F0A);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;
+}
+.hero-sub{text-align:center;color:#86868B;font-size:17px;font-weight:400;margin-bottom:36px}
+.section-title{font-size:22px;font-weight:600;letter-spacing:-0.01em;margin-bottom:14px}
+
+/* Buttons */
+.pill-row{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-bottom:24px}
+.pill{
+  padding:10px 22px;border-radius:100px;border:1.5px solid #D1D1D6;
+  background:#F2F2F7;color:#8E8E93;cursor:pointer;font-size:15px;
+  font-weight:500;transition:all 0.25s cubic-bezier(.4,0,.2,1);
+  font-family:inherit;
+}
+.pill:hover{background:#E5E5EA;border-color:#C7C7CC}
+.pill.active{color:#1D1D1F;border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,#FFFFFF)}
+
+.nbtn{
+  padding:8px 16px;border-radius:10px;border:1px solid #D1D1D6;
+  background:#F2F2F7;color:#8E8E93;cursor:pointer;font-size:14px;
+  font-weight:500;transition:all 0.2s;font-family:inherit;
+  direction:rtl;
+}
+.nbtn:hover:not(:disabled){background:#E5E5EA;color:#1D1D1F}
+.nbtn:disabled{opacity:0.25;cursor:default}
+
+.play-btn{
+  width:36px;height:36px;border-radius:50%;border:2px solid var(--accent,#007AFF);
+  background:transparent;color:var(--accent,#007AFF);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:14px;
+  transition:all 0.2s;font-family:inherit;
+}
+.play-btn:hover{background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.play-btn.playing{animation:glowPulse 2s infinite;--glow-color:var(--accent)}
+
+/* Step text */
+.step-text{font-size:17px;line-height:2;color:#1D1D1F;letter-spacing:0.01em}
+.step-final{font-weight:600}
+
+/* Keyboard hint */
+.kb-hint{
+  position:fixed;bottom:20px;left:20px;z-index:100;
+  background:#F2F2F7ee;border:1px solid #D1D1D6;border-radius:12px;
+  padding:12px 18px;font-size:12px;color:#8E8E93;
+  transition:opacity 0.5s;pointer-events:none;
+  direction:ltr;text-align:left;
+}
+
+/* Background orbs */
+.orb-container{position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:hidden}
+.orb{position:absolute;border-radius:50%;filter:blur(120px);opacity:0.07;transition:background 1s ease}
+.orb-1{width:500px;height:500px;top:-100px;right:-100px;animation:float1 25s ease-in-out infinite}
+.orb-2{width:400px;height:400px;bottom:-80px;left:-80px;animation:float2 20s ease-in-out infinite}
+
+/* SVG */
+svg text{user-select:none;-webkit-user-select:none;pointer-events:none}
+.drag-hint{font-size:12px;color:#8E8E93;text-align:center;margin-top:8px}
+
+/* Fullscreen */
+:fullscreen .container{max-width:1300px;padding:50px 40px}
+:fullscreen .hero-title{font-size:54px}
+:fullscreen .step-text{font-size:20px}
+:fullscreen .section-title{font-size:26px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useMemo,useCallback,useRef,useEffect}=React;
+
+/* ═══════════════ UTILITIES ═══════════════ */
+
+function computeES(acts){
+  const es={};
+  for(const a of[...acts].sort((a,b)=>a.id-b.id)){
+    es[a.id]=a.pred.length===0?0:Math.max(...a.pred.map(p=>es[p]+acts.find(x=>x.id===p).dur));
+  }
+  return es;
+}
+function computeLF(acts,T){
+  const lf={},succs={};
+  for(const a of acts)succs[a.id]=[];
+  for(const a of acts)for(const p of a.pred)succs[p].push(a.id);
+  for(const a of[...acts].sort((a,b)=>b.id-a.id)){
+    lf[a.id]=succs[a.id].length===0?T:Math.min(...succs[a.id].map(s=>lf[s]-acts.find(x=>x.id===s).dur));
+  }
+  return lf;
+}
+function getCPSet(acts){
+  const es=computeES(acts);const end=acts[acts.length-1];const cpSet=new Set();
+  const trace=(id)=>{cpSet.add(id);const a=acts.find(x=>x.id===id);
+    for(const p of a.pred){if(es[p]+acts.find(x=>x.id===p).dur===es[id]){trace(p);break;}}};
+  trace(end.id);return cpSet;
+}
+
+/* ═══════════════ SCENARIOS ═══════════════ */
+
+const scenarios=[
+  {
+    id:"cpm",title:"דוגמה 1: CPM מנצח",tag:"CPM",
+    subtitle:"שרשרת תלויות ארוכה, משאבים בשפע",
+    resource_cap:5,
+    activities:[
+      {id:0,name:"S",dur:0,res:0,pred:[]},
+      {id:1,name:"A1",dur:4,res:1,pred:[0]},
+      {id:2,name:"A2",dur:5,res:1,pred:[1]},
+      {id:3,name:"A3",dur:3,res:1,pred:[2]},
+      {id:4,name:"A4",dur:6,res:1,pred:[3]},
+      {id:5,name:"A5",dur:2,res:1,pred:[0]},
+      {id:6,name:"E",dur:0,res:0,pred:[4,5]},
+    ],
+  },
+  {
+    id:"lbcc",title:"דוגמה 2: LBCC מנצח",tag:"LBCC",
+    subtitle:"עומס עבודה כבד נשפך בו-זמנית",
+    resource_cap:5,
+    activities:[
+      {id:0,name:"S",dur:0,res:0,pred:[]},
+      {id:1,name:"A1",dur:2,res:1,pred:[0]},
+      {id:2,name:"A2",dur:4,res:4,pred:[1]},
+      {id:3,name:"A3",dur:4,res:4,pred:[1]},
+      {id:4,name:"A4",dur:4,res:4,pred:[1]},
+      {id:5,name:"A5",dur:3,res:3,pred:[1]},
+      {id:6,name:"E",dur:0,res:0,pred:[2,3,4,5]},
+    ],
+  },
+  {
+    id:"lbcs",title:"דוגמה 3: LBCS מנצח",tag:"LBCS",
+    subtitle:"הנתיב הקריטי תופס משאבים, פעילויות אחרות לא נכנסות",
+    resource_cap:5,
+    activities:[
+      {id:0,name:"S",dur:0,res:0,pred:[]},
+      {id:1,name:"A1",dur:3,res:3,pred:[0]},
+      {id:2,name:"A2",dur:4,res:3,pred:[1]},
+      {id:3,name:"A3",dur:2,res:3,pred:[2]},
+      {id:4,name:"A4",dur:4,res:4,pred:[0]},
+      {id:5,name:"A5",dur:4,res:4,pred:[0]},
+      {id:6,name:"E",dur:0,res:0,pred:[3,4,5]},
+    ],
+  },
+];
+
+/* ═══════════════ BUILD PETRI NET ═══════════════ */
+
+function buildPetriNet(sc){
+  const{activities:acts,resource_cap}=sc;
+  const succs={};acts.forEach(a=>{succs[a.id]=[]});
+  acts.forEach(a=>a.pred.forEach(p=>{succs[p].push(a.id)}));
+  const places=[],transitions=[],arcs=[];
+  places.push({id:"R1",type:"resource",tokens:resource_cap});
+  places.push({id:"pre_S",type:"prec_init",tokens:1});
+  acts.forEach(a=>{succs[a.id].forEach(s=>{
+    const sA=acts.find(x=>x.id===s);
+    places.push({id:`p_${a.name}_${sA.name}`,type:"prec",tokens:0,fromAct:a.id,toAct:s});
+  })});
+  places.push({id:"post_E",type:"prec_final",tokens:0});
+  acts.forEach(a=>{transitions.push({id:`t_${a.name}`,actId:a.id,label:a.name,dur:a.dur,res:a.res})});
+  acts.forEach(a=>{
+    if(a.res>0){arcs.push({from:"R1",to:`t_${a.name}`,weight:a.res,type:"res_in"});arcs.push({from:`t_${a.name}`,to:"R1",weight:a.res,type:"res_out"})}
+  });
+  acts.forEach(a=>{
+    if(a.pred.length===0){arcs.push({from:"pre_S",to:`t_${a.name}`,weight:1,type:"prec"})}
+    else{a.pred.forEach(p=>{const pA=acts.find(x=>x.id===p);arcs.push({from:`p_${pA.name}_${a.name}`,to:`t_${a.name}`,weight:1,type:"prec"})})}
+  });
+  acts.forEach(a=>{
+    if(succs[a.id].length===0){arcs.push({from:`t_${a.name}`,to:"post_E",weight:1,type:"prec"})}
+    else{succs[a.id].forEach(s=>{const sA=acts.find(x=>x.id===s);arcs.push({from:`t_${a.name}`,to:`p_${a.name}_${sA.name}`,weight:1,type:"prec"})})}
+  });
+  return{places,transitions,arcs};
+}
+
+/* ═══════════════ LAYOUT ═══════════════ */
+
+function computeLayout(sc,petri){
+  const acts=sc.activities;const depth={};
+  for(const a of[...acts].sort((a,b)=>a.id-b.id)){depth[a.id]=a.pred.length===0?0:Math.max(...a.pred.map(p=>depth[p]+1))}
+  const maxD=Math.max(...Object.values(depth));
+  const groups={};acts.forEach(a=>{if(!groups[depth[a.id]])groups[depth[a.id]]=[];groups[depth[a.id]].push(a)});
+  const maxGrp=Math.max(...Object.values(groups).map(g=>g.length));
+  const COL=260,PCOL=130,ROW=130,LEFT=140,TOP=160;const pos={};
+  for(let d=0;d<=maxD;d++){const g=groups[d]||[];const totalH=g.length*ROW;const startY=TOP+(maxGrp*ROW-totalH)/2;
+    g.forEach((a,i)=>{pos[`t_${a.name}`]={x:LEFT+d*COL,y:startY+i*ROW}})}
+  pos["pre_S"]={x:pos["t_S"].x-75,y:pos["t_S"].y};
+  pos["post_E"]={x:pos["t_E"].x+75,y:pos["t_E"].y};
+  const precByD={};
+  petri.places.forEach(p=>{if(p.type==="prec"&&p.fromAct!==undefined){const d=depth[acts.find(x=>x.id===p.fromAct).id];if(!precByD[d])precByD[d]=[];precByD[d].push(p)}});
+  Object.entries(precByD).forEach(([d,pls])=>{const colX=LEFT+parseInt(d)*COL+PCOL;const totalH=pls.length*(ROW*0.7);const startY=TOP+(maxGrp*ROW-totalH)/2;
+    pls.forEach((p,i)=>{pos[p.id]={x:colX,y:startY+i*(ROW*0.7)}})});
+  const allTX=Object.entries(pos).filter(([k])=>k.startsWith("t_")).map(([,v])=>v.x);
+  pos["R1"]={x:(Math.min(...allTX)+Math.max(...allTX))/2,y:40};
+  return pos;
+}
+
+/* ═══════════════ HEBREW STEP BUILDERS ═══════════════ */
+
+function buildCPMSteps(acts){
+  const es=computeES(acts);const cpSet=getCPSet(acts);
+  const cpActs=[...cpSet].filter(id=>acts.find(a=>a.id===id).dur>0).sort((a,b)=>es[a]-es[b]);
+  const steps=[];let cum=0;
+
+  steps.push({text:"שיטת הנתיב הקריטי (CPM) מוצאת את הנתיב הארוך ביותר ברשת הפרויקט. היא מתייחסת רק לאילוצי קדימות — איזו פעילות חייבת להסתיים לפני שאחרת מתחילה — ומתעלמת לחלוטין ממגבלות משאבים. גם אם היו לנו משאבים אינסופיים, הפרויקט לא יכול להסתיים מהר יותר מהשרשרת הארוכה ביותר של פעילויות תלויות.",
+    highlight:new Set([acts[0].id]),cumVal:0});
+
+  steps.push({text:"אנחנו מבצעים מעבר קדימה (Forward Pass): מתחילים מתחילת הפרויקט, ומחשבים לכל פעילות את הזמן המוקדם ביותר להתחלה (Earliest Start) ואת הזמן המוקדם ביותר לסיום (Earliest Finish). הזמן המוקדם להתחלה של פעילות שווה לזמן הסיום המאוחר ביותר מבין כל הקודמים שלה.",
+    highlight:new Set([acts[0].id]),cumVal:0});
+
+  for(const id of cpActs){
+    const a=acts.find(x=>x.id===id);cum+=a.dur;
+    const predNames=a.pred.map(p=>acts.find(x=>x.id===p).name).join(" ו-");
+    const predFinish=a.pred.map(p=>{const pa=acts.find(x=>x.id===p);return`${pa.name} מסתיים בזמן ${es[p]+pa.dur}`}).join("; ");
+    steps.push({
+      text:`פעילות ${a.name}: משך = ${a.dur} יחידות זמן, דרישת משאב = ${a.res} יחיד${a.res!==1?"ות":"ה"}. הקודם${a.pred.length>1?" שלה הם":"ית שלה היא"} ${predNames} (${predFinish}). לכן, הזמן המוקדם להתחלה של ${a.name} = ${es[a.id]}, וזמן הסיום המוקדם = ${es[a.id]} + ${a.dur} = ${es[a.id]+a.dur}. אורך הנתיב הקריטי עד כה: ${cum}.`,
+      highlight:new Set([...cpActs.filter(c=>es[c]<=es[id]),acts[0].id]),cumVal:cum,
+    });
+  }
+
+  steps.push({text:`החסם התחתון של CPM = ${cum}. זהו משך הפרויקט המינימלי בהתבסס על רשת הקדימויות בלבד. ההנחה היא שיש משאבים אינסופיים — לכן כשהמשאבים מוגבלים, חסם זה עלול להיות אופטימי מדי, והמשך האמיתי עשוי להיות גבוה יותר.`,
+    highlight:cpSet,cumVal:cum,isFinal:true});
+
+  return{steps,value:cum};
+}
+
+function buildLBCCSteps(acts,cap){
+  const es=computeES(acts);const real=acts.filter(a=>a.dur>0);
+  const esTimes=[...new Set(real.map(a=>es[a.id]))].sort((a,b)=>a-b);
+  const steps=[];let work=0,t=0,esIdx=0,result=0;
+
+  steps.push({text:`היוריסטיקת הקיבולת הקריטית (LBcc) משתמשת ב"דגם הדלי" כדי להעריך את משך הפרויקט המינימלי. דמיינו דלי שאנחנו ממלאים בתוכן עבודה בכל פעם שפעילויות הופכות לכשירות להתחלה. תוכן העבודה של פעילות = משך × דרישת משאב. הדלי מתרוקן בקצב השווה לקיבולת המשאב הכוללת, שהיא ${cap} יחידות ליחידת זמן.`,
+    highlight:new Set(),cumVal:0});
+
+  steps.push({text:`כך זה עובד שלב אחר שלב: אנחנו הולכים בציר הזמן לפי הסדר. בכל נקודה שבה פעילויות חדשות מגיעות לזמן ההתחלה המוקדם שלהן, אנחנו שופכים את תוכן העבודה שלהן לדלי. בין נקודות אלו, הדלי מתרוקן בקצב הקיבולת (${cap} ליחידת זמן). החסם התחתון הוא הזמן שבו הדלי נשאר ריק אחרי המילוי האחרון.`,
+    highlight:new Set(),cumVal:0});
+
+  while(esIdx<esTimes.length||work>0){
+    if(esIdx<esTimes.length&&t===esTimes[esIdx]){
+      const batch=real.filter(a=>es[a.id]===t);
+      const added=batch.reduce((s,a)=>s+a.dur*a.res,0);work+=added;
+      const details=batch.map(a=>`${a.name} תורם ${a.dur} × ${a.res} = ${a.dur*a.res} יחידות`).join("; ");
+      steps.push({text:`בזמן ${t}, הפעילויו${batch.length>1?"ת הבאות מגיעות לזמן ההתחלה המוקדם שלהן":"ת הבאה מגיעה לזמן ההתחלה המוקדם שלה"}: ${batch.map(a=>a.name).join(", ")}. תוכן עבודה שנוסף: ${details}. סה״כ נוסף = ${added}. הדלי מכיל כעת ${work} יחידות עבודה מצטברות.`,
+        highlight:new Set(batch.map(a=>a.id)),cumVal:work});
+      esIdx++;
+    }
+    if(work>0){
+      const before=work;work-=cap;result=t+1;
+      if(work<=0){
+        steps.push({text:`מזמן ${t} עד ${t+1}: המשאב מעבד ${cap} יחידות עבודה (הקיבולת המלאה שלו). דלי: ${before} → ${Math.max(0,work)}. הדלי ריק — כל העבודה המצטברת התרוקנה עד זמן ${result}.`,
+          highlight:new Set(),cumVal:0,isFinal:esIdx>=esTimes.length});
+        if(esIdx>=esTimes.length)break;
+      }else if(esIdx<esTimes.length&&t+1===esTimes[esIdx]){
+        steps.push({text:`מזמן ${t} עד ${t+1}: המשאב מעבד ${cap} יחידות עבודה. דלי: ${before} → ${work}. עדיין נשארה עבודה, ופעילויות חדשות עומדות להיות כשירות בשלב הבא.`,
+          highlight:new Set(),cumVal:work});
+      }else{
+        const pLeft=Math.ceil(work/cap);
+        if(esIdx>=esTimes.length&&pLeft>2){
+          result=t+1+pLeft;
+          steps.push({text:`אין עוד פעילויות שיהפכו כשירות מנקודה זו. ${work+cap} יחידות העבודה הנותרות (לאחר ריקון ${cap} בתקופה זו) ממשיכות להתרוקן בקצב ${cap} ליחידת זמן. זה לוקח ${pLeft} תקופות נוספות. כל תוכן העבודה נצרך עד זמן ${result}.`,
+            highlight:new Set(),cumVal:0,isFinal:true});
+          work=0;break;
+        }
+      }
+    }
+    if(work<=0&&esIdx<esTimes.length)t=esTimes[esIdx];else t++;
+    if(t>200)break;
+  }
+
+  steps.push({text:`החסם התחתון של LBcc = ${result}. על ידי מעקב אחר סך העבודה הזורמת דרך המשאב לאורך הזמן, LBcc מזהה מתי יש יותר מדי עבודה מצטברת לעיבוד — גם אם אף פעילות בודדת אינה חסומה. הוא משלב את התזמון מרשת הקדימויות (זמני התחלה מוקדמים) עם הביקוש הכולל למשאבים.`,
+    highlight:new Set(),cumVal:result,isFinal:true});
+  return{steps,value:result};
+}
+
+function buildLBCSSteps(acts,cap){
+  const es=computeES(acts);const lbcp=buildCPMSteps(acts).value;
+  const lf=computeLF(acts,lbcp);const cpSet=getCPSet(acts);
+  const cpProfile=new Array(lbcp).fill(0);
+  for(const id of cpSet){const a=acts.find(x=>x.id===id);for(let t=es[id];t<es[id]+a.dur;t++)if(t<lbcp)cpProfile[t]+=a.res}
+  const steps=[];
+  const cpNames=[...cpSet].filter(id=>acts.find(a=>a.id===id).dur>0).sort((a,b)=>es[a]-es[b]).map(id=>acts.find(a=>a.id===id).name);
+
+  steps.push({text:`היוריסטיקת הרצף הקריטי (LBCS) מרחיבה את תוצאת CPM שהיא ${lbcp}. היא שואלת: האם הפעילויות שלא על הנתיב הקריטי באמת יכולות לרוץ במקביל לנתיב הקריטי, בהינתן משאבים מוגבלים? עבור כל פעילות שאינה קריטית, אנחנו בודקים כמה חלונות זמן בחלון הכשיר שלה יש מספיק קיבולת משאבים פנויה.`,
+    highlight:cpSet,cumVal:lbcp});
+
+  const profStr=cpProfile.map((v,i)=>`זמן ${i}: ${v} בשימוש`).join(", ");
+  const resStr=cpProfile.map((v,i)=>`זמן ${i}: ${cap-v} פנוי`).join(", ");
+  steps.push({text:`הנתיב הקריטי מורכב מ: ${cpNames.join(" ← ")}. פעילויות אלו משתמשות במשאבים בכל חלון זמן כך: [${profStr}]. מאחר שהקיבולת הכוללת היא ${cap}, הקיבולת השיורית (הפנויה) היא: [${resStr}].`,
+    highlight:cpSet,cumVal:lbcp});
+
+  let maxDelta=0,maxAct=null;
+  const nonCP=acts.filter(a=>!cpSet.has(a.id)&&a.dur>0);
+  for(const a of nonCP){
+    const aES=es[a.id],aLF=lf[a.id];
+    let e=0;const fittingSlots=[],notFitting=[];
+    for(let t=aES;t<aLF;t++){
+      const residual=t<lbcp?cap-cpProfile[t]:cap;
+      if(residual>=a.res){e++;fittingSlots.push(`זמן ${t} (שיורי=${residual})`)}
+      else{notFitting.push(`זמן ${t} (שיורי=${residual}, צריך ${a.res})`)}
+    }
+    const delta=Math.max(0,a.dur-e);
+
+    let slotDetail="";
+    if(e>0&&e<6)slotDetail=`החלונות המתאימים הם: ${fittingSlots.join(", ")}.`;
+    else if(e===0)slotDetail=`אין אף חלון זמן עם מספיק קיבולת שיורית (${notFitting.slice(0,3).join("; ")}${notFitting.length>3?"...":""}).`;
+    else slotDetail=`${e} חלונות עם מספיק קיבולת שיורית.`;
+
+    let deltaExpl="";
+    if(delta>0)deltaExpl=` כלומר, ${a.name} לא יכולה לרוץ במלואה במקביל לנתיב הקריטי — היא צריכה ${delta} יחידו${delta>1?"ת":"ת"} זמן נוספות מעבר למה שזמין.`;
+    else deltaExpl=` כלומר, ${a.name} יכולה להיכנס במלואה במקביל לנתיב הקריטי מבלי להאריך את לוח הזמנים.`;
+
+    steps.push({text:`פעילות ${a.name} אינה על הנתיב הקריטי. משכה ${a.dur} והיא דורשת ${a.res} יחידות משאב. החלון הכשיר שלה משתרע מזמן התחלה מוקדם = ${aES} עד זמן סיום מאוחר = ${aLF} (${aLF-aES} חלונות). ${slotDetail} מספר החלונות המתאימים = ${e}. ההרחבה הכפויה (דלתא) = max(0, משך − חלונות מתאימים) = max(0, ${a.dur} − ${e}) = ${delta}.${deltaExpl}`,
+      highlight:new Set([a.id]),cumVal:lbcp+delta});
+    if(delta>maxDelta){maxDelta=delta;maxAct=a}
+  }
+
+  steps.push({text:`ההרחבה הכפויה הגדולה ביותר היא ${maxDelta}${maxAct?` (מפעילות ${maxAct.name})`:""}.  החסם התחתון של LBCS = נתיב קריטי (${lbcp}) + הרחבה כפויה מקסימלית (${maxDelta}) = ${lbcp+maxDelta}. LBCS מזהה מתי פעילויות כבדות ספציפיות לא יכולות לרוץ במקביל לנתיב הקריטי בגלל קונפליקטים של משאבים ברמת חלון הזמן.`,
+    highlight:maxAct?new Set([...cpSet,maxAct.id]):cpSet,cumVal:lbcp+maxDelta,isFinal:true});
+  return{steps,value:lbcp+maxDelta};
+}
+
+/* ═══════════════ HEBREW EXPLANATIONS ═══════════════ */
+
+const explanations={
+  cpm:(v)=>`בדוגמה זו, לפרויקט יש שרשרת תלויות ארוכה: Start → A1 → A2 → A3 → A4 → End, עם משך כולל של ${v[0]} (= 4 + 5 + 3 + 6). יחד עם זאת, כל פעילות דורשת רק יחידת משאב אחת מתוך 5 הזמינות — המשאבים בשפע. היוריסטיקת הקיבולת הקריטית (LBcc = ${v[1]}) רואה שעומס העבודה המצטבר נצרך בקלות בקצב הקיבולת. היוריסטיקת הרצף הקריטי (LBCS = ${v[2]}) מוצאת שפעילות A5 שאינה קריטית נכנסת בקלות לצד הנתיב הקריטי. לכן, שיטת הנתיב הקריטי הטהורה, המבוססת על תלויות בלבד, נותנת את החסם ההדוק ביותר: שרשרת התלויות הארוכה, ולא מחסור במשאבים, היא צוואר הבקבוק.`,
+  lbcc:(v)=>`בדוגמה זו, הנתיב הקריטי קצר: Start → A1 → A2 → End = 2 + 4 = 6. אבל בזמן התחלה מוקדם = 2, ארבע פעילויות כבדות (A2, A3, A4, A5) הופכות כשירות בו-זמנית. הן שופכות כמות עצומה של תוכן עבודה לדלי: 4×4 + 4×4 + 4×4 + 3×3 = 57 יחידות עבודה. בקצב ריקון של 5 יחידות בלבד ליחידת זמן, נדרשות תקופות רבות לעיבוד → LBcc = ${v[1]}. היוריסטיקת LBCS (= ${v[2]}) בודקת רק פעילות אחת בכל פעם מול הנתיב הקריטי, ולכן מפספסת את העומס המצטבר. LBcc מנצח כי הוא תופס את סך העבודה המצטברת שהמשאב חייב לעבד.`,
+  lbcs:(v)=>`בדוגמה זו, הנתיב הקריטי Start → A1 → A2 → A3 → End באורך ${v[0]} (= 3 + 4 + 2). פעילויות הנתיב הקריטי משתמשות ב-3 יחידות מתוך קיבולת 5 לאורך חלונות הזמן 0 עד 8, ומשאירות רק 2 יחידות קיבולת שיורית. פעילויות A4 ו-A5 שאינן קריטיות דורשות כל אחת 4 יחידות — אבל רק 2 יחידות זמינות בכל חלון. לכן אפס חלונות זמן עם מספיק קיבולת שיורית עבור A4 או A5 (חלונות מתאימים = 0, הרחבה כפויה = 4). LBCS = ${v[0]} + 4 = ${v[2]}. היוריסטיקת LBcc (= ${v[1]}) משתמשת בראייה מצטברת שלא תופסת את הקונפליקט הספציפי ברמת חלון הזמן בצורה הדוקה מספיק. LBCS מנצח כי הוא מזהה שהנתיב הקריטי צורך משאבים שמונעים מפעילויות כבדות ספציפיות לרוץ במקביל.`,
+};
+
+/* ═══════════════ HEURISTIC META ═══════════════ */
+
+const lbMeta=[
+  {key:"cp",label:"CPM",color:"#007AFF",builder:(a,c)=>buildCPMSteps(a)},
+  {key:"cc",label:"LBCC",color:"#30D158",builder:(a,c)=>buildLBCCSteps(a,c)},
+  {key:"cs",label:"LBCS",color:"#FF9F0A",builder:(a,c)=>buildLBCSSteps(a,c)},
+];
+
+/* ═══════════════ DRAGGABLE PETRI NET SVG ═══════════════ */
+
+function PetriNetSVG({scenario,petri,initialPos,highlightedActs,cpSet}){
+  const svgRef=useRef(null);
+  const[positions,setPositions]=useState({});
+  const dragState=useRef({id:null,ox:0,oy:0});
+
+  useEffect(()=>{setPositions(JSON.parse(JSON.stringify(initialPos)))},[initialPos]);
+
+  const getSVGPoint=useCallback((e)=>{
+    const svg=svgRef.current;if(!svg)return{x:0,y:0};
+    const pt=svg.createSVGPoint();pt.x=e.clientX;pt.y=e.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  },[]);
+
+  const onDown=useCallback((id)=>(e)=>{
+    e.preventDefault();e.stopPropagation();
+    const p=getSVGPoint(e);const cur=positions[id];if(!cur)return;
+    dragState.current={id,ox:p.x-cur.x,oy:p.y-cur.y};
+    const onMove=(me)=>{const mp=getSVGPoint(me);
+      setPositions(prev=>({...prev,[dragState.current.id]:{x:mp.x-dragState.current.ox,y:mp.y-dragState.current.oy}}))};
+    const onUp=()=>{dragState.current.id=null;window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp)};
+    window.addEventListener("mousemove",onMove);window.addEventListener("mouseup",onUp);
+  },[positions,getSVGPoint]);
+
+  const acts=scenario.activities;const highlighted=highlightedActs||new Set();const pos=positions;
+  const allP=Object.values(pos).filter(Boolean);
+  if(allP.length===0)return null;
+  const maxX=Math.max(...allP.map(p=>p.x))+130;
+  const maxY=Math.max(...allP.map(p=>p.y))+90;
+  const totalResTrans=petri.arcs.filter(a=>a.type==="res_in").length;
+
+  const renderArc=(arc,i)=>{
+    const fp=pos[arc.from],tp=pos[arc.to];if(!fp||!tp)return null;
+    const fromT=petri.transitions.find(t=>t.id===arc.from);
+    const toT=petri.transitions.find(t=>t.id===arc.to);
+    const isHL=(fromT&&highlighted.has(fromT.actId))||(toT&&highlighted.has(toT.actId));
+
+    if(arc.type==="res_in"||arc.type==="res_out"){
+      const spread=totalResTrans>1?(Math.floor(i/2)-(totalResTrans-1)/2)*28:0;
+      const midX=(fp.x+tp.x)/2+spread;const cpY=Math.min(fp.y,tp.y)-25;
+      const col=isHL?"#30D158":"#30D15855";
+      return(<g key={`r${i}`}>
+        <path d={`M ${fp.x} ${fp.y} Q ${midX} ${cpY} ${tp.x} ${tp.y}`}
+          fill="none" stroke={col} strokeWidth={isHL?2.2:1.2}
+          markerEnd={`url(#ar-${isHL?"rH":"r"})`}
+          strokeDasharray={arc.type==="res_out"?"5 3":"none"}/>
+        {arc.weight>1&&<text x={midX+(arc.type==="res_in"?-10:10)} y={cpY-3} textAnchor="middle"
+          fill={isHL?"#30D158":"#30D15866"} fontSize={11} fontWeight={600}>{arc.weight}</text>}
+      </g>);
+    }
+
+    const dx=tp.x-fp.x,dy=tp.y-fp.y;const len=Math.sqrt(dx*dx+dy*dy);
+    if(len===0)return null;
+    const ux=dx/len,uy=dy/len,r=15;const col=isHL?"#007AFF":"#007AFF55";
+    return(<line key={`p${i}`} x1={fp.x+ux*r} y1={fp.y+uy*r} x2={tp.x-ux*r} y2={tp.y-uy*r}
+      stroke={col} strokeWidth={isHL?2.5:1.5} markerEnd={`url(#ar-${isHL?"pH":"p"})`}/>);
+  };
+
+  return(
+    <div>
+      <svg ref={svgRef} viewBox={`0 0 ${maxX} ${maxY}`}
+        style={{width:"100%",maxWidth:Math.min(maxX,1200),background:"#F9F9F9",
+          borderRadius:16,display:"block",margin:"0 auto",border:"1px solid #D1D1D6"}}>
+        <defs>
+          <marker id="ar-r" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="7" markerHeight="5" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#30D15855"/></marker>
+          <marker id="ar-rH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="7" markerHeight="5" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#30D158"/></marker>
+          <marker id="ar-p" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="7" markerHeight="5" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#007AFF55"/></marker>
+          <marker id="ar-pH" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="7" markerHeight="5" orient="auto"><path d="M0,0 L10,3 L0,6 Z" fill="#007AFF"/></marker>
+        </defs>
+
+        {petri.arcs.filter(a=>a.type==="res_in"||a.type==="res_out").map(renderArc)}
+        {petri.arcs.filter(a=>a.type==="prec").map(renderArc)}
+
+        {petri.places.map(p=>{
+          const pp=pos[p.id];if(!pp)return null;
+          const isRes=p.type==="resource",isInit=p.type==="prec_init",isFin=p.type==="prec_final",isPrec=p.type==="prec";
+          const r=isRes?30:(isInit||isFin)?18:15;
+          const isHL=isPrec&&(highlighted.has(p.fromAct)||highlighted.has(p.toAct));
+          const fill=isRes?"#E8F5E9":"#E3F2FD";
+          const stroke=isHL?"#007AFF":isRes?"#30D158":"#007AFF88";
+          const fromA=isPrec?acts.find(x=>x.id===p.fromAct):null;
+          const toA=isPrec?acts.find(x=>x.id===p.toAct):null;
+          return(
+            <g key={p.id} onMouseDown={onDown(p.id)} style={{cursor:"grab"}}>
+              <circle cx={pp.x} cy={pp.y} r={r} fill={fill} stroke={stroke} strokeWidth={isHL?2.5:1.5}/>
+              {isRes&&<text x={pp.x} y={pp.y+2} textAnchor="middle" dominantBaseline="middle" fill="#1B8D36" fontSize={16} fontWeight={700}>{p.tokens}</text>}
+              {isRes&&<text x={pp.x} y={pp.y-38} textAnchor="middle" fill="#1B8D36" fontSize={13} fontWeight={600}>R1 (קיבולת = {p.tokens})</text>}
+              {isInit&&<text x={pp.x} y={pp.y+1} textAnchor="middle" dominantBaseline="middle" fill="#007AFF" fontSize={10} fontWeight={600}>start</text>}
+              {isFin&&<text x={pp.x} y={pp.y+1} textAnchor="middle" dominantBaseline="middle" fill="#007AFF" fontSize={10} fontWeight={600}>end</text>}
+              {isPrec&&fromA&&toA&&<text x={pp.x} y={pp.y+1} textAnchor="middle" dominantBaseline="middle" fill="#007AFFAA" fontSize={8} fontWeight={500}>{fromA.name}→{toA.name}</text>}
+              {p.tokens>0&&!isRes&&<circle cx={pp.x} cy={pp.y-9} r={3.5} fill="#007AFF"/>}
+            </g>
+          );
+        })}
+
+        {petri.transitions.map(tr=>{
+          const tp=pos[tr.id];if(!tp)return null;
+          const isHL=highlighted.has(tr.actId),isCP=cpSet.has(tr.actId);
+          const w=72,h=40;
+          const fill=isHL?"#FFE0B2":"#FFF8E1";
+          const stroke=isHL?"#E68900":isCP?"#FF9F0A88":"#C7C7CC";
+          return(
+            <g key={tr.id} onMouseDown={onDown(tr.id)} style={{cursor:"grab"}}>
+              {isHL&&<rect x={tp.x-w/2-4} y={tp.y-h/2-4} width={w+8} height={h+8} rx={12}
+                fill="none" stroke="#FF9F0A55" strokeWidth={1.5}
+                style={{animation:"glowPulse 2s infinite","--glow-color":"#FF9F0A44"}}/>}
+              <rect x={tp.x-w/2} y={tp.y-h/2} width={w} height={h} rx={10}
+                fill={fill} stroke={stroke} strokeWidth={isHL?2.5:1.5}/>
+              <text x={tp.x} y={tr.dur>0?tp.y-5:tp.y+1} textAnchor="middle" dominantBaseline="middle"
+                fill={isHL?"#C47600":"#E68900"} fontSize={15} fontWeight={700}>{tr.label}</text>
+              {tr.dur>0&&<text x={tp.x} y={tp.y+13} textAnchor="middle"
+                fill={isHL?"#C4760099":"#E6890066"} fontSize={11} fontWeight={500}>d={tr.dur} r={tr.res}</text>}
+            </g>
+          );
+        })}
+
+        <g transform={`translate(18,${maxY-28})`} direction="ltr">
+          <circle cx={8} cy={0} r={7} fill="#E8F5E9" stroke="#30D158" strokeWidth={1.5}/>
+          <text x={22} y={4} fill="#86868B" fontSize={11}>Resource Place</text>
+          <circle cx={170} cy={0} r={7} fill="#E3F2FD" stroke="#007AFF88" strokeWidth={1.5}/>
+          <text x={184} y={4} fill="#86868B" fontSize={11}>Precedence Place</text>
+          <rect x={320} y={-9} width={24} height={18} rx={5} fill="#FFF8E1" stroke="#C7C7CC" strokeWidth={1.5}/>
+          <text x={350} y={4} fill="#86868B" fontSize={11}>Transition</text>
+        </g>
+      </svg>
+      <p className="drag-hint">גרור כל אלמנט כדי לשנות את סידור הרשת</p>
+    </div>
+  );
+}
+
+/* ═══════════════ STEP NAVIGATOR ═══════════════ */
+
+function StepNavigator({steps,stepIdx,setStepIdx,color,isPlaying,togglePlay}){
+  const s=steps[stepIdx];const pct=((stepIdx+1)/steps.length)*100;
+  return(
+    <div className="card fade-in" style={{borderRight:`3px solid ${color}`,borderLeft:"none"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"center",gap:12}}>
+          <div style={{width:8,height:8,borderRadius:"50%",background:color,boxShadow:`0 0 8px ${color}66`}}/>
+          <span style={{fontSize:14,color:"#86868B",fontWeight:500}}>שלב {stepIdx+1} מתוך {steps.length}</span>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",direction:"ltr"}}>
+          <button className="nbtn" onClick={()=>setStepIdx(0)} disabled={stepIdx===0}>⏮</button>
+          <button className="nbtn" onClick={()=>setStepIdx(Math.max(0,stepIdx-1))} disabled={stepIdx===0}>◀ הקודם</button>
+          <button className={`play-btn ${isPlaying?"playing":""}`} onClick={togglePlay}
+            style={{"--accent":color}}>{isPlaying?"⏸":"▶"}</button>
+          <button className="nbtn" onClick={()=>setStepIdx(Math.min(steps.length-1,stepIdx+1))} disabled={stepIdx===steps.length-1}>הבא ▶</button>
+          <button className="nbtn" onClick={()=>setStepIdx(steps.length-1)} disabled={stepIdx===steps.length-1}>⏭</button>
+        </div>
+      </div>
+      <div style={{width:"100%",height:3,background:"#E5E5EA",borderRadius:2,marginBottom:20,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:2,transition:"width 0.4s cubic-bezier(.4,0,.2,1)"}}/>
+      </div>
+      <p className={`step-text ${s.isFinal?"step-final":""}`} style={{color:s.isFinal?color:"#1D1D1F"}}
+        key={stepIdx}>{s.text}</p>
+    </div>
+  );
+}
+
+/* ═══════════════ LB BAR ═══════════════ */
+
+function LBBar({label,value,maxVal,color,winner}){
+  const pct=Math.max((value/maxVal)*100,10);
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,direction:"rtl"}}>
+      <span style={{width:55,fontSize:15,fontWeight:winner?700:500,color:winner?color:"#86868B",textAlign:"right"}}>{label}</span>
+      <div style={{flex:1,background:"#E5E5EA",borderRadius:10,height:40,position:"relative",overflow:"hidden",direction:"rtl"}}>
+        <div style={{width:`${pct}%`,background:color,height:"100%",borderRadius:10,
+          opacity:winner?1:0.25,transition:"width 0.6s cubic-bezier(.4,0,.2,1)",marginLeft:"auto"}}/>
+        <span style={{position:"absolute",left:14,top:10,fontSize:16,fontWeight:700,color:"#1D1D1F"}}>{value}</span>
+      </div>
+      {winner&&<span style={{padding:"4px 14px",borderRadius:100,background:`${color}1A`,color,
+        fontSize:13,fontWeight:600,whiteSpace:"nowrap"}}>★ הדוק ביותר</span>}
+    </div>
+  );
+}
+
+/* ═══════════════ BACKGROUND ORBS ═══════════════ */
+
+function BackgroundOrbs({color1,color2}){
+  return(
+    <div className="orb-container">
+      <div className="orb orb-1" style={{background:color1}}/>
+      <div className="orb orb-2" style={{background:color2}}/>
+    </div>
+  );
+}
+
+/* ═══════════════ KEYBOARD HINT ═══════════════ */
+
+function KeyboardHint({visible}){
+  return(
+    <div className="kb-hint" style={{opacity:visible?1:0}}>
+      ← → steps &nbsp;·&nbsp; 1 2 3 examples &nbsp;·&nbsp; Q W E heuristic &nbsp;·&nbsp; Space auto-play &nbsp;·&nbsp; F fullscreen
+    </div>
+  );
+}
+
+/* ═══════════════ MAIN APP ═══════════════ */
+
+function App(){
+  const[scIdx,setScIdx]=useState(0);
+  const[lbIdx,setLbIdx]=useState(0);
+  const[stepIdx,setStepIdx]=useState(0);
+  const[isPlaying,setIsPlaying]=useState(false);
+  const[hintVisible,setHintVisible]=useState(true);
+  const playRef=useRef(null);
+  const hintTimer=useRef(null);
+
+  const sc=scenarios[scIdx];
+  const petri=useMemo(()=>buildPetriNet(sc),[scIdx]);
+  const initialPos=useMemo(()=>computeLayout(sc,petri),[scIdx,petri]);
+  const cpSet=useMemo(()=>getCPSet(sc.activities),[scIdx]);
+  const allBuilt=useMemo(()=>lbMeta.map(m=>m.builder(sc.activities,sc.resource_cap)),[scIdx]);
+
+  const built=allBuilt[lbIdx];
+  const clampedStep=Math.min(stepIdx,built.steps.length-1);
+  const curStep=built.steps[clampedStep];
+  const best=Math.max(...allBuilt.map(b=>b.value));
+  const vals=allBuilt.map(b=>b.value);
+  const curLB=lbMeta[lbIdx];
+
+  const switchSc=useCallback((i)=>{setScIdx(i);setStepIdx(0);setLbIdx(0);setIsPlaying(false)},[]);
+  const switchLB=useCallback((i)=>{setLbIdx(i);setStepIdx(0);setIsPlaying(false)},[]);
+  const togglePlay=useCallback(()=>setIsPlaying(p=>!p),[]);
+
+  // Auto-play
+  useEffect(()=>{
+    if(isPlaying){
+      playRef.current=setInterval(()=>{
+        setStepIdx(prev=>{
+          const maxS=built.steps.length-1;
+          if(prev>=maxS){setIsPlaying(false);return prev}
+          return prev+1;
+        });
+      },4000);
+    }else{clearInterval(playRef.current)}
+    return()=>clearInterval(playRef.current);
+  },[isPlaying,built.steps.length]);
+
+  // Keyboard navigation
+  useEffect(()=>{
+    const handler=(e)=>{
+      if(e.key==="ArrowRight"){e.preventDefault();setStepIdx(p=>Math.max(0,p-1))}
+      else if(e.key==="ArrowLeft"){e.preventDefault();setStepIdx(p=>Math.min(built.steps.length-1,p+1))}
+      else if(e.key==="1")switchSc(0);
+      else if(e.key==="2")switchSc(1);
+      else if(e.key==="3")switchSc(2);
+      else if(e.key==="q"||e.key==="Q")switchLB(0);
+      else if(e.key==="w"||e.key==="W")switchLB(1);
+      else if(e.key==="e"||e.key==="E")switchLB(2);
+      else if(e.key===" "){e.preventDefault();togglePlay()}
+      else if(e.key==="f"||e.key==="F"){
+        if(!document.fullscreenElement)document.documentElement.requestFullscreen().catch(()=>{});
+        else document.exitFullscreen().catch(()=>{});
+      }
+    };
+    window.addEventListener("keydown",handler);
+    return()=>window.removeEventListener("keydown",handler);
+  },[built.steps.length,switchSc,switchLB,togglePlay]);
+
+  // Hint auto-hide
+  useEffect(()=>{
+    setHintVisible(true);
+    hintTimer.current=setTimeout(()=>setHintVisible(false),6000);
+    const show=()=>{setHintVisible(true);clearTimeout(hintTimer.current);
+      hintTimer.current=setTimeout(()=>setHintVisible(false),4000)};
+    window.addEventListener("mousemove",show);
+    return()=>{window.removeEventListener("mousemove",show);clearTimeout(hintTimer.current)};
+  },[]);
+
+  const scColors=[["#007AFF","#5AC8FA"],["#30D158","#007AFF"],["#FF9F0A","#FF375F"]];
+  const accents=["#007AFF","#30D158","#FF9F0A"];
+
+  return(
+    <>
+      <BackgroundOrbs color1={scColors[scIdx][0]} color2={scColors[scIdx][1]}/>
+      <KeyboardHint visible={hintVisible}/>
+
+      <div className="container" style={{position:"relative",zIndex:1}}>
+
+        {/* Hero */}
+        <h1 className="hero-title">רשת פטרי — חסמים תחתונים</h1>
+        <p className="hero-sub">ויזואליזציה אינטראקטיבית של RCPSP עם מעקב שלב-אחר-שלב אחר היוריסטיקות</p>
+
+        {/* Why higher = better */}
+        <div className="card fade-in" style={{borderRight:"3px solid #FF375F",borderLeft:"none",marginBottom:32}}>
+          <p style={{fontSize:16,color:"#FF375F",fontWeight:600,marginBottom:8}}>למה המספר הגבוה ביותר מנצח?</p>
+          <p style={{fontSize:15,lineHeight:1.9,color:"#86868B"}}>
+            המספרים האלה הם <strong style={{color:"#1D1D1F"}}>חסמים תחתונים</strong> על משך הפרויקט המינימלי (makespan).
+            חסם <strong style={{color:"#1D1D1F"}}>גבוה יותר</strong> הוא <strong style={{color:"#1D1D1F"}}>הדוק יותר</strong> — קרוב יותר לאופטימום האמיתי.
+            בחיפוש A*, חסם הדוק יותר מאפשר לגזום יותר מעץ החיפוש, לחקור פחות מצבים, ולפתור את הבעיה מהר יותר.
+            החסם המשולב = max(CPM, LBCC, LBCS).
+          </p>
+        </div>
+
+        {/* Scenario pills */}
+        <div className="pill-row">
+          {scenarios.map((s,i)=>(
+            <button key={s.id} className={`pill ${scIdx===i?"active":""}`}
+              style={scIdx===i?{"--accent":accents[i]}:{}}
+              onClick={()=>switchSc(i)}>
+              {s.title}
+            </button>
+          ))}
+        </div>
+        <p style={{textAlign:"center",color:"#86868B",fontSize:15,marginBottom:24}}>
+          {sc.subtitle} · קיבולת R1 = <strong style={{color:"#1D1D1F"}}>{sc.resource_cap}</strong>
+        </p>
+
+        {/* Petri Net */}
+        <PetriNetSVG scenario={sc} petri={petri} initialPos={initialPos} highlightedActs={curStep.highlight} cpSet={cpSet}/>
+
+        {/* Heuristic pills */}
+        <div className="pill-row" style={{marginTop:24}}>
+          {lbMeta.map((m,i)=>{
+            const v=allBuilt[i].value;
+            return(
+              <button key={m.key} className={`pill ${lbIdx===i?"active":""}`}
+                style={lbIdx===i?{"--accent":m.color}:{}}
+                onClick={()=>switchLB(i)}>
+                {m.label} = {v} {v===best?"⭐":""}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Step Navigator */}
+        <StepNavigator steps={built.steps} stepIdx={clampedStep} setStepIdx={setStepIdx}
+          color={curLB.color} isPlaying={isPlaying} togglePlay={togglePlay}/>
+
+        {/* Bar Chart */}
+        <div className="card fade-in">
+          <h3 className="section-title">השוואת חסמים תחתונים</h3>
+          <LBBar label="CPM" value={vals[0]} maxVal={best+2} color="#007AFF" winner={vals[0]===best&&sc.id==="cpm"}/>
+          <LBBar label="LBCC" value={vals[1]} maxVal={best+2} color="#30D158" winner={vals[1]===best&&sc.id==="lbcc"}/>
+          <LBBar label="LBCS" value={vals[2]} maxVal={best+2} color="#FF9F0A" winner={vals[2]===best&&sc.id==="lbcs"}/>
+          <p style={{fontSize:14,color:"#8E8E93",marginTop:12}}>
+            החסם הטוב ביותר = max({vals.join(", ")}) = <strong style={{color:"#1D1D1F",fontSize:18}}>{best}</strong>
+          </p>
+        </div>
+
+        {/* Winner Reveal */}
+        <div className="card fade-in" style={{borderRight:`3px solid ${accents[scIdx]}`,borderLeft:"none"}}>
+          <h3 className="section-title" style={{color:accents[scIdx],fontSize:26,marginBottom:16}}>
+            למה {sc.tag} נותן את החסם ההדוק ביותר?
+          </h3>
+          <p style={{fontSize:16,lineHeight:2.1,color:"#86868B"}}>{explanations[sc.id](vals)}</p>
+        </div>
+
+        {/* Activity Table */}
+        <div className="card fade-in">
+          <h3 className="section-title">נתוני הפעילויות</h3>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:14}} dir="ltr">
+              <thead>
+                <tr style={{borderBottom:"2px solid #D1D1D6"}}>
+                  {["פעילות","משך","דרישת משאב","תוכן עבודה","קודמים","התחלה מוקדמת"].map(h=>(
+                    <th key={h} style={{padding:"10px 12px",textAlign:"center",color:"#86868B",fontWeight:600,fontSize:13}} dir="rtl">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {(()=>{const es=computeES(sc.activities);return sc.activities.filter(a=>a.dur>0).map(a=>(
+                  <tr key={a.id} style={{borderBottom:"1px solid #E5E5EA"}}>
+                    <td style={{padding:"8px 12px",fontWeight:600,textAlign:"center",color:cpSet.has(a.id)?"#E68900":"#1D1D1F"}}>
+                      {a.name}{cpSet.has(a.id)?" (CP)":""}
+                    </td>
+                    <td style={{padding:"8px 12px",textAlign:"center"}}>{a.dur}</td>
+                    <td style={{padding:"8px 12px",textAlign:"center"}}>{a.res}</td>
+                    <td style={{padding:"8px 12px",textAlign:"center",color:"#1B8D36"}}>{a.dur*a.res}</td>
+                    <td style={{padding:"8px 12px",textAlign:"center",color:"#86868B"}}>
+                      {a.pred.map(p=>sc.activities.find(x=>x.id===p).name).join(", ")}
+                    </td>
+                    <td style={{padding:"8px 12px",textAlign:"center",color:"#007AFF"}}>{es[a.id]}</td>
+                  </tr>
+                ))})()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* What is a Petri Net */}
+        <div className="card fade-in">
+          <h3 className="section-title">מהי רשת פטרי?</h3>
+          <div style={{fontSize:15,lineHeight:2.1,color:"#86868B"}}>
+            <p style={{marginBottom:14}}>רשת פטרי היא מודל מתמטי שמייצג את בעיית RCPSP. היא מורכבת משלושה סוגי אלמנטים, המחוברים בקשתות מכוונות. חשוב: רשתות פטרי הן <strong style={{color:"#1D1D1F"}}>דו-חלקיות (bipartite)</strong> — מקומות מתחברים רק למעברים, ומעברים מתחברים רק למקומות. שני מעברים לעולם לא יכולים להתחבר ישירות.</p>
+            <p style={{marginBottom:14}}><strong style={{color:"#1B8D36"}}>מקום משאב</strong> (עיגול ירוק) — מחזיק אסימונים בכמות השווה לקיבולת המשאב. כשפעילות מתחילה, היא צורכת אסימונים (יחידות משאב). כשהיא מסתיימת, היא מחזירה אותם. זה מבטיח שצריכת המשאבים לעולם לא חורגת מהקיבולת.</p>
+            <p style={{marginBottom:14}}><strong style={{color:"#007AFF"}}>מקום קדימות</strong> (עיגול כחול) — אוכף סדר בין פעילויות. כשפעילות A מסתיימת, היא שמה אסימון במקום הקדימות "A→B". פעילות B יכולה להתחיל רק כשהאסימון קיים, מה שמבטיח ש-A מסתיימת לפני ש-B מתחילה.</p>
+            <p><strong style={{color:"#E68900"}}>מעבר (Transition)</strong> (מלבן כתום) — מייצג פעילות. מעבר יכול "לירות" (הפעילות מתחילה) רק כשלכל מקומות הקלט שלו יש מספיק אסימונים — גם אסימוני קדימות (כל הקודמים סיימו) וגם אסימוני משאב (יש מספיק קיבולת).</p>
+          </div>
+        </div>
+
+        {/* Algorithm Reference */}
+        <div className="card fade-in">
+          <h3 className="section-title">אלגוריתמים — סיכום</h3>
+          <p style={{fontSize:12,color:"#8E8E93",marginBottom:18}}>מבוסס על Coelho & Vanhoucke (2018)</p>
+          <div style={{display:"grid",gap:16}}>
+            <div style={{background:"#007AFF0D",borderRadius:14,padding:20,border:"1px solid #007AFF33"}}>
+              <h4 style={{color:"#007AFF",fontSize:16,fontWeight:700,marginBottom:8}}>CPM — שיטת הנתיב הקריטי (הבסיס)</h4>
+              <p style={{fontSize:14,lineHeight:1.9,color:"#86868B"}}>
+                מעבר קדימה: זמן התחלה מוקדם של X = max(זמני סיום מוקדמים של כל הקודמים). זמן סיום מוקדם של X = התחלה מוקדמת + משך.
+                החסם = זמן הסיום המוקדם של הפעילות האחרונה. רץ ב-O(N) — מהיר מאוד, אבל מתעלם לחלוטין ממשאבים, ולכן אופטימי מדי כשהמשאבים מוגבלים.
+              </p>
+            </div>
+            <div style={{background:"#30D1580D",borderRadius:14,padding:20,border:"1px solid #30D15833"}}>
+              <h4 style={{color:"#1B8D36",fontSize:16,fontWeight:700,marginBottom:8}}>LBcc — קיבולת קריטית (תקן הזהב)</h4>
+              <p style={{fontSize:14,lineHeight:1.9,color:"#86868B"}}>
+                "דגם הדלי": בכל אירוע התחלה מוקדמת, ממלאים את הדלי בתוכן עבודה (משך × דרישת משאב). מרוקנים בקצב = קיבולת ליחידת זמן.
+                החסם = הזמן שבו הדלי מתרוקן אחרי המילוי האחרון. כמעט O(N) כמו CPM, אבל תופס צווארי בקבוק של משאבים.
+              </p>
+            </div>
+            <div style={{background:"#FF9F0A0D",borderRadius:14,padding:20,border:"1px solid #FF9F0A33"}}>
+              <h4 style={{color:"#E68900",fontSize:16,fontWeight:700,marginBottom:8}}>LBCS — רצף קריטי (הדוק יותר אבל יקר)</h4>
+              <p style={{fontSize:14,lineHeight:1.9,color:"#86868B"}}>
+                מ-CPM, בונים פרופיל משאבים של הנתיב הקריטי. לכל פעילות שאינה קריטית: סופרים חלונות זמן שבהם הקיבולת השיורית מספיקה.
+                הרחבה כפויה (δ) = משך − חלונות מתאימים. החסם = CPM + max(δ). מזהה קונפליקטים ברמת חלון הזמן שהראייה המצטברת של LBcc עלולה לפספס.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <p style={{textAlign:"center",color:"#D1D1D6",fontSize:12,marginTop:32}}>
+          RCPSP עם רשתות פטרי — פרויקט גמר
+        </p>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

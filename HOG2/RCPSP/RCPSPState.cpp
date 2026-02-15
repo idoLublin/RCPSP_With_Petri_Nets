@@ -2530,13 +2530,13 @@ if (direction) {
         std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
         // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
     }
-
+//**********cheack here***************
     // 2. SORT ACTIVITY TOKENS
     // Ensures tokens in "waiting places" are always in the same order
-    if (!activity_nodes.empty()) {
-        std::sort(activity_nodes.begin(), activity_nodes.end());
-    }
-
+    // if (!activity_nodes.empty()) {
+    //     std::sort(activity_nodes.begin(), activity_nodes.end());
+    // }
+//********************************************
     // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
     for (auto& resVec : resource_nodes) {
         if (resVec.empty()) continue;

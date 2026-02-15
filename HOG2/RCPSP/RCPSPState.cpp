@@ -2185,67 +2185,94 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2_backward(
     for (short transId : unstartedTransitions) {
         if (activeTasks.count(transId) > 0) continue;
 
-        // CRITICAL FIX: Use Successors (Forward Dependencies)
-        // In Backward search, "Predecessors" are the tasks that come AFTER (Successors)
         const auto& dependencies = RCPSPex.dependencies[transId - 1];
-
         const Activity &act = RCPSPex.activities[transId - 1];
-
-        // std::vector<int> dependencies = getSuccessors(transId);
+        const Transition& trans = petri.Transitions[transId - 1];
 
         bool canUnfinish = true;
         int maxSuccFinishTime = 0;
 
+        // 1. Check successors are unfinished
         for (int succId : dependencies) {
-
-            // --- THE LOGIC FLIP IS HERE ---
-
-            // Forward Logic: if (finished.test(id)) continue; (GOOD)
-            // Backward Logic: if (finished.test(id)) BREAK; (BAD)
-
             if (finishedActivitiys.test(succId)) {
-                // My child is still currently 'Scheduled' (1).
-                // It relies on me being finished.
-                // I CANNOT un-finish myself yet.
                 canUnfinish = false;
                 break;
             }
+        }
+        //
+        // //     bool isActive = false;
+        // //     int activeRemainingTime = 0;
+        // //     for (const auto& [activeID, remaining] : activeTransitionIndices) {
+        // //         if (activeID == succId) {
+        // //             isActive = true;
+        // //             activeRemainingTime = remaining;
+        // //             break;
+        // //         }
+        // //     }
+        // //
+        // //     if (isActive) {
+        // //         maxSuccFinishTime = std::max(maxSuccFinishTime, activeRemainingTime);
+        // //     }
+        // // }
 
-            // Check if Successor is currently active (being un-finished)
-            bool isActive = false;
-            int activeRemainingTime = 0;
-            for (const auto& [activeID, remaining] : activeTransitionIndices) {
-                if (activeID == succId) {
-                    isActive = true;
-                    activeRemainingTime = remaining;
+        if (!canUnfinish) continue;
+
+        // 2. Check OUTPUT Activity Tokens MUST exist
+        int maxTokenTime = maxSuccFinishTime;
+
+        for (const auto& [placeID, outAmount] : trans.arcs_out_indices) {
+            if (placeID >= 4) {
+                if (outAmount == 0) continue;  // Skip unused
+
+                short idx = placeID - 4;
+                if (activity_nodes[idx].first < outAmount) {
+                    canUnfinish = false;
+                    break;
+                }
+                maxTokenTime = std::max(maxTokenTime, static_cast<int>(activity_nodes[idx].second));
+            }
+        }
+
+        if (!canUnfinish) continue;
+
+        // 3. Check OUTPUT Resource Tokens
+        int maxResourceTime = maxTokenTime;
+
+        // Use resource_demands just like forward does
+        for (const auto &[res, demand] : act.resource_demands) {
+            if (demand == 0) continue;  // Skip if no demand
+
+            int resID = petri.place_name_to_id.at(res);
+            const auto& tokens = resource_nodes[resID];
+
+            std::vector<std::pair<short, short>> sorted_tokens = tokens;
+            std::sort(sorted_tokens.begin(), sorted_tokens.end(),
+                     [](const auto& a, const auto& b) { return a.second < b.second; });
+
+            int totalAvailable = 0;
+            int resourceReadyTime = -1;
+
+            for (const auto& [amt, time] : sorted_tokens) {
+                totalAvailable += amt;
+                if (totalAvailable >= demand) {  // Use demand instead of outAmount
+                    resourceReadyTime = static_cast<int>(time);
                     break;
                 }
             }
 
-            if (isActive) {
-                // Successor is fading out, we must wait for it to be gone (0)
-                maxSuccFinishTime = std::max(maxSuccFinishTime, activeRemainingTime);
+            if (resourceReadyTime == -1) {
+                canUnfinish = false;
+                break;
             }
-            // Note: If it's NOT active and NOT finished (bit 0), it is "Unfinished".
-            // This is GOOD. We do nothing.
+
+            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
         }
 
-        if (!canUnfinish)
-            continue; // This task is blocked by a finished successor
-        // 2. Resource Check (Identical logic to Forward)
-        // ... [Your existing resource logic is correct here] ...
-        // ... Just ensure 'maxResourceTime' initializes with 'maxSuccFinishTime' ...
+        if (!canUnfinish) continue;
 
-        // (Copy-paste your resource block here, it works symmetrically)
-        bool resourcesOK = true;
-        int maxResourceTime = maxSuccFinishTime;
-
-        // ... [Insert Resource Loop Code] ...
-
-        if (resourcesOK) {
-            available.emplace_back(transId, maxResourceTime);
-        }
+        available.emplace_back(transId, static_cast<short>(maxResourceTime));
     }
+
     return available;
 }
 
@@ -2545,16 +2572,18 @@ if (direction) {
 else {
     isDeltaZero = (firingTime == 0);
     g = prev.g + firingTime;
-    predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization
+    predessesor_h = prev.h;
     lastTransitionId=transitionId;
+
     // 2. Copy State
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
-    activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
-    // ✅ CORRECT: Child gets fresh cache
+    activeTransitionIndices = prev.activeTransitionIndices;
+
     transitionsCached = false;
-    AvailableTransitionIndices_TT2.clear(); // or just leave empty
+    AvailableTransitionIndices_TT2.clear();
+
     // 3. TIME SHIFT (Update "Remaining Time")
     finishedActivitiys[transitionId] = 0;
 
@@ -2573,30 +2602,13 @@ else {
             }
         }
 
-        // ========== UPDATE ACTIVE LIST ==========
-        // Decrement remaining time for all active activities
+        // Update active list
         auto it = activeTransitionIndices.begin();
         while (it != activeTransitionIndices.end()) {
-            it->second -= firingTime;  // Reduce remaining time
+            it->second -= firingTime;
 
             if (it->second <= 0) {
-                // Activity finished - mark it as complete
                 short completedTaskID = it->first;
-
-                // Produce output tokens for this completed activity
-                const Transition& completedTransition = petri.Transitions[completedTaskID - 1];
-                // for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
-                //     if (placeID < 4) {
-                //         // Resource output
-                //         resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
-                //     } else {
-                //         // Activity dependency output
-                //         short idx = placeID - 4;
-                //         activity_nodes[idx] = {outAmount, 0};  // Available NOW
-                //     }
-                // }
-
-                // Remove from active list
                 it = activeTransitionIndices.erase(it);
             } else {
                 ++it;
@@ -2604,20 +2616,19 @@ else {
         }
     }
 
-    // 4. Consume Resources (Standard Resources Only)
+    // 4. Consume OUTPUT Resources
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];
     short duration = act.duration;
 
-    for (const auto& [resName, demand] : act.resource_demands) {
-        if (demand > 0) {
-            short resID = petri.place_name_to_id.at(resName);
-            auto& tokens = resource_nodes[resID];
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        if (placeID < 4) {
+            auto& tokens = resource_nodes[placeID];
 
             std::sort(tokens.begin(), tokens.end(),
                      [](const auto& a, const auto& b) { return a.second < b.second; });
 
-            int remainingDemand = demand;
+            int remainingDemand = outAmount;
             auto it = tokens.begin();
             while (remainingDemand > 0 && it != tokens.end()) {
                 if (it->first > remainingDemand) {
@@ -2631,8 +2642,8 @@ else {
         }
     }
 
-    // 5. Consume Input Dependency Token (Activity Nodes)
-    for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
+    // 5. Consume OUTPUT Activity Tokens
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
         if (placeID >= 4) {
             short idx = placeID - 4;
             activity_nodes[idx].first = 0;
@@ -2640,128 +2651,99 @@ else {
         }
     }
 
-    // 6. ADD TO ACTIVE LIST (instead of marking as finished immediately)
-    // 6. ADD TO ACTIVE LIST & GENERATE FUTURE EVENTS
+    // 6. Produce INPUT tokens (what forward consumed)
+    // Step 6 - Produce INPUT tokens (what forward consumed)
     if (duration > 0) {
-        // A. Track the Task (for "Finished" status logic)
         activeTransitionIndices.emplace_back(transitionId, duration);
 
-        // B. THE FIX: Immediately return outputs as "Future Events"
-        // We put resources back NOW, but marked as "Available in 'duration' seconds"
-        const Transition& currentTrans = petri.Transitions[transitionId - 1];
-
-        for (const auto& [placeID, outAmount] : currentTrans.arcs_out_indices) {
+        // Produce inputs as future events
+        for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
             if (placeID < 4) {
-                // RESOURCE: Return it now with a delay
-                resource_nodes[placeID].emplace_back(outAmount, duration);
+                resource_nodes[placeID].emplace_back(inAmount, duration);
             }
             else {
-                // ACTIVITY TOKEN: Produce it now with a delay
-                // (Be careful with index math: placeID 4 is index 0 in activity_nodes?)
-                // Assuming your activity_nodes starts from Place 4:
                 short idx = placeID - 4;
-                // Only add if not already there (or handled by your specific logic)
-                // For TT, usually we just set the availability time:
+
+                // ADD THIS DEBUG HERE:
+                if (idx == 48 && idx < activity_nodes.size() && activity_nodes[idx].first > 0) {
+                    std::cout << "Activity " << transitionId << " overwriting idx=48: old_time="
+                              << activity_nodes[idx].second << ", new_duration=" << duration << std::endl;
+                }
+
                 if (idx < activity_nodes.size()) {
-                    if (activity_nodes[idx].first == 0 || activity_nodes[idx].second > duration) {
-                        activity_nodes[idx] = {outAmount, duration};
-                    }
+                    activity_nodes[idx] = {inAmount, duration};
                 }
             }
         }
-
-        // Optional: Sort active list
-        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
-
-    } else {
-        // Duration is 0 - finish immediately (Existing Logic)
+    }
+    else {
+        // Duration is 0 - finish immediately
         finishedActivitiys[transitionId] = 0;
 
-        for (const auto& [placeID, outAmount] : petri.Transitions[transitionId-1].arcs_out_indices) {
+        // BACKWARD FIX: Produce to arcs_IN, not arcs_OUT!
+        for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
             if (placeID < 4) {
-                resource_nodes[placeID].emplace_back(outAmount, 0);
-            } else {
+                resource_nodes[placeID].emplace_back(inAmount, 0);
+            }
+            else {
                 short idx = placeID - 4;
-                if(idx < activity_nodes.size()) activity_nodes[idx] = {outAmount, 0};
+                if(idx < activity_nodes.size()) {
+                    activity_nodes[idx] = {inAmount, 0};
+                }
             }
         }
     }
-    // NOTE: If duration > 0, outputs are produced when activity completes (in TIME SHIFT section above)
 
-    // 8. Canonical Sort & Merge (Only for Resources)
-    // 8. Canonical Sort & Merge (CRITICAL FIX)
+    // 7. Canonical Sort & Merge
     for (auto& resVec : resource_nodes) {
         if (resVec.empty()) continue;
 
-        // A. Sort by Time (Ascending)
         std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
              if (a.second != b.second) return a.second < b.second;
-             return a.first > b.first; // Optional: put larger chunks first
+             return a.first > b.first;
         });
 
-        // B. Merge split groups with the same time
-        // This converts [(5,0), (5,0)] -> [(10,0)]
         auto it = resVec.begin();
         while (it != resVec.end() - 1) {
             auto next = it + 1;
             if (it->second == next->second) {
-                // Same time? Merge them!
                 it->first += next->first;
-                // Remove the second one
                 resVec.erase(next);
-                // Don't increment 'it', check the new neighbor
             } else {
                 ++it;
             }
         }
     }
+
     if (!activeTransitionIndices.empty()) {
         std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
-        // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
     }
 
-    // 2. SORT ACTIVITY TOKENS
-    // Ensures tokens in "waiting places" are always in the same order
-    if (!activity_nodes.empty()) {
-        std::sort(activity_nodes.begin(), activity_nodes.end());
-    }
+    // if (!activity_nodes.empty()) {
+    //     std::sort(activity_nodes.begin(), activity_nodes.end());
+    // }
 
-    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
     for (auto& resVec : resource_nodes) {
         if (resVec.empty()) continue;
 
-        // Step A: Sort by Time (Availability Time)
-        // If times are equal, sort by Amount (to be deterministic)
         std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
-            if (a.second != b.second) return a.second < b.second; // Earliest time first
-            return a.first < b.first; // Then smallest amount
+            if (a.second != b.second) return a.second < b.second;
+            return a.first < b.first;
         });
 
-        // Step B: Merge Adjacent Duplicates (The "Split Resource" Fix)
-        // Converts [(5,0), (5,0)] -> [(10,0)]
         auto it = resVec.begin();
         while (it != resVec.end() - 1) {
             auto next = it + 1;
-            // If they become available at the exact same time...
             if (it->second == next->second) {
-                it->first += next->first; // Merge amounts
-                resVec.erase(next);       // Delete the duplicate
-                // Do not increment 'it', check the new neighbor
+                it->first += next->first;
+                resVec.erase(next);
             } else {
                 ++it;
             }
         }
     }
-    // if (firingTime==7&&transitionId != 26) {
-    //     int i;
-    //     i++;
-    // }
+}
 
-
-
-
-
-    }
 }
 
 short getForwardHcost_TT2(

@@ -44,6 +44,37 @@ template<class state>
 struct BAECompare {
     bool operator()(const AStarOpenClosedData<state> &i1, const AStarOpenClosedData<state> &i2) const {
         //auto startSCF = std::chrono::high_resolution_clock::now();
+        if (i1.data.direction ==true) {
+            short f_f1=2*i1.data.g_f+i1.data.h_f-i1.data.h_b, f_f2=2*i2.data.g_f+i2.data.h_f-i2.data.h_b;
+
+            if (fequal(f_f1, f_f2)) {
+                if (fequal(i1.data.g_f, i2.data.g_f)) {
+                    if (i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() != i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size()) {}
+                        if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
+                            //auto endSCF = std::chrono::high_resolution_clock::now();
+                            //comperTime += endSCF-startSCF;
+                            return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
+                        }
+                    return i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() < i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size();
+                    // Then check started_activities count
+                    //auto endSCF = std::chrono::high_resolution_clock::now();
+                    //comperTime += endSCF-startSCF;
+                    //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
+                }
+                return fless(i1.data.g_f, i2.data.g_f);
+            }
+            return fgreater(f_f1, f_f2); // Prefer smaller f
+
+        }
+else {
+    short f_b1=2*i1.data.g_b+i1.data.h_b-i1.data.h_f, f_b2=2*i2.data.g_b+i2.data.h_b-i2.data.h_f;
+
+    if (fequal(f_b1, f_b2)) {
+
+    }
+    return fgreater(f_b1, f_b2); // Prefer smaller f
+
+}
         if (fequal(i1.data.f, i2.data.f)) {
             // First check original g
             // Then check g_f

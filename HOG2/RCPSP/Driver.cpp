@@ -740,12 +740,12 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
     getRCPSP(RCPSPex, group, exam);
 
     // Create start state - this initializes finalstatename
-    RCPSPState_TT first_tt;
-    RCPSPState_Bi first(first_tt);
+    RCPSPState_BI_TT2 first_tt;
+    RCPSPState_BI_TT2 first(first_tt);
     first.direction = true;
 
     // Create goal state properly
-    RCPSPState_Bi last;
+    RCPSPState_BI_TT2 last;
     last.direction = false;
 
     // Resize to match first
@@ -781,8 +781,8 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
         last.finishedActivitiys[i] = -1;  // Mark as finished
     }
 
-    last.g = 0;
-    last.f = last.g_f = last.g_b = last.h_f = last.h_b = 0;
+    last.g_b = 0;
+    last.g_f = last.g_b = last.h_f = last.h_b = 0;
     auto it2 = petri.place_name_to_id.find(finalstatename);
 
     // Always check if it was found to avoid a crash
@@ -801,12 +801,12 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
     // }
     std::cout << "  Goal has " << goal_finished << " finished activities" << std::endl;
     // Set resources an
-    std::vector<RCPSPState_Bi> path;
+    std::vector<RCPSPState_BI_TT2> path;
     ForwardRCPSPHeuristic H_F;
     BackwardRCPSPHeuristic H_B;
     RCPSP_BiGreedy bs1;
 
-    BAE<RCPSPState_Bi, int, RCPSP_BiGreedy> Bi_RCPSP;
+    BAE<RCPSPState_BI_TT2, int, RCPSP_BiGreedy> Bi_RCPSP;
 
     bool finished = false;
     std::chrono::duration<double> elapsed;
@@ -831,8 +831,8 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
                 makespan = path[i].g_f + path[i+1].g_b;
 
                 std::cout << "Meeting point at index " << i << std::endl;
-                std::cout << "  Forward: g=" << path[i].g << ", g_f=" << path[i].g_f << std::endl;
-                std::cout << "  Backward: g=" << path[i+1].g << ", g_b=" << path[i+1].g_b << std::endl;
+                std::cout << "  Forward: g=" << path[i].g_f << ", g_f=" << path[i].g_f << std::endl;
+                std::cout << "  Backward: g=" << path[i+1].g_b << ", g_b=" << path[i+1].g_b << std::endl;
                 std::cout << "  Makespan = g_f + g_b = " << path[i].g_f << " + " << path[i+1].g_b << " = " << makespan << std::endl;
                 break;
             }
@@ -952,8 +952,9 @@ void runBenchmark() {
 
             // 2. SOLVE
             //solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT2(i, j, filename, "j30");
             //solveRCPSP_TT(i, j, filename, "j30");
+            solveRCPSP_Bi(i, j, filename, "j30");
         }
     }
 

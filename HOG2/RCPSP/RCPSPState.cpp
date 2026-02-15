@@ -2040,6 +2040,481 @@ bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
 
         return true;
     }
+
+RCPSPState_BI_TT2::RCPSPState_BI_TT2() {
+     // Build mapping: resource name -> index (0-3)
+    std::unordered_map<int, int> place_to_resource_idx;
+    int res_count = 0;
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        int resID = petri.place_name_to_id.at(resName);
+        place_to_resource_idx[resID] = res_count++;
+    }
+
+    // Count activity nodes
+    int num_activities = petri.places.size() - res_count;
+    activity_nodes.resize(num_activities);
+
+    finishedActivitiys.reset();
+    int activity_counter = 0;
+    for (int i = 0; i < petri.places.size(); ++i) {
+        const auto& place = petri.places[i];
+
+        // Identify Start/End Names
+        if (place.arcs_out.empty()) finalstatename = place.name;
+        if (place.arcs_in.empty())  initialstatename = place.name;
+
+        // Check if resource node
+        auto it = place_to_resource_idx.find(i);
+
+        if (it != place_to_resource_idx.end()) {
+            // This is a resource node
+            int res_idx = it->second;
+
+            if (place.name == initialstatename) {
+                resource_nodes[res_idx].push_back({1, 0});
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                if (val > 0) resource_nodes[res_idx].push_back({val, 0});
+            }
+        } else {
+            // This is an activity node
+            if (place.name == initialstatename) {
+                activity_nodes[activity_counter] = {1, 0};
+            } else if (!place.state.empty() && !place.state[0].empty()) {
+                int val = place.state[0][0];
+                activity_nodes[activity_counter] = (val > 0) ? std::make_pair<short,short>(val, 0) : std::make_pair<short,short>(0, 0);
+            } else {
+                activity_nodes[activity_counter] = {0, 0};
+            }
+            activity_counter++;
+        }
+    }
+
+    // Add resource capacities
+    for (const auto& [resName, cap] : RCPSPex.resources) {
+        if (cap > 0) {
+            int resID = petri.place_name_to_id.at(resName);
+            int res_idx = place_to_resource_idx[resID];
+
+            if (resource_nodes[res_idx].empty()) {
+                resource_nodes[res_idx].push_back({cap, 0});
+            }
+        }
+    }
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+        short taskID = i + 1;
+        if (finishedActivitiys[taskID] == 0) {
+            tempUnstarted.push_back(taskID);
+        }
+    }
+
+
+    h_f=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices,finishedActivitiys);
+    predessesor_h=h_f;
+    g_f = 0;
+}
+
+RCPSPState_BI_TT2::RCPSPState_BI_TT2(const RCPSPState_BI_TT2 &prev, short transitionId, short firingTime, bool Direction) {
+
+// 1. Update Global Cost (G)
+    direction=Direction;
+if (direction) {
+    isDeltaZero = (firingTime == 0);
+    g_f = prev.g_f + firingTime;
+    predessesor_h = prev.h_f;  // Store parent's h for isDeltaZero optimization
+    lastTransitionId=transitionId;
+    // 2. Copy State
+    finishedActivitiys = prev.finishedActivitiys;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
+    activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
+    // ✅ CORRECT: Child gets fresh cache
+    transitionsCached = false;
+    AvailableTransitionIndices_TT2.clear(); // or just leave empty
+    // 3. TIME SHIFT (Update "Remaining Time")
+    if (firingTime > 0) {
+        // Update resource tokens
+        for (auto& resVec : resource_nodes) {
+            for (auto& token : resVec) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // Update activity node tokens
+        for (auto& token : activity_nodes) {
+            if (token.first > 0) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // ========== UPDATE ACTIVE LIST ==========
+        // Decrement remaining time for all active activities
+        auto it = activeTransitionIndices.begin();
+        while (it != activeTransitionIndices.end()) {
+            it->second -= firingTime;  // Reduce remaining time
+
+            if (it->second <= 0) {
+                // Activity finished - mark it as complete
+                short completedTaskID = it->first;
+                finishedActivitiys[completedTaskID] = 1;
+
+                // Produce output tokens for this completed activity
+                const Transition& completedTransition = petri.Transitions[completedTaskID - 1];
+                // for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
+                //     if (placeID < 4) {
+                //         // Resource output
+                //         resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
+                //     } else {
+                //         // Activity dependency output
+                //         short idx = placeID - 4;
+                //         activity_nodes[idx] = {outAmount, 0};  // Available NOW
+                //     }
+                // }
+
+                // Remove from active list
+                it = activeTransitionIndices.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // 4. Consume Resources (Standard Resources Only)
+    const Transition& transition = petri.Transitions[transitionId - 1];
+    const Activity& act = RCPSPex.activities[transitionId - 1];
+    short duration = act.duration;
+
+    for (const auto& [resName, demand] : act.resource_demands) {
+        if (demand > 0) {
+            short resID = petri.place_name_to_id.at(resName);
+            auto& tokens = resource_nodes[resID];
+
+            std::sort(tokens.begin(), tokens.end(),
+                     [](const auto& a, const auto& b) { return a.second < b.second; });
+
+            int remainingDemand = demand;
+            auto it = tokens.begin();
+            while (remainingDemand > 0 && it != tokens.end()) {
+                if (it->first > remainingDemand) {
+                    it->first -= remainingDemand;
+                    remainingDemand = 0;
+                } else {
+                    remainingDemand -= it->first;
+                    it = tokens.erase(it);
+                }
+            }
+        }
+    }
+
+    // 5. Consume Input Dependency Token (Activity Nodes)
+    for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
+        if (placeID >= 4) {
+            short idx = placeID - 4;
+            activity_nodes[idx].first = 0;
+            activity_nodes[idx].second = 0;
+        }
+    }
+
+    // 6. ADD TO ACTIVE LIST (instead of marking as finished immediately)
+    // 6. ADD TO ACTIVE LIST & GENERATE FUTURE EVENTS
+    if (duration > 0) {
+        // A. Track the Task (for "Finished" status logic)
+        activeTransitionIndices.emplace_back(transitionId, duration);
+
+        // B. THE FIX: Immediately return outputs as "Future Events"
+        // We put resources back NOW, but marked as "Available in 'duration' seconds"
+        const Transition& currentTrans = petri.Transitions[transitionId - 1];
+
+        for (const auto& [placeID, outAmount] : currentTrans.arcs_out_indices) {
+            if (placeID < 4) {
+                // RESOURCE: Return it now with a delay
+                resource_nodes[placeID].emplace_back(outAmount, duration);
+            }
+            else {
+                // ACTIVITY TOKEN: Produce it now with a delay
+                // (Be careful with index math: placeID 4 is index 0 in activity_nodes?)
+                // Assuming your activity_nodes starts from Place 4:
+                short idx = placeID - 4;
+                // Only add if not already there (or handled by your specific logic)
+                // For TT, usually we just set the availability time:
+                if (idx < activity_nodes.size()) {
+                    if (activity_nodes[idx].first == 0 || activity_nodes[idx].second > duration) {
+                        activity_nodes[idx] = {outAmount, duration};
+                    }
+                }
+            }
+        }
+
+        // Optional: Sort active list
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+
+    } else {
+        // Duration is 0 - finish immediately (Existing Logic)
+        finishedActivitiys[transitionId] = 1;
+
+        for (const auto& [placeID, outAmount] : petri.Transitions[transitionId-1].arcs_out_indices) {
+            if (placeID < 4) {
+                resource_nodes[placeID].emplace_back(outAmount, 0);
+            } else {
+                short idx = placeID - 4;
+                if(idx < activity_nodes.size()) activity_nodes[idx] = {outAmount, 0};
+            }
+        }
+    }
+    // NOTE: If duration > 0, outputs are produced when activity completes (in TIME SHIFT section above)
+
+    // 8. Canonical Sort & Merge (Only for Resources)
+    // 8. Canonical Sort & Merge (CRITICAL FIX)
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        // A. Sort by Time (Ascending)
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+             if (a.second != b.second) return a.second < b.second;
+             return a.first > b.first; // Optional: put larger chunks first
+        });
+
+        // B. Merge split groups with the same time
+        // This converts [(5,0), (5,0)] -> [(10,0)]
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            if (it->second == next->second) {
+                // Same time? Merge them!
+                it->first += next->first;
+                // Remove the second one
+                resVec.erase(next);
+                // Don't increment 'it', check the new neighbor
+            } else {
+                ++it;
+            }
+        }
+    }
+    if (!activeTransitionIndices.empty()) {
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+        // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
+    }
+//**********cheack here***************
+    // 2. SORT ACTIVITY TOKENS
+    // Ensures tokens in "waiting places" are always in the same order
+    // if (!activity_nodes.empty()) {
+    //     std::sort(activity_nodes.begin(), activity_nodes.end());
+    // }
+//********************************************
+    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        // Step A: Sort by Time (Availability Time)
+        // If times are equal, sort by Amount (to be deterministic)
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second < b.second; // Earliest time first
+            return a.first < b.first; // Then smallest amount
+        });
+
+        // Step B: Merge Adjacent Duplicates (The "Split Resource" Fix)
+        // Converts [(5,0), (5,0)] -> [(10,0)]
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            // If they become available at the exact same time...
+            if (it->second == next->second) {
+                it->first += next->first; // Merge amounts
+                resVec.erase(next);       // Delete the duplicate
+                // Do not increment 'it', check the new neighbor
+            } else {
+                ++it;
+            }
+        }
+    }
+    // if (firingTime==7&&transitionId != 26) {
+    //     int i;
+    //     i++;
+    // }
+}
+
+else {
+    isDeltaZero = (firingTime == 0);
+    g_b = prev.g_b + firingTime;
+    predessesor_h = prev.h_b;
+    lastTransitionId=transitionId;
+
+    // 2. Copy State
+    finishedActivitiys = prev.finishedActivitiys;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
+    activeTransitionIndices = prev.activeTransitionIndices;
+
+    transitionsCached = false;
+    AvailableTransitionIndices_TT2.clear();
+
+    // 3. TIME SHIFT (Update "Remaining Time")
+    finishedActivitiys[transitionId] = 0;
+
+    if (firingTime > 0) {
+        // Update resource tokens
+        for (auto& resVec : resource_nodes) {
+            for (auto& token : resVec) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // Update activity node tokens
+        for (auto& token : activity_nodes) {
+            if (token.first > 0) {
+                token.second = std::max(0, token.second - firingTime);
+            }
+        }
+
+        // Update active list
+        auto it = activeTransitionIndices.begin();
+        while (it != activeTransitionIndices.end()) {
+            it->second -= firingTime;
+
+            if (it->second <= 0) {
+                short completedTaskID = it->first;
+                it = activeTransitionIndices.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // 4. Consume OUTPUT Resources
+    const Transition& transition = petri.Transitions[transitionId - 1];
+    const Activity& act = RCPSPex.activities[transitionId - 1];
+    short duration = act.duration;
+
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        if (placeID < 4) {
+            auto& tokens = resource_nodes[placeID];
+
+            std::sort(tokens.begin(), tokens.end(),
+                     [](const auto& a, const auto& b) { return a.second < b.second; });
+
+            int remainingDemand = outAmount;
+            auto it = tokens.begin();
+            while (remainingDemand > 0 && it != tokens.end()) {
+                if (it->first > remainingDemand) {
+                    it->first -= remainingDemand;
+                    remainingDemand = 0;
+                } else {
+                    remainingDemand -= it->first;
+                    it = tokens.erase(it);
+                }
+            }
+        }
+    }
+
+    // 5. Consume OUTPUT Activity Tokens
+    for (const auto& [placeID, outAmount] : transition.arcs_out_indices) {
+        if (placeID >= 4) {
+            short idx = placeID - 4;
+            activity_nodes[idx].first = 0;
+            activity_nodes[idx].second = 0;
+        }
+    }
+
+    // 6. Produce INPUT tokens (what forward consumed)
+    // Step 6 - Produce INPUT tokens (what forward consumed)
+    if (duration > 0) {
+        activeTransitionIndices.emplace_back(transitionId, duration);
+
+        // Produce inputs as future events
+        for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
+            if (placeID < 4) {
+                resource_nodes[placeID].emplace_back(inAmount, duration);
+            }
+            else {
+                short idx = placeID - 4;
+
+                // ADD THIS DEBUG HERE:
+                if (idx == 48 && idx < activity_nodes.size() && activity_nodes[idx].first > 0) {
+                    std::cout << "Activity " << transitionId << " overwriting idx=48: old_time="
+                              << activity_nodes[idx].second << ", new_duration=" << duration << std::endl;
+                }
+
+                if (idx < activity_nodes.size()) {
+                    activity_nodes[idx] = {inAmount, duration};
+                }
+            }
+        }
+    }
+    else {
+        // Duration is 0 - finish immediately
+        finishedActivitiys[transitionId] = 0;
+
+        // BACKWARD FIX: Produce to arcs_IN, not arcs_OUT!
+        for (const auto& [placeID, inAmount] : transition.arcs_in_indices) {
+            if (placeID < 4) {
+                resource_nodes[placeID].emplace_back(inAmount, 0);
+            }
+            else {
+                short idx = placeID - 4;
+                if(idx < activity_nodes.size()) {
+                    activity_nodes[idx] = {inAmount, 0};
+                }
+            }
+        }
+    }
+
+    // 7. Canonical Sort & Merge
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+             if (a.second != b.second) return a.second < b.second;
+             return a.first > b.first;
+        });
+
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            if (it->second == next->second) {
+                it->first += next->first;
+                resVec.erase(next);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    if (!activeTransitionIndices.empty()) {
+        std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
+    }
+
+    // if (!activity_nodes.empty()) {
+    //     std::sort(activity_nodes.begin(), activity_nodes.end());
+    // }
+
+    for (auto& resVec : resource_nodes) {
+        if (resVec.empty()) continue;
+
+        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+            if (a.second != b.second) return a.second < b.second;
+            return a.first < b.first;
+        });
+
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            if (it->second == next->second) {
+                it->first += next->first;
+                resVec.erase(next);
+            } else {
+                ++it;
+            }
+        }
+    }
+}
+
+
+
+
+}
+
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,
     const std::bitset<128> &finishedActivitiys,  // ← Changed to bitset

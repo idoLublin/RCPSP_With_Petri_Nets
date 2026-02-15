@@ -365,7 +365,7 @@ inline double RCPSP::GCost(const RCPSPState &node, const int &act) const {
   return node.g;
 }
 
-class RCPSP_BiGreedy : public SearchEnvironment<RCPSPState_Bi, action> {
+class RCPSP_BiGreedy : public SearchEnvironment<RCPSPState_BI_TT2, action> {
 public:
   std::vector<std::pair<short, short>> getUnfireableTransitionIndices(
     const std::vector<short> startedActivities,
@@ -479,68 +479,85 @@ public:
 
   //}
 
-  inline void GetSuccessors(const RCPSPState_Bi &nodeID, std::vector<RCPSPState_Bi> &neighbors) const override {
+  inline void GetSuccessors(const RCPSPState_BI_TT2 &nodeID, std::vector<RCPSPState_BI_TT2> &neighbors) const override {
     neighbors.clear();
 
-    std::cout << "GetSuccessors: direction=" << nodeID.direction
-              << ", g=" << nodeID.g << std::endl;
+    // std::cout << "GetSuccessors: direction=" << nodeID.direction
+    //           << ", g=" << nodeID.g << std::endl;
 
     if (nodeID.direction) {
-        // FORWARD
-        std::vector<short> tempUnstarted;
-        tempUnstarted.reserve(petri.Transitions.size());
+      std::vector<short> tempUnstarted;
 
-        for (int i = 0; i < petri.Transitions.size(); i++) {
-            short taskID = i + 1;
-            if (nodeID.finishedActivitiys[taskID] == -1) {
-                tempUnstarted.push_back(taskID);
-            }
+      // Optimization: Reserve max possible size to prevent re-allocations
+      // (Using the size logic from your original code)
+      tempUnstarted.reserve(petri.Transitions.size());
+
+      // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+      for (int i = 0; i < petri.Transitions.size(); i++) {
+        short taskID = i + 1;
+
+        // THE FIX: Direct Vector Access (O(1))
+        // Instead of .find() == .end(), we check if the value is -1.
+        if (nodeID.finishedActivitiys[taskID] == 0) {
+          tempUnstarted.push_back(taskID);
         }
+      }
 
-        std::cout << "  Forward: Unstarted=" << tempUnstarted.size() << std::endl;
+      // ⚠️ IMPORTANT: You must update the definition of 'getAvailableTransitionIndices_TT'
+      // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
 
-    //     auto availableTransitionIndices =
-    //         getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys,
-    //                                          nodeID.resource_nodes, nodeID.activity_nodes);
-    //
-    //     std::cout << "  Forward: Available=" << availableTransitionIndices.size() << std::endl;
-    //
-    //     for (const auto& [transId, firingTime] : availableTransitionIndices) {
-    //         neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
-    //     }
-    //
-    // } else {
-    //     // BACKWARD
-    //     std::vector<short> tempFinished;
-    //     tempFinished.reserve(petri.Transitions.size());
-    //
-    //     for (int i = 0; i < petri.Transitions.size(); i++) {
-    //         short taskID = i + 1;
-    //         if (nodeID.finishedActivitiys[taskID] == -1) {
-    //             tempFinished.push_back(taskID);
-    //         }
-    //     }
-        //
-        // std::cout << "  Backward: Finished=" << tempFinished.size() << std::endl;
-        //
-        // auto unfireableTransitions =
-        //     getUnfireableTransitionIndices(tempFinished, nodeID.finishedActivitiys,
-        //                                   nodeID.resource_nodes, nodeID.activity_nodes);
-    //
-    //     std::cout << "  Backward: Unfireable=" << unfireableTransitions.size() << std::endl;
-    //
-    //     for (const auto& [transId, firingTime] : unfireableTransitions) {
-    //         neighbors.emplace_back(RCPSPState_Bi(nodeID, transId, firingTime));
-    //     }
+      std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, nodeID.finishedActivitiys,nodeID.resource_nodes, nodeID.activity_nodes,nodeID.activeTransitionIndices);
+
+      //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
+
+      for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+        neighbors.emplace_back(RCPSPState_BI_TT2(nodeID, transId, Timedelta,1));
+      }
+      // auto endS1 = std::chrono::high_resolution_clock::now();
+      // secssesorTIME += endS1 - startS1;
+
      }
+else {
 
+  std::vector<short> tempUnstarted;
+  tempUnstarted.reserve(petri.Transitions.size());
+
+  // Loop through all transitions
+  for (int i = 0; i < petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+
+    // In Backward Search:
+    // 0 = Not yet scheduled from the End (We want to move these)
+    // 1 = Already scheduled (These are done)
+    if (nodeID.finishedActivitiys[taskID] == 1) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  // PASS THE FIX: Use the BACKWARD availability function
+  std::vector<std::pair<short, short>> avilableTransitionIndices =
+       getAvailableTransitionIndices_TT2_backward(
+           tempUnstarted,
+           nodeID.finishedActivitiys, // Pass bitset
+           nodeID.resource_nodes,
+           nodeID.activity_nodes,
+           nodeID.activeTransitionIndices
+       );
+
+  for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+    // Generate Neighbor
+    // Ensure RCPSPState_TT2 constructor correctly sets 'finishedActivitiys[transId] = 1'
+    neighbors.emplace_back(RCPSPState_BI_TT2(nodeID, transId, Timedelta,0));
+  }
+}
    // std::cout << "  Generated " << neighbors.size() << " neighbors" << std::endl;
 }
-   inline bool GoalTest(const RCPSPState_Bi &node, const RCPSPState_Bi &goal) const override {
+   inline bool GoalTest(const RCPSPState_BI_TT2 &node, const RCPSPState_BI_TT2 &goal) const override {
   return (node == goal);
   }
 
-  inline double HCost(const RCPSPState_Bi &state1, const RCPSPState_Bi &state2) const override {
+  inline double HCost(const RCPSPState_BI_TT2 &state1, const RCPSPState_BI_TT2 &state2) const override {
+
     return 0;
 
     // std::map<int, int> earlyfinishMap; // Map to store activity IDs and their early finish times
@@ -591,27 +608,34 @@ public:
   }
 
   //
-   inline double GCost(const RCPSPState_Bi &state1, const RCPSPState_Bi &state2) const override {
-return std::abs(state2.g - state1.g);
+   inline double GCost(const RCPSPState_BI_TT2 &state1, const RCPSPState_BI_TT2 &state2) const override {
+if (state2.direction) {
+  return std::abs(state2.g_f - state1.g_f);
+
+}
+    else {
+      return std::abs(state2.g_b - state1.g_b);
+
+    }
   // Track actual transition cost
    }
-  inline void GetActions(const RCPSPState_Bi &state, std::vector<action> &actions) const override {
+  inline void GetActions(const RCPSPState_BI_TT2 &state, std::vector<action> &actions) const override {
     // Not used in BidirectionalGreedyBestFirst, but must be implemented
     return;
   }
-  virtual action GetAction(const RCPSPState_Bi &state1, const RCPSPState_Bi &state2) const override {
+  virtual action GetAction(const RCPSPState_BI_TT2 &state1, const RCPSPState_BI_TT2 &state2) const override {
 
     return static_cast<action>(0);
   }
-  inline void ApplyAction(RCPSPState_Bi &state, action action) const override {
+  inline void ApplyAction(RCPSPState_BI_TT2 &state, action action) const override {
     // Not used, but required for abstract class
   }
 
-  inline void UndoAction(RCPSPState_Bi &state, action action) const override {
+  inline void UndoAction(RCPSPState_BI_TT2 &state, action action) const override {
     // Not needed for bidirectional search, but required
   }
-double GCost(const RCPSPState_Bi &node, const action &act) const override {
-return node.g;
+double GCost(const RCPSPState_BI_TT2 &node, const action &act) const override {
+return node.g_f;
   };
   bool InvertAction(action& a) const override {
     return false; // Replace with appropriate logic
@@ -621,178 +645,114 @@ return node.g;
   };
 
 
-  uint64_t GetStateHash(const RCPSPState_Bi &node) const {
-    size_t h = 0;
+  uint64_t GetStateHash(const RCPSPState_BI_TT2 &node) const {
+    std::size_t seed = 0;
 
-    // Hash which activities are finished
-    for (int i = 0; i < 128; i++) {
-      if (node.finishedActivitiys[i] != -1) {
-        h ^= std::hash<int>{}(i) + 0x9e3779b9 + (h << 6) + (h >> 2);
+    // 1. Finished Activities
+    for (int i = 1; i <= petri.Transitions.size(); ++i) {
+      seed ^= std::hash<int>{}(node.finishedActivitiys[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+
+    // 2. Activity Nodes (Tokens)
+    for (const auto& p : node.activity_nodes) {
+      seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    }
+
+    // 3. Resource Nodes
+    for (const auto& resourceVec : node.resource_nodes) {
+      for (const auto& p : resourceVec) {
+        seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
       }
     }
 
-
-    // Hash activity node token counts
-    // for (int i = 0; i < node.activity_nodes.size(); i++) {
-    //   if (node.activity_nodes[i].first > 0) {
-    //     h ^= std::hash<int>{}(i * 1000 + node.activity_nodes[i].first);
-    //   }
+    // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
+    // Must verify these are SORTED in the state constructor!
+    // for (const auto& active : node.activeTransitionIndices) {
+    //   // Hash the Task ID
+    //   seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    //   // Hash the Remaining Time (Crucial!)
+    //   seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
     // }
+    // seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 
-    return h;
-    // //auto startS1 = std::chrono::high_resolution_clock::now();
-    // std::size_t seed = 0;
-    // // Hash the marking (Petri net state)
-    //
-    // // Hash the finishedActivitiys vector
-    // for (const auto& activity : node.finishedActivitiys) {
-    //   seed ^= std::hash<int>{}(activity) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    // }
-    //
-    // // auto endS1 = std::chrono::high_resolution_clock::now();
-    // // hashTIME += endS1 - startS1;
-    // return seed;
-
-    // Hash the finished activities
-    // for (const auto& pair : node.finishedActivitiys) {
-    //   seed ^= std::hash<int>{}(pair.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    //   seed ^= std::hash<int>{}(pair.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    // }
-
-    // Distinguish forward vs. backward search by modifying the seed
-    //seed ^= (GetExpandForward ? 0xAAAAAAAAAAAAAAAA : 0x5555555555555555);
-
-
-  }
+    return seed;
+    }
 
 };
 
-class ForwardRCPSPHeuristic : public Heuristic<RCPSPState_Bi> {
+class ForwardRCPSPHeuristic : public Heuristic<RCPSPState_BI_TT2> {
 public:
-  double HCost(const RCPSPState_Bi &current, const RCPSPState_Bi &goal) const override {
-std::vector<short> tempUnstarted;
-
-  // Optimization: Reserve max possible size to prevent re-allocations
-  // (Using the size logic from your original code)
-  // Optimization: Pre-allocate memory to avoid reallocations during push_back
-  tempUnstarted.reserve(petri.Transitions.size());
-
-  for (int i = 0; i < petri.Transitions.size(); i++) {
-    short taskID = i + 1;
-
-    // THE FIX: Direct Vector Access (O(1))
-    // Instead of map.find(), check if the value at this index is -1.
-    // -1 indicates the task has not finished yet.
-    if (current.finishedActivitiys[taskID] == -1) {
-      tempUnstarted.push_back(taskID);
-    }
-  }
-
-
-int lastActivityId = -1;
-  int maxTime = -1;
-
-  // Find last finished activity by ID instead of name
-  for (int id = 0; id < current.finishedActivitiys.size(); ++id) {
-    int time = current.finishedActivitiys[id];
-
-    // THE FIX: Only process tasks that actually finished (time != -1)
-    if (time != -1) {
-      if (time > maxTime) {
-        maxTime = time;
-        lastActivityId = id;
+  double HCost(const RCPSPState_BI_TT2 &current, const RCPSPState_BI_TT2 &goal) const override {
+    if (current.isDeltaZero) {
+      if (current.direction) {
+        current.h_f = current.predessesor_h;
+        return current.h_f;
       }
-    }
-  }
-
-  if (lastActivityId != -1) {
-    const std::string& lastActivityName = RCPSPex.activities[lastActivityId - 1].name;
-
-    // Pre-reserve vectors
-    std::vector<int> independentSet;
-    independentSet.reserve(tempUnstarted.size());
-
-    // Filter independent transitions
-    for (int actIdx : tempUnstarted) {
-      const std::string& actName = RCPSPex.activities[actIdx - 1].name;
-
-      if (RCPSPex.deep_dependencies.find({lastActivityName, actName}) == RCPSPex.deep_dependencies.end())
-        {
-        independentSet.push_back(actIdx);
+      else {
+        current.h_b = current.predessesor_h;
+        return current.h_b;
       }
     }
 
-    // Create lookup set for efficient filtering
-    std::unordered_set<int> independentLookup(independentSet.begin(), independentSet.end());
-    std::vector<short> newUnstartedTransitions;
-    newUnstartedTransitions.reserve(tempUnstarted.size());
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
 
-    for (int id : tempUnstarted) {
-      if (independentLookup.find(id) == independentLookup.end()) {
-        newUnstartedTransitions.push_back(id);
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+      short taskID = i + 1;
+      // FIX: Use .test() for bitset
+      if (!current.finishedActivitiys.test(taskID)) {
+        tempUnstarted.push_back(taskID);
       }
     }
 
-    // 10. Calculate heuristic efficiently
-    int latestStart = 0;
+    current.h_f = getForwardHcost(tempUnstarted,
+                                    //state1.activity_nodes,
+                                    current.activeTransitionIndices//,
+                                  //  state1.finishedActivitiys
+                                    );  // ← ADD THIS
 
-    // FIX: Iterate through vector indices
-    for (int id = 0; id < current.finishedActivitiys.size(); ++id) {
-      int finishTime = current.finishedActivitiys[id];
-
-      // Check if valid finish time exists
-      if (finishTime != -1) {
-        // 1. Get the duration of this activity
-        // Note: 'id' is 1-based, so subtract 1 to access the static activities vector
-        int duration = RCPSPex.activities[id - 1].duration;
-
-        // 2. Calculate Start Time
-        int startTime = finishTime - duration;
-
-        // 3. Update Max
-        if (startTime > latestStart) {
-          latestStart = startTime;
-        }
-      }
-    }
-
-    int unkTime = current.g - latestStart;
-
-    // FIX: Copy the vector (std::vector copy is deep by default)
-    std::array<short, 128> finishedActivitiysnew = current.finishedActivitiys;
-
-    for (int actIdx : independentSet) {
-      // FIX: Direct index access
-      finishedActivitiysnew[actIdx] = 0;
-    }
-
-    // return std::max(getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys) - unkTime,
-    //            getForwardHcost_TT(newUnstartedTransitions, finishedActivitiysnew));
-    return std::max(getForwardHcost_TT(tempUnstarted) - unkTime,
-           getForwardHcost_TT(newUnstartedTransitions));
-  } else {
-    // Fallback if no finished activities
-    return getForwardHcost_TT(tempUnstarted);
+    return current.h_f;
     // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
-  }  }
+  }
 };
 
-class BackwardRCPSPHeuristic : public Heuristic<RCPSPState_Bi> {
+class BackwardRCPSPHeuristic : public Heuristic<RCPSPState_BI_TT2> {
 public:
-  double HCost(const RCPSPState_Bi &current, const RCPSPState_Bi &start) const override {
-    std::vector<short> finishedTasks;
-    finishedTasks.reserve(petri.Transitions.size());
-
-    // Collect activities that ARE finished in current state
-    for (int i = 1; i <= petri.Transitions.size(); i++) {
-      if (current.finishedActivitiys[i] != -1) {
-        finishedTasks.push_back(i);
+  double HCost(const RCPSPState_BI_TT2 &current, const RCPSPState_BI_TT2 &start) const override {
+    if (current.isDeltaZero) {
+      if (current.direction) {
+        current.h_f = current.predessesor_h;
+        return current.h_f;
+      }
+      else {
+        current.h_b = current.predessesor_h;
+        return current.h_b;
       }
     }
 
-    if (finishedTasks.empty()) return 0;
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
 
-    return getBackwardHcost_TT(finishedTasks);
+    for (int i = 0; i < petri.Transitions.size(); i++) {
+      short taskID = i + 1;
+      // FIX: Use .test() for bitset
+      if (current.finishedActivitiys.test(taskID)) {//no ! unlike forward
+        tempUnstarted.push_back(taskID);
+      }
+    }
+
+    current.h_b = getBackwardHcost(tempUnstarted,
+                                    //state1.activity_nodes,
+                                    current.activeTransitionIndices//,
+                                  //  state1.finishedActivitiys
+                                    );  // ← ADD THIS
+    // if (state1.g+state1.h <44 ) {
+    //   std::cout<<"unadmissable";
+    // }
+    return current.h_b;
   }
 
 private:
@@ -1284,86 +1244,6 @@ inline bool RCPSP_TT::GetNextSuccessor(const RCPSPState_TT &curr, const RCPSPSta
   // Return true if there are more moves in the list
   return (index + 1 < avilableTransitionIndices.size());
 }
-// inline bool RCPSP_TT::GetNextSuccessor(const RCPSPState_TT &curr, const RCPSPState_TT &goal,
-//                       RCPSPState_TT &next, double parentH,
-//                       uint64_t &special, bool &validMove) const
-// {
-//   std::vector<short> tempUnstarted;
-//   tempUnstarted.reserve(petri.Transitions.size());
-//
-//   for (int i = 0; i < petri.Transitions.size(); i++) {
-//     short taskID = i + 1;
-//     if (curr.finishedActivitiys[taskID] == -1) {
-//       tempUnstarted.push_back(taskID);
-//     }
-//   }
-//
-//   std::vector<std::pair<short, short>> avilableTransitionIndices =
-//     getAvailableTransitionIndices_TT(tempUnstarted, curr.finishedActivitiys,
-//                                       curr.resource_nodes, curr.activity_nodes);
-// if (curr.g+parentH>63) {
-//   int asd;
-//   asd++;
-// }
-//   // std::sort(avilableTransitionIndices.begin(), avilableTransitionIndices.end(),
-//   //     [](const std::pair<short, short>& a, const std::pair<short, short>& b) {
-//   //         return a.second < b.second; // Try smallest firing times first?
-//   //     });
-//   unsigned int index = (unsigned int)special;
-//
-//  //  if (special == 0) {
-//  // //   std::cout << "NEW NODE: " << avilableTransitionIndices.size() << " successors available" << std::endl;
-//  //  }
-//
-//   if (index >= avilableTransitionIndices.size()) {
-//   //  std::cout << "  CLOSING after generating " << special << " successors" << std::endl;
-//     validMove = false;
-//     return false;
-//   }
-//
-//   //std::cout << "  Generating successor " << (special+1) << "/" << avilableTransitionIndices.size() << std::endl;
-//
-//   static int nodeExpansionCount = 0;
-//   static std::map<int, int> nodeSuccessors; // Track how many successors each node should have
-//
-//   if (special == 0) {
-//     nodeExpansionCount++;
-//     nodeSuccessors[nodeExpansionCount] = avilableTransitionIndices.size();
-//     std::cout << "Node " << nodeExpansionCount << ": Starting expansion, "
-//               << avilableTransitionIndices.size() << " successors expected" << std::endl;
-//   }
-//
-//   //unsigned int index = (unsigned int)special;
-//
-//   if (index >= avilableTransitionIndices.size()) {
-//     // Node is fully expanded
-//     std::cout << "Node " << nodeExpansionCount << ": CLOSED after generating "
-//               << special << "/" << nodeSuccessors[nodeExpansionCount]
-//               << " successors" << std::endl;
-//
-//     if (special != nodeSuccessors[nodeExpansionCount]) {
-//       std::cout << "❌ BUG! Expected " << nodeSuccessors[nodeExpansionCount]
-//                 << " but only generated " << special << std::endl;
-//     }
-//
-//     validMove = false;
-//     return false;
-//   }
-//
-//   std::cout << "  Generating successor " << (special+1) << "/"
-//             << avilableTransitionIndices.size()
-//             << ": (" << avilableTransitionIndices[index].first
-//             << "," << avilableTransitionIndices[index].second << ")" << std::endl;
-//
-//   std::pair<short, short> selectedMove = avilableTransitionIndices[index];
-//   next = RCPSPState_TT(curr, selectedMove.first, selectedMove.second);
-//
-//   validMove = true;
-//   special++;
-//
-//   return (index + 1 < avilableTransitionIndices.size());
-// }
-//
 
 inline uint64_t RCPSP_TT::GetActionHash(int act) const {
   // Example hash for an action

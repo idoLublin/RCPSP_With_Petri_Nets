@@ -183,7 +183,11 @@ public:
         // they are the same state, but == will return false if not sorted.
         if (activity_nodes != other.activity_nodes) return false;
         if (resource_nodes != other.resource_nodes) return false;
-
+        if (activeTransitionIndices != other.activeTransitionIndices) {
+            std::cerr << "HASH COLLISION: states equal but different activeTransitionIndices!" << std::endl;
+            return false;  // treat as different states for now
+        }
+        return true;
         // CRITICAL: Do NOT compare activeTransitionIndices here!
         // Since it is derived data, if it is calculated/sorted slightly differently
         // it might prevent merging of identical states.
@@ -210,7 +214,7 @@ public:
     // You want to keep this for now.
     // WARNING: This is redundant data (derived from the nodes above).
     std::vector<std::pair<short, short>> activeTransitionIndices;
-
+    short fireTime=0;
     // Add these for caching transitions
     mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
     mutable bool transitionsCached = false;
@@ -223,29 +227,43 @@ public:
     mutable short h_b = 0;
     // mutable short f_f=0;
     // mutable short f_b=0;
-    short predessesor_h = 0;
+    short predessesor_h_f = 0;
+    short predessesor_h_b = 0;
     short lastTransitionId=0; // <--- SAVE IT HERE
     RCPSPState_BI_TT2();
     RCPSPState_BI_TT2(const RCPSPState_BI_TT2& prev, short transitionId, short firingTime,bool Direction =1);
 
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_BI_TT2& other) const {
-        // 1. Bitset comparison (fast)
-        if (finishedActivitiys != other.finishedActivitiys) return false;
 
-        // 2. Vectors must be SORTED for this to work!
-        // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
-        // they are the same state, but == will return false if not sorted.
+        if (finishedActivitiys != other.finishedActivitiys) return false;
         if (activity_nodes != other.activity_nodes) return false;
         if (resource_nodes != other.resource_nodes) return false;
 
-        // CRITICAL: Do NOT compare activeTransitionIndices here!
-        // Since it is derived data, if it is calculated/sorted slightly differently
-        // it might prevent merging of identical states.
-        // Only compare the "Physical" state.
-
+        // Temporarily add this:
+        if (activeTransitionIndices != other.activeTransitionIndices) {
+            std::cerr << "HASH COLLISION: states equal but different activeTransitionIndices!" << std::endl;
+            return false;  // treat as different states for now
+        }
         return true;
     }
+    // bool operator==(const RCPSPState_BI_TT2& other) const {
+    //     // 1. Bitset comparison (fast)
+    //     if (finishedActivitiys != other.finishedActivitiys) return false;
+    //
+    //     // 2. Vectors must be SORTED for this to work!
+    //     // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
+    //     // they are the same state, but == will return false if not sorted.
+    //     if (activity_nodes != other.activity_nodes) return false;
+    //     if (resource_nodes != other.resource_nodes) return false;
+    //
+    //     // CRITICAL: Do NOT compare activeTransitionIndices here!
+    //     // Since it is derived data, if it is calculated/sorted slightly differently
+    //     // it might prevent merging of identical states.
+    //     // Only compare the "Physical" state.
+    //
+    //     return true;
+    // }
 };
 
 // IN YOUR HEADER FILE (.h)

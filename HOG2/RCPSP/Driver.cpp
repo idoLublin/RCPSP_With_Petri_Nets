@@ -26,6 +26,20 @@ namespace fs = std::filesystem;
 #include <fstream>
 #include <vector>
 #include <climits>
+#include <fstream>
+// void renderScene() {}
+// long getPeakMemoryKB() {
+//     std::ifstream status("/proc/self/status");
+//     std::string line;
+//     while (std::getline(status, line)) {
+//         if (line.find("VmPeak:") != std::string::npos) {
+//             long kb;
+//             sscanf(line.c_str(), "VmPeak: %ld kB", &kb);
+//             return kb;
+//         }
+//     }
+//     return -1;
+// }
 void runBenchmark();
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
@@ -50,7 +64,21 @@ int solveRCPSP_Bi();
 #include <thread>
 #include <atomic>
 
+#include <windows.h>
+#include <psapi.h>
 
+long getPeakMemoryKB() {
+    PROCESS_MEMORY_COUNTERS pmc;
+    GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+    return pmc.PeakWorkingSetSize / 1024;
+}
+// #include <sys/resource.h>
+//
+// long getPeakMemoryKB() {
+//     struct rusage usage;
+//     getrusage(RUSAGE_SELF, &usage);
+//     return usage.ru_maxrss;
+// }
 double HCost_TT(const RCPSPState_TT &state1, const RCPSPState_TT &state2) {
   //return 0;
   // 9. Optimized independent set calculation
@@ -493,6 +521,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
+    long peakMemKB = getPeakMemoryKB(); // ADD THIS
 
     int makespan = 0;
 
@@ -555,6 +584,8 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
          << path.size() << ","
         << "TT2"<< ","
         << problemType<< ","
+        << peakMemKB << ","  // ADD THIS
+
          << (useCS ? "True" : "False")<< ","
          << "\n";
 
@@ -744,58 +775,91 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
     RCPSPState_BI_TT2 first(first_tt);
     first.direction = true;
 
-    // Create goal state properly
+    // Start with clean state
     RCPSPState_BI_TT2 last;
     last.direction = false;
 
-    // Resize to match first
-    last.activity_nodes.resize(first.activity_nodes.size());
-
-    // Clear all activity nodes
-    for (auto& pair : last.activity_nodes) {
-        pair = {0, 0};
+    // 1. All activities finished
+    for (int i = 1; i <= petri.Transitions.size(); i++) {
+        last.finishedActivitiys[i] = 1;
     }
 
-    // Set final sink place
-    if (finalstatename.empty()) {
-        std::cerr << "ERROR: finalstatename not initialized!" << std::endl;
-        return -1;
-    }
-
-    auto it = petri.place_name_to_id.find(finalstatename);
-    if (it == petri.place_name_to_id.end()) {
-        std::cerr << "ERROR: finalstatename not found!" << std::endl;
-        return -1;
-    }
-
-    short finalID = it->second;
-    if (finalID >= 4 && (finalID - 4) < last.activity_nodes.size()) {
-        last.activity_nodes[finalID - 4] = {1, 0};
-    }
-
-    // Copy resources from first
+    // 2. Resources fully restored (same as initial state)
     last.resource_nodes = first.resource_nodes;
 
-    // CRITICAL: Mark all activities as finished AFTER everything else
-    for (int i = 1; i <= petri.Transitions.size(); i++) {
-        last.finishedActivitiys[i] = -1;  // Mark as finished
-    }
+    // 3. Activity nodes - all zero except final sink place
+    last.activity_nodes.resize(first.activity_nodes.size());
+    for (auto& p : last.activity_nodes) p = {0, 0};
+    short finalID = petri.place_name_to_id.at(finalstatename);
+    last.activity_nodes[finalID - 4] = {1, 0};
 
-    last.g_b = 0;
+    // 4. Zero cost/heuristic fields
     last.g_f = last.g_b = last.h_f = last.h_b = 0;
-    auto it2 = petri.place_name_to_id.find(finalstatename);
+    last.activeTransitionIndices.clear();
 
-    // Always check if it was found to avoid a crash
-    if (it2 != petri.place_name_to_id.end()) {
-        // Use it2->second to get the actual ID integer
-        last.finishedActivitiys[it2->second] = 0;
-    }
-    else {
-        // Optional: Handle error if name not found
-        std::cerr << "Error: Place " << finalstatename << " not found!" << std::endl;
-    }
-    std::cout << "Goal state setup - checking finished activities:" << std::endl;
+    // Verify
     int goal_finished = 0;
+    for (int i = 1; i <= petri.Transitions.size(); i++) {
+        if (last.finishedActivitiys[i]) goal_finished++;
+    }
+    std::cout << "Goal has " << goal_finished << " finished activities" << std::endl;
+    // Should print 32 for J30
+
+
+
+
+    // // Create goal state properly
+    // RCPSPState_BI_TT2 last;
+    // last.direction = false;
+    //
+    // // Resize to match first
+    // last.activity_nodes.resize(first.activity_nodes.size());
+    //
+    // // Clear all activity nodes
+    // for (auto& pair : last.activity_nodes) {
+    //     pair = {0, 0};
+    // }
+    //
+    // // Set final sink place
+    // if (finalstatename.empty()) {
+    //     std::cerr << "ERROR: finalstatename not initialized!" << std::endl;
+    //     return -1;
+    // }
+    //
+    // auto it = petri.place_name_to_id.find(finalstatename);
+    // if (it == petri.place_name_to_id.end()) {
+    //     std::cerr << "ERROR: finalstatename not found!" << std::endl;
+    //     return -1;
+    // }
+    //
+    // short finalID = it->second;
+    // if (finalID >= 4 && (finalID - 4) < last.activity_nodes.size()) {
+    //     last.activity_nodes[finalID - 4] = {1, 0};
+    // }
+    //
+    // // Copy resources from first
+    // last.resource_nodes = first.resource_nodes;
+    //
+    // // CRITICAL: Mark all activities as finished AFTER everything else
+    // for (int i = 1; i <= petri.Transitions.size(); i++) {
+    //     last.finishedActivitiys[i] = -1;  // Mark as finished
+    // }
+    //
+    // last.g_b = 0;
+    // last.g_f = last.g_b = last.h_f = last.h_b = 0;
+    // auto it2 = petri.place_name_to_id.find(finalstatename);
+    //
+    // // Always check if it was found to avoid a crash
+    // if (it2 != petri.place_name_to_id.end()) {
+    //     // Use it2->second to get the actual ID integer
+    //     last.finishedActivitiys[it2->second] = 0;
+    // }
+    // else {
+    //     // Optional: Handle error if name not found
+    //     std::cerr << "Error: Place " << finalstatename << " not found!" << std::endl;
+    // }
+    // std::cout << "Goal state setup - checking finished activities:" << std::endl;
+    // int goal_finished = 0;
     // for (int i = 0; i < 128; i++) {
     //     if (last.finishedActivitiys[i] != -1) goal_finished++;
     // }
@@ -829,11 +893,12 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
             if (path[i].direction != path[i+1].direction) {
                 // Meeting point: g_f + g_b
                 makespan = path[i].g_f + path[i+1].g_b;
+                makespan= Bi_RCPSP.GetSolutionCost();
 
                 std::cout << "Meeting point at index " << i << std::endl;
                 std::cout << "  Forward: g=" << path[i].g_f << ", g_f=" << path[i].g_f << std::endl;
                 std::cout << "  Backward: g=" << path[i+1].g_b << ", g_b=" << path[i+1].g_b << std::endl;
-                std::cout << "  Makespan = g_f + g_b = " << path[i].g_f << " + " << path[i+1].g_b << " = " << makespan << std::endl;
+                std::cout << "  Makespan = " <<makespan << std::endl;
                 break;
             }
         }
@@ -928,7 +993,7 @@ void runBenchmark() {
 
     // Write header
     //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
-    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     //file << "group,exam,initialHcost" << std::endl;
  //omp_set_num_threads(10);
      //omp_set_num_threads(2); // 1. Set the core count.
@@ -944,173 +1009,21 @@ void runBenchmark() {
    //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
     for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
+        for(int j = 3; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
             RCPSPex.reset();
 
             // 2. SOLVE
-            //solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            //solveRCPSP_TT2(i, j, filename, "j30");
+            solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            solveRCPSP_TT2(i, j, filename, "j30");
             //solveRCPSP_TT(i, j, filename, "j30");
-            solveRCPSP_Bi(i, j, filename, "j30");
+             solveRCPSP_Bi(i, j, filename, "j30");
         }
     }
 
 
-    // for(int i = 1; i < 49; i++) {
-    //     for(int j = 10; j >0; j--) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         //        solveRCPSP(i, j, filename, "j30");
-    //         solveRCPSP_TT(i, j, filename, "j30");
-    //         solveRCPSP(i, j, filename, "j30");
-    //        solveRCPSP_TT2(i, j, filename, "j30");
-    //     }
-    // }
-
-
-    // for(int i = 16; i < 20; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         //        solveRCPSP(i, j, filename, "j30");
-    //         solveRCPSP_TT2(i, j, filename, "j30");
-    //     }
-    // }
-    // solveRCPSP_TT(9, 1, filename, "j30");
-
-    // solveRCPSP(9, 1, filename, "j30");
-
-
-   // solveRCPSP_TT(9, 1, filename, "j30");
-
-   // sortCSV(filename);
-
-
-    // solveRCPSP(-1,-1,filename,"j30");
-    //
-    // for(int i=16;i<17;i++) {
-    //      for(int j=5;j<11;j++) {
-    //      solveRCPSP(i,j,filename,"j30");
-    //      solveRCPSP_TT(i,j,filename,"j30");
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
-
-     //solveRCPSP(34, 9, filename);
-  //   solveRCPSP(34, 10, filename);
-
-
-
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=false;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-    // useCS=true;
-    // solveRCPSP(34, 9, filename);
-    // solveRCPSP_TT(34, 9, filename);
-
-    useCS=false;
-    //solveRCPSP(33,9,filename,"j60");
-    //solveRCPSP(33,10,filename,"j60");
-     //for(int i=34;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-      //  solveRCPSP(i,j,filename,"j60");
-       // }
-   // }
-   // solveRCPSP(48,5,filename,"j90");
-    //solveRCPSP(48,6,filename,"j90");
-    //solveRCPSP(48,7,filename,"j90");
-    //solveRCPSP(48,8,filename,"j90");
-    //solveRCPSP(48,9,filename,"j90");
-    //solveRCPSP(48,10,filename,"j90");
-
-    //for(int i=26;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-          //  solveRCPSP(i,j,filename,"j90");
-       // }
-    //}
-
-
-    // J120 לא רץ
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP(i,j,filename,"j120");
-    //     }
-    // }
-
-   // for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j120");
-   //     }
-    //}
-
-
-    useCS=true;
-
-//    for(int i=1;i<49;i++) {
-  //      for(int j=1;j<11;j++) {
-    //        solveRCPSP(i,j,filename,"j90");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
-       // for(int j=1;j<11;j++) {
-           // solveRCPSP(i,j,filename,"j120");
-      //  }
-   // }
-
-   // for(int i=1;i<49;i++) {
- //       for(int j=1;j<11;j++) {
-   //         solveRCPSP_TT(i,j,filename,"j30");
- //       }
-   // }
-
-    // for(int i=17;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j60");
-    //     }
-    // }
-
-    // for(int i=1;i<49;i++) {
-    //     for(int j=1;j<11;j++) {
-    //         solveRCPSP_TT(i,j,filename,"j90");
-    //     }
-    // }
-
-    //for(int i=1;i<49;i++) {
-       //for(int j=1;j<11;j++) {
-           // solveRCPSP_TT(i,j,filename,"j120");
-      //  }
-   // }
-
-
-   //  for(int i=1;i<49;i++) {
-   //     for(int j=1;j<11;j++) {
-   //     solveRCPSP(i,j,filename);
-   //     //getinitialHcost(i,j,filename);
-   //     }
-   // }
-
-
-    // for(int i=1;i<49;i++) {
-    //      for(int j=1;j<11;j++) {
-    //      solveRCPSP_TT(i,j,filename);
-    //   //   getinitialHcost(i,j,filename);
-    //      }
-    //  }
 
 }
 

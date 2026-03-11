@@ -511,7 +511,18 @@ public:
       //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
       for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
-        neighbors.emplace_back(RCPSPState_BI_TT2(nodeID, transId, Timedelta,1));
+
+
+        RCPSPState_BI_TT2 child(nodeID, transId, Timedelta, 1);
+        // if (child.g_f - nodeID.g_f != Timedelta) {
+        //   std::cerr << "GCOST MISMATCH: Timedelta=" << Timedelta
+        //             << " actual g_f diff=" << child.g_f - nodeID.g_f << std::endl;
+        // }
+        // if (child == child2) {
+        //   assert(GetStateHash(child) == GetStateHash(child2)
+        //          && "Equal states have different hashes!");
+        // }
+        neighbors.emplace_back(child);
       }
       // auto endS1 = std::chrono::high_resolution_clock::now();
       // secssesorTIME += endS1 - startS1;
@@ -547,7 +558,12 @@ else {
   for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
     // Generate Neighbor
     // Ensure RCPSPState_TT2 constructor correctly sets 'finishedActivitiys[transId] = 1'
-    neighbors.emplace_back(RCPSPState_BI_TT2(nodeID, transId, Timedelta,0));
+    RCPSPState_BI_TT2 child(nodeID, transId, Timedelta, 0);
+    if (child.g_b - nodeID.g_b != Timedelta) {
+      std::cerr << "GCOST MISMATCH: Timedelta=" << Timedelta
+                << " actual g_b diff=" << child.g_b - nodeID.g_b << std::endl;
+    }
+    neighbors.emplace_back(child);
   }
 }
    // std::cout << "  Generated " << neighbors.size() << " neighbors" << std::endl;
@@ -609,7 +625,8 @@ else {
 
   //
    inline double GCost(const RCPSPState_BI_TT2 &state1, const RCPSPState_BI_TT2 &state2) const override {
-if (state2.direction) {
+    return state2.fireTime;
+    if (state2.direction) {
   return std::abs(state2.g_f - state1.g_f);
 
 }
@@ -635,7 +652,7 @@ if (state2.direction) {
     // Not needed for bidirectional search, but required
   }
 double GCost(const RCPSPState_BI_TT2 &node, const action &act) const override {
-return node.g_f;
+return node.fireTime;
   };
   bool InvertAction(action& a) const override {
     return false; // Replace with appropriate logic
@@ -687,12 +704,13 @@ class ForwardRCPSPHeuristic : public Heuristic<RCPSPState_BI_TT2> {
 public:
   double HCost(const RCPSPState_BI_TT2 &current, const RCPSPState_BI_TT2 &goal) const override {
     if (current.isDeltaZero) {
+      current.h_f = current.predessesor_h_f;
+      current.h_b = current.predessesor_h_b;
+
       if (current.direction) {
-        current.h_f = current.predessesor_h;
         return current.h_f;
       }
       else {
-        current.h_b = current.predessesor_h;
         return current.h_b;
       }
     }
@@ -714,6 +732,16 @@ public:
                                   //  state1.finishedActivitiys
                                     );  // ← ADD THIS
 
+
+
+    // if (current.h_f>current.predessesor_h_f) {
+    //   std::cout << "inconsistentF: isDeltaZero=" << current.isDeltaZero
+    //             << " firingTime=" << current.fireTime
+    //             << " h_f=" << current.h_f
+    //             << " pred_h_f=" << current.predessesor_h_f
+    //             << " direction=" << current.direction
+    //             << std::endl;    }
+
     return current.h_f;
     // return getForwardHcost_TT(tempUnstarted, state1.finishedActivitiys);
   }
@@ -723,13 +751,14 @@ class BackwardRCPSPHeuristic : public Heuristic<RCPSPState_BI_TT2> {
 public:
   double HCost(const RCPSPState_BI_TT2 &current, const RCPSPState_BI_TT2 &start) const override {
     if (current.isDeltaZero) {
+      current.h_f = current.predessesor_h_f;
+      current.h_b = current.predessesor_h_b;
+
       if (current.direction) {
-        current.h_f = current.predessesor_h;
         return current.h_f;
       }
       else {
-        current.h_b = current.predessesor_h;
-        return current.h_b;
+        return current.h_b;  // returns parent's h_b
       }
     }
 
@@ -751,6 +780,9 @@ public:
                                     );  // ← ADD THIS
     // if (state1.g+state1.h <44 ) {
     //   std::cout<<"unadmissable";
+    // }
+    // if (current.h_b>current.predessesor_h_b) {
+    //   std::cout<<"inconsistentB";
     // }
     return current.h_b;
   }

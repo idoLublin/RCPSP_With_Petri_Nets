@@ -33,7 +33,7 @@
 
 //              *****ido lublin 3.4.25*****
 bool GetExpandForward;
-std::chrono::steady_clock::time_point timeout2 = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+std::chrono::steady_clock::time_point timeout2 = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 
 //              ***************************
 
@@ -43,83 +43,142 @@ template<class state>
 //ido lublin 28.4.25
 struct BAECompare {
     bool operator()(const AStarOpenClosedData<state> &i1, const AStarOpenClosedData<state> &i2) const {
+    //     if (!fequal(i1.h, i2.h))
+    //         return fgreater(i1.h, i2.h); // prefer smaller b-value
+    //
+    //     // Tie-break 1: prefer higher g
+    //     if (GetExpandForward) {
+    //         if (!fequal(i1.data.g_f, i2.data.g_f))
+    //             return fless(i1.data.g_f, i2.data.g_f);
+    //     } else {
+    //         if (!fequal(i1.data.g_b, i2.data.g_b))
+    //             return fless(i1.data.g_b, i2.data.g_b);
+    //     }
+    //
+    //     // Tie-break 2: prefer more/fewer finished activities
+    //     if (i1.data.finishedActivitiys.count() != i2.data.finishedActivitiys.count()) {
+    //         if (GetExpandForward)
+    //             return i1.data.finishedActivitiys.count() < i2.data.finishedActivitiys.count();
+    //         else
+    //             return i1.data.finishedActivitiys.count() > i2.data.finishedActivitiys.count();
+    //     }
+    //
+    //     // Tie-break 3: prefer more active
+    //     return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+    // }
+        // Primary: lower b-value (f) first
+        if (!fequal(i1.h, i2.h))
+            return fgreater(i1.h, i2.h); // prefer smaller b-value ✓
+
+        // Tie-break: higher g
+        if (GetExpandForward) {
+            if (!fequal(i1.data.g_f, i2.data.g_f))
+                return fless(i1.data.g_f, i2.data.g_f); // prefer higher g_f ✓
+        } else {
+            if (!fequal(i1.data.g_b, i2.data.g_b))
+                return fless(i1.data.g_b, i2.data.g_b); // prefer higher g_b ✓
+        }
+
+        if (GetExpandForward) {
+            short f1 = 2*i1.data.g_f + i1.data.h_f - i1.data.h_b;
+            short f2 = 2*i2.data.g_f + i2.data.h_f - i2.data.h_b;
+            if (!fequal(f1, f2))
+                return fgreater(f1, f2); // prefer smaller f
+            if (!fequal(i1.data.g_f, i2.data.g_f))
+                return fless(i1.data.g_f, i2.data.g_f); // prefer higher g
+            if (i1.data.finishedActivitiys.count() != i2.data.finishedActivitiys.count())
+                return i1.data.finishedActivitiys.count() < i2.data.finishedActivitiys.count(); // prefer more finished
+            return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+        }
+        else {
+            short f1 = 2*i1.data.g_b + i1.data.h_b - i1.data.h_f;
+            short f2 = 2*i2.data.g_b + i2.data.h_b - i2.data.h_f;
+            if (!fequal(f1, f2))
+                return fgreater(f1, f2); // prefer smaller f
+            if (!fequal(i1.data.g_b, i2.data.g_b))
+                return fless(i1.data.g_b, i2.data.g_b); // prefer higher g
+            if (i1.data.finishedActivitiys.count() != i2.data.finishedActivitiys.count())
+                return i1.data.finishedActivitiys.count() > i2.data.finishedActivitiys.count(); // prefer fewer finished
+            return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+        }
+    }
         //auto startSCF = std::chrono::high_resolution_clock::now();
-        if (i1.data.direction ==true) {
-            short f_f1=2*i1.data.g_f+i1.data.h_f-i1.data.h_b, f_f2=2*i2.data.g_f+i2.data.h_f-i2.data.h_b;
-
-            if (fequal(f_f1, f_f2)) {
-                if (fequal(i1.data.g_f, i2.data.g_f)) {
-                    if (i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() != i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size()) {}
-                        if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
-                            //auto endSCF = std::chrono::high_resolution_clock::now();
-                            //comperTime += endSCF-startSCF;
-                            return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
-                        }
-                    return i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() < i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size();
-                    // Then check started_activities count
-                    //auto endSCF = std::chrono::high_resolution_clock::now();
-                    //comperTime += endSCF-startSCF;
-                    //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
-                }
-                return fless(i1.data.g_f, i2.data.g_f);
-            }
-            return fgreater(f_f1, f_f2); // Prefer smaller f
-
-        }
-else {
-    short f_b1=2*i1.data.g_b+i1.data.h_b-i1.data.h_f, f_b2=2*i2.data.g_b+i2.data.h_b-i2.data.h_f;
-
-    if (fequal(f_b1, f_b2)) {
-
-    }
-    return fgreater(f_b1, f_b2); // Prefer smaller f
-
-}
-        if (fequal(i1.data.f, i2.data.f)) {
-            // First check original g
-            // Then check g_f
-            if (i1.data.direction ==true && i2.data.direction==true) {
-                if (fequal(i1.data.g_f, i2.data.g_f)) {
-                    if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
-                        //auto endSCF = std::chrono::high_resolution_clock::now();
-                        //comperTime += endSCF-startSCF;
-                        return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
-                    }
-                    // Then check started_activities count
-                    //auto endSCF = std::chrono::high_resolution_clock::now();
-                    //comperTime += endSCF-startSCF;
-                    //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
-                }
-                return fless(i1.data.g_f, i2.data.g_f);
-
-            }
-            else{
-                if (fequal(i1.data.g_b, i2.data.g_b)) {
-                // If all g values are equal, check finished_activities count
-                if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
-                    //auto endSCF = std::chrono::high_resolution_clock::now();
-                    //comperTime += endSCF-startSCF;
-                    //return i1.data.startedActivitiys.size() > i2.data.startedActivitiys.size();//< or >
-                }
-                // Then check started_activities count
-                //auto endSCF = std::chrono::high_resolution_clock::now();
-                //comperTime += endSCF-startSCF;
-                return i1.data.finishedActivitiys.size() > i2.data.finishedActivitiys.size();
-            }
-                // Prefer higher g_b
-                return fless(i1.data.g_b, i2.data.g_b);
-            }
-        }
-        // Prefer higher g_f
-
-
-            // Prefer higher original g
-            //auto endSCF = std::chrono::high_resolution_clock::now();
-            //comperTime += endSCF-startSCF;
-        //auto endSCF = std::chrono::high_resolution_clock::now();
-        //comperTime += endSCF-startSCF;
-        return fgreater(i1.data.f, i2.data.f); // Prefer smaller f
-    }
+//         if (GetExpandForward ==true) {
+//             short f_f1=2*i1.data.g_f+i1.data.h_f-i1.data.h_b, f_f2=2*i2.data.g_f+i2.data.h_f-i2.data.h_b;
+//
+//             if (fequal(f_f1, f_f2)) {
+//                 if (fequal(i1.data.g_f, i2.data.g_f)) {
+//                     if (i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() != i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size()) {}
+//                         if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
+//                             //auto endSCF = std::chrono::high_resolution_clock::now();
+//                             //comperTime += endSCF-startSCF;
+//                             return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
+//                         }
+//                     return i1.data.finishedActivitiys.size()+i1.data.activeTransitionIndices.size() < i2.data.finishedActivitiys.size()+i2.data.activeTransitionIndices.size();
+//                     // Then check started_activities count
+//                     //auto endSCF = std::chrono::high_resolution_clock::now();
+//                     //comperTime += endSCF-startSCF;
+//                     //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
+//                 }
+//                 return fless(i1.data.g_f, i2.data.g_f);
+//             }
+//             return fgreater(f_f1, f_f2); // Prefer smaller f
+//
+//         }
+// else {
+//     short f_b1=2*i1.data.g_b+i1.data.h_b-i1.data.h_f, f_b2=2*i2.data.g_b+i2.data.h_b-i2.data.h_f;
+//
+//     if (fequal(f_b1, f_b2)) {
+//
+//     }
+//     return fgreater(f_b1, f_b2); // Prefer smaller f
+//
+// }
+        // if (fequal(i1.data.f, i2.data.f)) {
+        //     // First check original g
+        //     // Then check g_f
+        //     if (i1.data.direction ==true && i2.data.direction==true) {
+        //         if (fequal(i1.data.g_f, i2.data.g_f)) {
+        //             if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
+        //                 //auto endSCF = std::chrono::high_resolution_clock::now();
+        //                 //comperTime += endSCF-startSCF;
+        //                 return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
+        //             }
+        //             // Then check started_activities count
+        //             //auto endSCF = std::chrono::high_resolution_clock::now();
+        //             //comperTime += endSCF-startSCF;
+        //             //return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
+        //         }
+        //         return fless(i1.data.g_f, i2.data.g_f);
+        //
+        //     }
+        //     else{
+        //         if (fequal(i1.data.g_b, i2.data.g_b)) {
+        //         // If all g values are equal, check finished_activities count
+        //         if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
+        //             //auto endSCF = std::chrono::high_resolution_clock::now();
+        //             //comperTime += endSCF-startSCF;
+        //             //return i1.data.startedActivitiys.size() > i2.data.startedActivitiys.size();//< or >
+        //         }
+        //         // Then check started_activities count
+        //         //auto endSCF = std::chrono::high_resolution_clock::now();
+        //         //comperTime += endSCF-startSCF;
+        //         return i1.data.finishedActivitiys.size() > i2.data.finishedActivitiys.size();
+        //     }
+        //         // Prefer higher g_b
+        //         return fless(i1.data.g_b, i2.data.g_b);
+        //     }
+        // }
+        // // Prefer higher g_f
+        //
+        //
+        //     // Prefer higher original g
+        //     //auto endSCF = std::chrono::high_resolution_clock::now();
+        //     //comperTime += endSCF-startSCF;
+        // //auto endSCF = std::chrono::high_resolution_clock::now();
+        // //comperTime += endSCF-startSCF;
+        // return fgreater(i1.data.f, i2.data.f); // Prefer smaller f
+    // }
 };
 /*
 struct BAECompare {
@@ -161,6 +220,10 @@ public:
     }
 
     virtual ~BAE() {}
+//******ido*****
+    double GetSolutionCost() const { return currentCost; }
+
+
 
     void GetPath(environment *env, const state &from, const state &to,
                  Heuristic<state> *forward, Heuristic<state> *backward, std::vector<state> &thePath);
@@ -329,7 +392,7 @@ bool BAE<state, action, environment, priorityQueue>::InitializeSearch(environmen
 
     expandForward = true;
     //****
-    timeout2 = std::chrono::steady_clock::now() + std::chrono::minutes(1);
+    timeout2 = std::chrono::steady_clock::now() + std::chrono::minutes(5);
     GetExpandForward=expandForward;
     return true;
 }
@@ -367,13 +430,13 @@ bool BAE<state, action, environment, priorityQueue>::DoSingleSearchStep(std::vec
             Expand(forwardQueue, backwardQueue, forwardHeuristic, backwardHeuristic, goal, start);
             expandForward = false;
             //****
-            GetExpandForward=expandForward;
+            // GetExpandForward=expandForward;
             //****
         } else {
             Expand(backwardQueue, forwardQueue, backwardHeuristic, forwardHeuristic, start, goal);
             expandForward = true;
             //****
-            GetExpandForward=expandForward;
+            // GetExpandForward=expandForward;
             //****
         }
     } else { // BS* policy, roughly Pohl's criterion
@@ -457,9 +520,15 @@ void BAE<state, action, environment, priorityQueue>::Expand(priorityQueue &curre
             case kOpenList: // Update cost if needed
             {
                 if (fless(parentData.g + edgeCost, childData.g)) {
+
+
+
                     childData.parentID = nextID;
                     double gDiff = childData.g - (parentData.g + edgeCost);
                     childData.g = parentData.g + edgeCost;
+
+
+
                     // Modify total error accordingly. Since b uses 2g in the formula, and we reduced g (as h and h_r
                     // are static), all that needs to change is 2 times the difference
                     childData.h = childData.h - (2 * gDiff);
@@ -468,7 +537,8 @@ void BAE<state, action, environment, priorityQueue>::Expand(priorityQueue &curre
                     // Check if we found a potential solution
                     uint64_t reverseLoc;
                     auto loc = opposite.Lookup(hash, reverseLoc);
-                    if (loc == kOpenList) {
+                    if (loc == kOpenList||loc==kClosedList) {
+
                         if (fless(parentData.g + edgeCost + opposite.Lookup(reverseLoc).g, currentCost)) {
                             foundBetterSolution = true;
                             currentCost = parentData.g + edgeCost + opposite.Lookup(reverseLoc).g;
@@ -493,7 +563,11 @@ void BAE<state, action, environment, priorityQueue>::Expand(priorityQueue &curre
                 // Check if we found a potential solution
                 uint64_t reverseLoc;
                 auto loc = opposite.Lookup(hash, reverseLoc);
-                if (loc == kOpenList) {
+                if (loc == kOpenList||loc==kClosedList) {
+
+                    std::cerr << "MEETING POINT FOUND!" << std::endl;  // ← add this
+
+
                     if (fless(current.Lookup(nextID).g + edgeCost + opposite.Lookup(reverseLoc).g, currentCost)) {
                         foundBetterSolution = true;
                         currentCost = current.Lookup(nextID).g + edgeCost + opposite.Lookup(reverseLoc).g;
@@ -532,7 +606,7 @@ void BAE<state, action, environment, priorityQueue>::Nip(const state &s, priorit
         auto &childData = reverse.Lookup(childID);
         if (loc == kClosedList && childData.parentID == parentID) {
             Nip(childData.data, reverse);
-        } else if (loc == kOpenList && (childData.parentID == parentID)) {
+        } else if ((loc == kOpenList||loc==kClosedList) && (childData.parentID == parentID)) {
             if (childData.data == middleNode) {
                 std::cout << "Error - removing middle node\n";
                 if (&reverse == &forwardQueue)

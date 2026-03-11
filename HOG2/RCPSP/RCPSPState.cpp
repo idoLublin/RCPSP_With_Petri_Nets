@@ -2112,18 +2112,22 @@ RCPSPState_BI_TT2::RCPSPState_BI_TT2() {
 
 
     h_f=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices,finishedActivitiys);
-    predessesor_h=h_f;
-    g_f = 0;
+    predessesor_h_b=h_b=predessesor_h_f=h_f;
+
+    g_f =g_b= 0;
 }
 
 RCPSPState_BI_TT2::RCPSPState_BI_TT2(const RCPSPState_BI_TT2 &prev, short transitionId, short firingTime, bool Direction) {
 
 // 1. Update Global Cost (G)
+    fireTime=firingTime;
     direction=Direction;
 if (direction) {
     isDeltaZero = (firingTime == 0);
     g_f = prev.g_f + firingTime;
-    predessesor_h = prev.h_f;  // Store parent's h for isDeltaZero optimization
+    g_b = prev.g_b;
+    predessesor_h_f = prev.h_f;  // Store parent's h for isDeltaZero optimization
+    predessesor_h_b = prev.h_b;  // Store parent's h for isDeltaZero optimization
     lastTransitionId=transitionId;
     // 2. Copy State
     finishedActivitiys = prev.finishedActivitiys;
@@ -2338,7 +2342,9 @@ if (direction) {
 else {
     isDeltaZero = (firingTime == 0);
     g_b = prev.g_b + firingTime;
-    predessesor_h = prev.h_b;
+    g_f=prev.g_f;
+    predessesor_h_b = prev.h_b;
+    predessesor_h_f = prev.h_f;
     lastTransitionId=transitionId;
 
     // 2. Copy State

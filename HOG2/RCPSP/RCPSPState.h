@@ -165,11 +165,13 @@ public:
     mutable bool transitionsCached = false;
     bool direction=1;
     bool isDeltaZero;
+    bool isCriticalInActive;
     short g = 0;
     short g_pre = 0;
     mutable short h = 0;
     short predessesor_h = 0;
     short lastTransitionId=0; // <--- SAVE IT HERE
+    mutable short nextCritical;
     RCPSPState_TT2();
     RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime,bool Direction =1);
 
@@ -305,6 +307,10 @@ short getForwardHcost_TT2(
 double getForwardHcost_TT(const std::array<short, 128>& unstartedTransitions);
 
 
+double getForwardHcost(std::vector<short>unstartedTransitions,
+                      std::vector<std::pair<short, short>>activeTransitionIndices,
+                      short& nextCritical  // ← add this
 
+                      );
 
 #endif // RCPSPSTATE_H

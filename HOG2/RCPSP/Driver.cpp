@@ -1016,10 +1016,10 @@ void runBenchmark() {
             RCPSPex.reset();
 
             // 2. SOLVE
-            solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
             solveRCPSP_TT2(i, j, filename, "j30");
             //solveRCPSP_TT(i, j, filename, "j30");
-             solveRCPSP_Bi(i, j, filename, "j30");
+             // solveRCPSP_Bi(i, j, filename, "j30");
         }
     }
 

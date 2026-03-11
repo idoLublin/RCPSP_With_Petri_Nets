@@ -1425,7 +1425,7 @@ inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2
 
 
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
-  if (state1.isDeltaZero) {
+  if (state1.isDeltaZero||!state1.isCriticalInActive) {
     state1.h = state1.predessesor_h;
     return state1.h;
   }
@@ -1441,11 +1441,7 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  state1.h = getForwardHcost(tempUnstarted,
-                                  //state1.activity_nodes,
-                                  state1.activeTransitionIndices//,
-                                //  state1.finishedActivitiys
-                                  );  // ← ADD THIS
+  state1.h = getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.nextCritical);  // ← ADD THIS
 
   return state1.h;
 }
@@ -1461,27 +1457,27 @@ inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
   }
 
  // 2. Activity Nodes (Tokens)
-  for (const auto& p : node.activity_nodes) {
-    seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  }
-
-  // 3. Resource Nodes
-  for (const auto& resourceVec : node.resource_nodes) {
-    for (const auto& p : resourceVec) {
-      seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-      seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    }
-  }
+  // for (const auto& p : node.activity_nodes) {
+  //   seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //   seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // }
+  //
+  // // 3. Resource Nodes
+  // for (const auto& resourceVec : node.resource_nodes) {
+  //   for (const auto& p : resourceVec) {
+  //     seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //     seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //   }
+  // }
 
   // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
   // Must verify these are SORTED in the state constructor!
-  // for (const auto& active : node.activeTransitionIndices) {
-  //   // Hash the Task ID
-  //   seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   // Hash the Remaining Time (Crucial!)
-  //   seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
+  for (const auto& active : node.activeTransitionIndices) {
+    // Hash the Task ID
+    seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // Hash the Remaining Time (Crucial!)
+    seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
   // seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   // seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 

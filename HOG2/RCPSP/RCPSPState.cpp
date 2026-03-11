@@ -259,24 +259,138 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
     h = earlyfinishMap2.rbegin()->second;;
 
   }
-  if (useCS) {
-    // h=computeSequenceLowerBoundWithMax2(
-    //     unstartedTransitions,
-    //     activeTransitionIndices,
-    //     earlyfinishMap2,
-    //     earlyfinishMap3,
-    //     h,
-    //     finishedActivitiys); // BL_Cs heuristic
-    // auto endS1 = std::chrono::high_resolution_clock::now();
-    // avelableTIME += endS1 - startS3;
-    return h;
+
+    //   std::array<int, 32> LF;
+    // LF.fill(-1);
+    //
+    // // Process in reverse topological order (descending ID)
+    // for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
+    //     short actId = unstartedTransitions[idx];
+    //     int minSuccLS = h;
+    //
+    //     for (int succ : RCPSPex.dependencies[actId - 1]) {
+    //         if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), (short)succ) == unstartedTransitions.end())
+    //             continue;
+    //         if (LF[succ] == -1) continue;
+    //         int duration = getTransitionDuration2(activeTransitionIndices, succ);
+    //         int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[succ - 1].duration;
+    //         minSuccLS = std::min(minSuccLS, LF[succ] - effectiveDuration);
+    //     }
+    //     LF[actId] = minSuccLS;
+    // }
+    //
+    // // --- Step 3: Identify critical vs non-critical ---
+    // // std::vector<short> criticalActivities;
+    // // std::vector<short> nonCriticalActivities;
+    //
+    // for (short actId : unstartedTransitions) {
+    //     int duration = getTransitionDuration2(activeTransitionIndices, actId);
+    //     int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[actId - 1].duration;
+    //     int EF = earlyfinishMap2[actId] + effectiveDuration;
+    //     if (EF == 0) continue;
+    //     int slack = LF[actId] - EF;
+    //     if (slack == 0) {
+    //         nextCritical=actId;
+    //         break;
+    //
+    //         // } else if (slack > 0) {
+    //     //     // nonCriticalActivities.push_back(actId);
+    //      }
+    // }
+
+
+
+ return h;
+
+}
+
+
+double getForwardHcost(std::vector<short>unstartedTransitions,
+                      std::vector<std::pair<short, short>>activeTransitionIndices,
+                      short& nextCritical  // ← add this
+
+                      ) {
+  //auto startS3 = std::chrono::high_resolution_clock::now();
+
+   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+   //std::map<int, int> earlyfinishMap3; // Map to store activity IDs and their early finish times
+
+  double h;
+  std::set<int> processedDependencies;
+
+  for (int activityId: unstartedTransitions) {
+    int maxFinishTime = 0;
+    std::set<int> processedDependencies;
+
+      for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed to int
+          int depId = dep - 1;  // No more std::stoi
+
+          if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+              int duration = getTransitionDuration2(activeTransitionIndices, dep);  // Pass dep directly
+              if (duration !=-1) {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+                  //earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + duration;
+              }
+              else {
+                  maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+               //   earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration;
+              }
+          }
+          else {
+              maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+            //  earlyfinishMap3[depId+1] = earlyfinishMap2[depId+1];
+          }
+      }
+    earlyfinishMap2[activityId] = maxFinishTime;
+   // earlyfinishMap3[activityId] = maxFinishTime;
+  }
+  if (earlyfinishMap2.size()==0) {
+    h = 0;
   }
   else {
-    // auto endS1 = std::chrono::high_resolution_clock::now();
-    // avelableTIME += endS1 - startS3;
-    return h;
+    h = earlyfinishMap2.rbegin()->second;;
 
   }
+
+      std::array<int, 32> LF;
+    LF.fill(-1);
+
+    // Process in reverse topological order (descending ID)
+    for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
+        short actId = unstartedTransitions[idx];
+        int minSuccLS = h;
+
+        for (int succ : RCPSPex.dependencies[actId - 1]) {
+            if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), (short)succ) == unstartedTransitions.end())
+                continue;
+            if (LF[succ] == -1) continue;
+            int duration = getTransitionDuration2(activeTransitionIndices, succ);
+            int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[succ - 1].duration;
+            minSuccLS = std::min(minSuccLS, LF[succ] - effectiveDuration);
+        }
+        LF[actId] = minSuccLS;
+    }
+
+    // --- Step 3: Identify critical vs non-critical ---
+    // std::vector<short> criticalActivities;
+    // std::vector<short> nonCriticalActivities;
+
+    for (short actId : unstartedTransitions) {
+        int duration = getTransitionDuration2(activeTransitionIndices, actId);
+        int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[actId - 1].duration;
+        int EF = earlyfinishMap2[actId] + effectiveDuration;
+        if (EF == 0) continue;
+        int slack = LF[actId] - EF;
+        if (slack == 0) {
+            nextCritical=actId;
+            break;
+
+            // } else if (slack > 0) {
+        //     // nonCriticalActivities.push_back(actId);
+         }
+    }
+
+
 
  return h;
 
@@ -2827,7 +2941,9 @@ RCPSPState_TT2::RCPSPState_TT2() {
     }
 
 
-    h=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices,finishedActivitiys);
+    // h=getForwardHcost_TT2(tempUnstarted,activity_nodes,activeTransitionIndices,finishedActivitiys,nextCritical);
+    h = getForwardHcost(tempUnstarted,activeTransitionIndices,nextCritical);  // ← ADD THIS
+
     predessesor_h=h;
     g = 0;
 }
@@ -2845,8 +2961,10 @@ if (direction) {
     resource_nodes = prev.resource_nodes;
     activity_nodes = prev.activity_nodes;
     activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
-    // ✅ CORRECT: Child gets fresh cache
+    nextCritical=prev.nextCritical;
+
     transitionsCached = false;
+    isCriticalInActive = false;
     AvailableTransitionIndices_TT2.clear(); // or just leave empty
     // 3. TIME SHIFT (Update "Remaining Time")
     if (firingTime > 0) {
@@ -2868,6 +2986,11 @@ if (direction) {
         // Decrement remaining time for all active activities
         auto it = activeTransitionIndices.begin();
         while (it != activeTransitionIndices.end()) {
+        if (nextCritical==it->first||it->second==0) {
+            isCriticalInActive=true;
+        }
+
+
             it->second -= firingTime;  // Reduce remaining time
 
             if (it->second <= 0) {

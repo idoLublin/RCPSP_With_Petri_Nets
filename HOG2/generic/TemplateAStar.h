@@ -683,17 +683,17 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 //					std::cout << double(theHeuristic->HCost(neighbors[x], goal)+openClosedList.Lookup(nodeid).g+edgeCosts[x]);
 //					std::cout << " \n";
 					double h = theHeuristic->HCost(neighbors[x], goal);
-//**********************************************************************
-				double h_parent = openClosedList.Lookup(nodeid).h;
-				double edge = edgeCosts[x];
-				if (h_parent > edge + h) {
-					std::cerr << "INCONSISTENT: h_parent=" << h_parent
-							  << " edge=" << edge
-							  << " h_child=" << h
-							  << " violation=" << h_parent - edge - h
-							  << std::endl;
-				}
-//***********************************************************************
+// //**********************************************************************
+// 				double h_parent = openClosedList.Lookup(nodeid).h;
+// 				double edge = edgeCosts[x];
+// 				if (h_parent > edge + h) {
+// 					std::cerr << "INCONSISTENT: h_parent=" << h_parent
+// 							  << " edge=" << edge
+// 							  << " h_child=" << h
+// 							  << " violation=" << h_parent - edge - h
+// 							  << std::endl;
+// 				}
+// //***********************************************************************
 
 
 					if (useBPMX)

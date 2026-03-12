@@ -103,24 +103,13 @@ inline size_t getcomper2(const RCPSPState_Bi& state) {
 	}
 	return count;
 }
-// // --- 3. RCPSPState_TT2 (New Optimized) ---
 inline size_t getcomper2(const RCPSPState_TT2& state) {
-	if (state.direction) {
-		return state.activeTransitionIndices.size()+state.finishedActivitiys.count();
-	}
-	else {
-		return -(state.activeTransitionIndices.size()+state.finishedActivitiys.count());
-	}
+	return state.activeTransitionIndices.size();
 }
 inline size_t getcomper1(const RCPSPState_TT2& state) {
 	// For bitset, use .count(). For array, use the cached variable if available.
 	// Based on your latest code using bitset:
-if (state.direction) {
 	return state.finishedActivitiys.count();
-}
-	else {
-		return -state.finishedActivitiys.count();
-	}
 }
 // inline size_t getcomper1(const RCPSPState_TT2& state) {
 // 	if (state.direction == 1) { // FORWARD

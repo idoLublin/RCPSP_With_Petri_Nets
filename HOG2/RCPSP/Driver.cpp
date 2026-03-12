@@ -27,7 +27,16 @@ namespace fs = std::filesystem;
 #include <vector>
 #include <climits>
 #include <fstream>
-// void renderScene() {}
+
+// #include <sys/resource.h>
+//
+// long getPeakMemoryKB() {
+//     struct rusage usage;
+//     getrusage(RUSAGE_SELF, &usage);
+//     return usage.ru_maxrss;
+// }
+
+
 // long getPeakMemoryKB() {
 //     std::ifstream status("/proc/self/status");
 //     std::string line;
@@ -40,6 +49,7 @@ namespace fs = std::filesystem;
 //     }
 //     return -1;
 // }
+
 void runBenchmark();
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
@@ -1009,7 +1019,7 @@ void runBenchmark() {
    //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
     for(int i = 16; i < 17; i++) {
-        for(int j = 3; j < 11; j++) {
+        for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();

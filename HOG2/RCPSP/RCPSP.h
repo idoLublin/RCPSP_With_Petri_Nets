@@ -1425,7 +1425,7 @@ inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2
 
 
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
-  if (state1.isDeltaZero||!state1.isCriticalInActive) {
+  if (state1.isDeltaZero){//||!state1.isCriticalInActive) {
     state1.h = state1.predessesor_h;
     return state1.h;
   }

@@ -352,43 +352,43 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
   }
 
-      std::array<int, 32> LF;
-    LF.fill(-1);
-
-    // Process in reverse topological order (descending ID)
-    for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
-        short actId = unstartedTransitions[idx];
-        int minSuccLS = h;
-
-        for (int succ : RCPSPex.dependencies[actId - 1]) {
-            if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), (short)succ) == unstartedTransitions.end())
-                continue;
-            if (LF[succ] == -1) continue;
-            int duration = getTransitionDuration2(activeTransitionIndices, succ);
-            int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[succ - 1].duration;
-            minSuccLS = std::min(minSuccLS, LF[succ] - effectiveDuration);
-        }
-        LF[actId] = minSuccLS;
-    }
-
-    // --- Step 3: Identify critical vs non-critical ---
-    // std::vector<short> criticalActivities;
-    // std::vector<short> nonCriticalActivities;
-
-    for (short actId : unstartedTransitions) {
-        int duration = getTransitionDuration2(activeTransitionIndices, actId);
-        int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[actId - 1].duration;
-        int EF = earlyfinishMap2[actId] + effectiveDuration;
-        if (EF == 0) continue;
-        int slack = LF[actId] - EF;
-        if (slack == 0) {
-            nextCritical=actId;
-            break;
-
-            // } else if (slack > 0) {
-        //     // nonCriticalActivities.push_back(actId);
-         }
-    }
+    // std::array<int, 128> LF;
+    // LF.fill(-1);
+    //
+    // // Process in reverse topological order (descending ID)
+    // for (int idx = (int)unstartedTransitions.size() - 1; idx >= 0; idx--) {
+    //     short actId = unstartedTransitions[idx];
+    //     int minSuccLS = h;
+    //
+    //     for (int succ : RCPSPex.dependencies[actId - 1]) {
+    //         if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), (short)succ) == unstartedTransitions.end())
+    //             continue;
+    //         if (LF[succ] == -1) continue;
+    //         int duration = getTransitionDuration2(activeTransitionIndices, succ);
+    //         int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[succ - 1].duration;
+    //         minSuccLS = std::min(minSuccLS, LF[succ] - effectiveDuration);
+    //     }
+    //     LF[actId] = minSuccLS;
+    // }
+    //
+    // // --- Step 3: Identify critical vs non-critical ---
+    // // std::vector<short> criticalActivities;
+    // // std::vector<short> nonCriticalActivities;
+    //
+    // for (short actId : unstartedTransitions) {
+    //     int duration = getTransitionDuration2(activeTransitionIndices, actId);
+    //     int effectiveDuration = (duration != -1) ? duration : RCPSPex.activities[actId - 1].duration;
+    //     int EF = earlyfinishMap2[actId] + effectiveDuration;
+    //     if (EF == 0) continue;
+    //     int slack = LF[actId] - EF;
+    //     if (slack == 0) {
+    //         nextCritical=actId;
+    //         break;
+    //
+    //         // } else if (slack > 0) {
+    //     //     // nonCriticalActivities.push_back(actId);
+    //      }
+    //}
 
 
 
@@ -2965,6 +2965,17 @@ if (direction) {
 
     transitionsCached = false;
     isCriticalInActive = false;
+
+    // if (nextCritical==transitionId) {
+    //     isCriticalInActive = true;
+    // }
+    // auto it = activeTransitionIndices.begin();
+    // while (it != activeTransitionIndices.end()) {
+    //     if (nextCritical==it->first) {
+    //         isCriticalInActive=true;
+    //     }
+    // }
+
     AvailableTransitionIndices_TT2.clear(); // or just leave empty
     // 3. TIME SHIFT (Update "Remaining Time")
     if (firingTime > 0) {
@@ -2986,11 +2997,6 @@ if (direction) {
         // Decrement remaining time for all active activities
         auto it = activeTransitionIndices.begin();
         while (it != activeTransitionIndices.end()) {
-        if (nextCritical==it->first||it->second==0) {
-            isCriticalInActive=true;
-        }
-
-
             it->second -= firingTime;  // Reduce remaining time
 
             if (it->second <= 0) {

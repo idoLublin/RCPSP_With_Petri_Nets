@@ -396,6 +396,40 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
 }
 
+double getforwardResource(std::vector<short> unstartedTransitions,
+    std::vector<std::pair<short, short>> activeTransitionIndices) {
+
+    double maxResourceBound = 0.0;
+
+    for (auto& [resourceName, capacity] : RCPSPex.resources) {
+        double totalDemand = 0.0;
+
+        // Active activities: use residual delay as remaining duration
+        // Active activities
+        for (auto& [activityId, residualDelay] : activeTransitionIndices) {
+            if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
+            auto& activity = RCPSPex.activities[activityId - 1];
+            auto it = activity.resource_demands.find(resourceName);
+            if (it != activity.resource_demands.end()) {
+                totalDemand += residualDelay * it->second;
+            }
+        }
+        for (short activityId : unstartedTransitions) {
+            if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
+            auto& activity = RCPSPex.activities[activityId - 1];
+            auto it = activity.resource_demands.find(resourceName);
+            if (it != activity.resource_demands.end()) {
+                totalDemand += activity.duration * it->second;
+            }
+        }
+
+        double bound = totalDemand / capacity;
+        maxResourceBound = std::max(maxResourceBound, bound);
+    }
+
+    return maxResourceBound;
+}
+
 double getBackwardHcost(std::vector<short> unstartedTransitions,
                         std::vector<std::pair<short, short>> activeTransitionIndices) {
 

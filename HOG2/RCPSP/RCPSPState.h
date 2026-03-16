@@ -312,5 +312,5 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
                       short& nextCritical  // ← add this
 
                       );
-
+double getforwardResource(std::vector<short>unstartedTransitions,std::vector<std::pair<short, short>>activeTransitionIndices);
 #endif // RCPSPSTATE_H

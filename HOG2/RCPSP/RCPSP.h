@@ -1441,7 +1441,7 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  state1.h = getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.nextCritical);  // ← ADD THIS
+  state1.h = std::max(getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnstarted,state1.activeTransitionIndices));  // ← ADD THIS
 
   return state1.h;
 }

@@ -1018,8 +1018,8 @@ void runBenchmark() {
      //
    //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
-    for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
+    for(int i = 1; i < 2; i++) {
+        for(int j = 3; j < 4; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();

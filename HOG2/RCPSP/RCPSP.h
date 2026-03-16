@@ -1430,18 +1430,18 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     return state1.h;
   }
 
-  std::vector<short> tempUnstarted;
-  tempUnstarted.reserve(petri.Transitions.size());
+  std::vector<short> tempUnfinished;
+  tempUnfinished.reserve(petri.Transitions.size());
 
   for (int i = 0; i < petri.Transitions.size(); i++) {
     short taskID = i + 1;
     // FIX: Use .test() for bitset
     if (!state1.finishedActivitiys.test(taskID)) {
-      tempUnstarted.push_back(taskID);
+      tempUnfinished.push_back(taskID);
     }
   }
 
-  state1.h = std::max(getForwardHcost(tempUnstarted,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnstarted,state1.activeTransitionIndices));  // ← ADD THIS
+  state1.h = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));  // ← ADD THIS
 
   return state1.h;
 }

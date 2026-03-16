@@ -396,7 +396,7 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
 }
 
-double getforwardResource(std::vector<short> unstartedTransitions,
+double getforwardResource(std::vector<short> tempUnfinished,
     std::vector<std::pair<short, short>> activeTransitionIndices) {
 
     double maxResourceBound = 0.0;
@@ -414,19 +414,25 @@ double getforwardResource(std::vector<short> unstartedTransitions,
                 totalDemand += residualDelay * it->second;
             }
         }
-        for (short activityId : unstartedTransitions) {
+
+        // Build a set of executing activity IDs for fast lookup
+        std::unordered_set<short> executing;
+        for (auto& [activityId, residualDelay] : activeTransitionIndices) {
+            executing.insert(activityId);
+        }
+
+        for (short activityId : tempUnfinished) {
             if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
+            if (executing.count(activityId)) continue; // skip executing
             auto& activity = RCPSPex.activities[activityId - 1];
             auto it = activity.resource_demands.find(resourceName);
             if (it != activity.resource_demands.end()) {
                 totalDemand += activity.duration * it->second;
             }
         }
-
         double bound = totalDemand / capacity;
         maxResourceBound = std::max(maxResourceBound, bound);
     }
-
     return maxResourceBound;
 }
 

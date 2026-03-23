@@ -1,5 +1,15 @@
+import csv
+import os
+import time
+import signal
+import threading
+
+
+
+
 import numpy as np
 import pandas as pd
+import pyomo.environ as pyo
 
 from RCPSP_modeling.rcpsp_base import RcpspBase, divide_dicts
 from RCPSP_modeling.rcpsp_petri_net import (
@@ -12,10 +22,13 @@ from extract_problems.extract_problem import (
     extract_opt_values,
     extract_opt_values_with_time,
 )
+from RCPSP_modeling.rcpsp_math_represntation import solve_file_problem_math
+
+from algorithms_for_solving_rcpsp.solve_with_mip_solver import solve_rcpsp_optimizer
 
 
 def cp_heuristic_for_timed_place(
-    rcpsp_example: RcpspBase, removed_activities, started_activities, current_time
+        rcpsp_example: RcpspBase, removed_activities, started_activities, current_time
 ):
     if started_activities:
         expected_finsh_time = max(
@@ -50,12 +63,12 @@ def sum_resource_demands(activities):
 
 
 def resources_heuristic(
-    rcpsp_example: RcpspBase,
-    removed_activities,
-    started_activities,
-    current_time,
-    job_finish_activity,
-    alternatives,
+        rcpsp_example: RcpspBase,
+        removed_activities,
+        started_activities,
+        current_time,
+        job_finish_activity,
+        alternatives,
 ):
     activities_left = [
         act for act in rcpsp_example.activities if act.name not in removed_activities
@@ -101,16 +114,16 @@ def resources_heuristic(
         )
         - unk_time,
         max_of_divdes,
-    )
+        )
 
 
 def cp_heuristic(
-    rcpsp_example: RcpspBase,
-    removed_activities,
-    started_activities,
-    current_time,
-    job_finish_activity,
-    alternatives,
+        rcpsp_example: RcpspBase,
+        removed_activities,
+        started_activities,
+        current_time,
+        job_finish_activity,
+        alternatives,
 ):
 
     if started_activities:
@@ -146,16 +159,16 @@ def cp_heuristic(
             list(started_activities), job_finish_activity, ongoing={}
         )[0]
         - unk_time,
-    )
+        )
 
 
 def cp_heuristic_as(
-    rcpsp_example: RcpspBase,
-    removed_activities,
-    started_activities,
-    current_time,
-    job_finish_activity,
-    alternatives,
+        rcpsp_example: RcpspBase,
+        removed_activities,
+        started_activities,
+        current_time,
+        job_finish_activity,
+        alternatives,
 ):
 
     if started_activities:
@@ -207,7 +220,7 @@ def cp_heuristic_as(
                     job_finish_activity,
                 )
                 - unk_time,
-            )
+                )
             if res_of_alternative < res:
                 res = res_of_alternative
 
@@ -403,7 +416,7 @@ def check_opt_vs_initial_heuristic():
 
 
 def solve_file_problem(
-    path, beam_search_size=None, timed_transition=True, logging=False
+        path, beam_search_size=None, timed_transition=True, logging=False
 ):
     petri_example, rcpsp_example = init_real_problem(
         path, timed_transition=timed_transition
@@ -617,7 +630,7 @@ def solve_wrapper(file, results_dir, timeout, opt_values):
 
 
 def solve_problem_with_time_limit(
-    results_dir, timeout, problem_file, opt_values, beam_search_size, timed_transition
+        results_dir, timeout, problem_file, opt_values, beam_search_size, timed_transition
 ):
     param = re.search(r"j30(\d+)_", problem_file).group(1)
     instance = problem_file.split("_")[-1].split(".")[0]
@@ -693,22 +706,371 @@ def main():
     # easy_problems = easy_problems["problem_instance"]
     # run_over_files(results_dir="results/paper_version_TTPN_10_min", timeout=18000)
     # # print(solve_small_problem_math())
-    print(
-        solve_file_problem(
-            path="extract_problems/data/j60.sm.tgz/j6040_2.sm",
-            # timed_transition=True,
-            logging=True,
-        )
-    )
-
     # print(
     #     solve_file_problem(
-    #         path="extract_problems/data/j30.sm.tgz/j3014_5.sm",
-    #         timed_transition=True,
+    #         path="extract_problems/data/j60.sm.tgz/j6040_2.sm",
+    #         # timed_transition=True,
     #         logging=True,
     #     )
     # )
-    # solve_rcpsp_optimizer(path="extract_problems/data/j30.sm.tgz/j3014_5.sm")
+
+
+    class TimeoutException(Exception):
+        pass
+
+    def timeout_handler(signum, frame):
+        raise TimeoutException()
+
+    def solve_one(group,example,benchmark):
+        filename = f"extract_problems/data/j{benchmark}.sm.tgz/j{benchmark}{group}_{example}.sm"
+        problem_name = f"j{benchmark}{group}_{example}"
+
+        print(f"Solving {problem_name}...")
+        start_time = time.time()
+
+        # Set 10-minute timeout using threading
+        timeout_occurred = False
+
+        def run_solver():
+            nonlocal result, timeout_occurred
+            try:
+                result = solve_rcpsp_optimizer(filename)
+            except Exception as e:
+                if not timeout_occurred:
+                    raise e
+
+        result = None
+        solver_thread = threading.Thread(target=run_solver)
+        solver_thread.daemon = True
+        solver_thread.start()
+        solver_thread.join(timeout=300)  # 300 seconds = 5 minutes
+
+        solve_time = time.time() - start_time
+
+        if solver_thread.is_alive():
+            timeout_occurred = True
+            print(f"Timeout for {problem_name} after 5 minutes")
+            with open("result.csv", "a", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([problem_name, "TIMEOUT", False, solve_time])
+        elif result is not None:
+            with open("result.csv", "a", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([problem_name, result.get("makespan"), result.get("solved"), solve_time])
+            print(f"Saved {problem_name}: makespan={result.get('makespan')}, time={solve_time:.2f}s")
+        else:
+            print(f"Error with {problem_name}")
+            with open("result.csv", "a", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([problem_name, "ERROR", False, solve_time])
+
+
+
+
+
+                # benchmark=60
+    # solve_one(45,8,60)
+    # solve_one(45,9,60)
+    # solve_one(46,6,60)
+    # solve_one(46,7,60)
+
+
+    # benchmark=90
+    # solve_one(7,3,90)
+    # solve_one(7,8,90)
+    # solve_one(7,9,90)
+
+    # for i in range(6,11):
+    #     solve_one(8,i,90)
+
+    # solve_one(9,1,90)
+    # solve_one(9,8,90)
+    # solve_one(9,9,90)
+
+    # solve_one(10,3,90)
+    # solve_one(10,5,90)
+    # solve_one(10,9,90)
+    # solve_one(10,10,90)
+
+    # solve_one(11,1,90)
+    # solve_one(11,2,90)
+
+    # solve_one(15,9,90)
+    # solve_one(15,10,90)
+
+
+    # for i in range(4,11):
+    #     solve_one(16,i,90)
+
+    # for i in range(2,8):
+    #     solve_one(25,i,90)
+    # solve_one(25,10,90)
+
+    # solve_one(26,1,90)
+    # solve_one(26,3,90)
+    # solve_one(26,6,90)
+    # solve_one(26,7,90)
+
+    # solve_one(29,4,90)
+
+    # solve_one(32,10,90)
+
+    # solve_one(33,6,90)
+    # solve_one(33,7,90)
+    # solve_one(33,9,90)
+
+    # solve_one(34,3,90)
+    # solve_one(34,4,90)
+    # solve_one(34,6,90)
+    # solve_one(34,7,90)
+
+    # solve_one(35,2,90)
+    # solve_one(35,4,90)
+    # solve_one(35,6,90)
+
+    # for i in range(1,8):
+    #     solve_one(36,i,90)
+
+    # for i in range(1,7):
+    #     solve_one(37,i,90)
+
+    # solve_one(38,4,90)
+    # solve_one(38,5,90)
+    # solve_one(38,8,90)
+    # solve_one(38,9,90)
+
+    # solve_one(39,5,90)
+
+    # for i in range(8,11):
+    #     solve_one(39,i,90)
+
+    # solve_one(40,1,90)
+
+    # solve_one(41,2,90)
+    # solve_one(41,3,90)
+    # solve_one(41,6,90)
+
+    # solve_one(42,4,90)
+    # solve_one(42,5,90)
+
+    # solve_one(43,5,90)
+    # solve_one(43,6,90)
+
+    # solve_one(47,4,90)
+
+    # for i in range(1,6):
+    #     solve_one(48,i,90)
+
+
+
+    # if(0):
+    #     print("Starting batch solve...")
+    #     tocomplete=33
+    #     for group in range(tocomplete, tocomplete+1):  # Groups 1 to 48
+    #         for example in range(9, 11):  # Examples 1 to 10
+
+    #             #עופר תשנה ב2 שורות מתחת את ה90 ל120 בהרצה השניה
+    #             filename = f"extract_problems/data/j{benchmark}.sm.tgz/j{benchmark}{group}_{example}.sm"
+    #             problem_name = f"j{benchmark}{group}_{example}"
+
+    #             print(f"Solving {problem_name}...")
+    #             start_time = time.time()
+
+    #             # Set 10-minute timeout using threading
+    #             timeout_occurred = False
+
+    #             def run_solver():
+    #                 nonlocal result, timeout_occurred
+    #                 try:
+    #                     result = solve_rcpsp_optimizer(filename)
+    #                 except Exception as e:
+    #                     if not timeout_occurred:
+    #                         raise e
+
+    #             result = None
+    #             solver_thread = threading.Thread(target=run_solver)
+    #             solver_thread.daemon = True
+    #             solver_thread.start()
+    #             solver_thread.join(timeout=300)  # 300 seconds = 5 minutes
+
+    #             solve_time = time.time() - start_time
+
+    #             if solver_thread.is_alive():
+    #                 timeout_occurred = True
+    #                 print(f"Timeout for {problem_name} after 5 minutes")
+    #                 with open("result.csv", "a", newline='') as f:
+    #                     writer = csv.writer(f)
+    #                     writer.writerow([problem_name, "TIMEOUT", False, solve_time])
+    #             elif result is not None:
+    #                 with open("result.csv", "a", newline='') as f:
+    #                     writer = csv.writer(f)
+    #                     writer.writerow([problem_name, result.get("makespan"), result.get("solved"), solve_time])
+    #                 print(f"Saved {problem_name}: makespan={result.get('makespan')}, time={solve_time:.2f}s")
+    #             else:
+    #                 print(f"Error with {problem_name}")
+    #                 with open("result.csv", "a", newline='') as f:
+    #                     writer = csv.writer(f)
+    #                     writer.writerow([problem_name, "ERROR", False, solve_time])
+
+    #     print("All problems completed!")
+
+
+
+
+benchmark = 30
+solver = "cbc"
+# ========== MAIN BENCHMARKING LOOP ==========
+benchmark = 30
+solver = "cbc"
+
+# Generate a unique random string for this specific benchmark run
+run_id = uuid.uuid4().hex[:6]
+csv_filename = f"result_{solver}_j{benchmark}_{run_id}.csv"
+print(f"Starting benchmark. Logging to: {csv_filename}")
+
+for group in range(1, 2):
+    for example in range(1, 11):
+        filename = f"extract_problems/data/j{benchmark}.sm.tgz/j{benchmark}{group}_{example}.sm"
+        problem_name = f"j{benchmark}{group}_{example}"
+        print(f"Solving {problem_name}...")
+
+        try:
+            result = solve_rcpsp_optimizer(filename, solver)
+            solve_time = result.get("solve_time")
+            status = result.get("status")
+            makespan = result.get("makespan")
+
+            # Log to the dynamically named CSV
+            with open(csv_filename, "a", newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow([problem_name, makespan, status, solve_time])
+
+            # Format time to 2 decimal places for cleaner terminal output
+            if solve_time is not None:
+                print(f"Saved {problem_name}: {status}, makespan={makespan}, time={solve_time:.2f}s")
+            else:
+                print(f"Saved {problem_name}: {status}, makespan={makespan}, time=Unknown")
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "aborted" in error_msg or "timeout" in error_msg:
+                status = "TIMEOUT"
+                makespan = -1
+
+                with open(csv_filename, "a", newline='') as f:
+                    writer = csv.writer(f)
+                    writer.writerow([problem_name, makespan, status, 300])
+                print(f"Saved {problem_name}: {status}, makespan={makespan}, time=300")
+            else:
+                print(f"Error solving {problem_name}: {e}")
+# for group in range(1, 2):
+#     for example in range(1, 11):
+#         filename = f"extract_problems/data/j{benchmark}.sm.tgz/j{benchmark}{group}_{example}.sm"
+#         problem_name = f"j{benchmark}{group}_{example}"
+#         print(f"Solving {problem_name}...")
+
+#         try:
+#             # The timing is now INSIDE solve_rcpsp_optimizer
+#             result = solve_rcpsp_optimizer(filename)
+#             solve_time = result.get("solve_time")  # Get time from result
+
+#             status = result.get("status")
+#             makespan = result.get("makespan")
+#             solved = result.get("solved")
+
+#             # Log to CSV with dynamic filename
+#             csv_filename = f"result_{solver}_j{benchmark}_new.csv"
+#             with open(csv_filename, "a", newline='') as f:
+#                 writer = csv.writer(f)
+#                 writer.writerow([problem_name, makespan, status, solve_time])
+
+#             print(f"Saved {problem_name}: {status}, makespan={makespan}, time={solve_time:.2f}s")
+
+#         except Exception as e:
+#             error_msg = str(e).lower()
+#             if "aborted" in error_msg or "timeout" in error_msg:
+#                 status = "TIMEOUT"
+#                 makespan = -1
+
+#                 csv_filename = f"result_{solver}_j{benchmark}_new.csv"
+#                 with open(csv_filename, "a", newline='') as f:
+#                     writer = csv.writer(f)
+#                     writer.writerow([problem_name, makespan, status, 300])
+#                 print(f"Saved {problem_name}: {status}, makespan={makespan}, time=300")
+#             else:
+#                 print(f"Error solving {problem_name}: {e}")
+# print("Starting solver...")
+#result = solve_rcpsp_optimizer("extract_problems/data/j30.sm.tgz/j301_1.sm")
+# #print("Result:", result)
+# result = solve_rcpsp_optimizer("extract_problems/data/j30.sm.tgz/j301_4.sm")
+# with open("result.csv", "a", newline='') as f:
+#     writer = csv.writer(f)
+#     writer.writerow(["j301_4", result.get("makespan"), result.get("solved")])
+# print("Saved to CSV")
+
+# print("Starting batch solve...")
+# for group in range(1, 49):  # Groups 1 to 48
+#     for example in range(1, 11):  # Examples 1 to 10
+#         filename = f"extract_problems/data/j30.sm.tgz/j30{group}_{example}.sm"
+#         problem_name = f"j30{group}_{example}"
+
+#         print(f"Solving {problem_name}...")
+#         try:
+#             result = solve_rcpsp_optimizer(filename)
+#             with open("result.csv", "a", newline='') as f:
+#                 writer = csv.writer(f)
+#                 writer.writerow([problem_name, result.get("makespan"), result.get("solved")])
+#             print(f"Saved {problem_name}: makespan={result.get('makespan')}")
+#         except Exception as e:
+#             print(f"Error with {problem_name}: {e}")
+#             with open("result.csv", "a", newline='') as f:
+#                 writer = csv.writer(f)
+#                 writer.writerow([problem_name, "ERROR", False])
+
+# print("All problems completed!")
+
+
+# print("Starting batch solve...")
+# for group in range(1, 49):  # Groups 1 to 48
+#     for example in range(1, 11):  # Examples 1 to 10
+#         filename = f"extract_problems/data/j30.sm.tgz/j30{group}_{example}.sm"
+#         problem_name = f"j30{group}_{example}"
+
+#         print(f"Solving {problem_name}...")
+#         start_time = time.time()
+#         try:
+#             result = solve_rcpsp_optimizer(filename)
+#             solve_time = time.time() - start_time
+#             with open("result.csv", "a", newline='') as f:
+#                 writer = csv.writer(f)
+#                 writer.writerow([problem_name, result.get("makespan"), result.get("solved"), solve_time])
+#             print(f"Saved {problem_name}: makespan={result.get('makespan')}, time={solve_time:.2f}s")
+#         except Exception as e:
+#             solve_time = time.time() - start_time
+#             print(f"Error with {problem_name}: {e}")
+#             with open("result.csv", "a", newline='') as f:
+#                 writer = csv.writer(f)
+#                 writer.writerow([problem_name, "ERROR", False, solve_time])
+
+# print("All problems completed!")
+
+
+# result = solve_rcpsp_optimizer("extract_problems/data/j30.sm.tgz/j3021_4.sm")
+# with open("results1111111111111111111111111111.csv", "a", newline='') as f:
+#     writer = csv.writer(f)
+#     writer.writerow(["j301_1", result.get("makespan"), result.get("solved")])
+
+
+# print(solve_rcpsp_optimizer("extract_problems/data/j30.sm.tgz/j301_1.sm"))
+#print(solve_rcpsp_optimizer("extract_problems/data/j30.sm.tgz/j301_10.sm"))
+#print(solve_rcpsp_optimizer("extract_problems\data\j30.sm.tgz\j301_10.sm"))
+
+
+# print(solve_file_problem(path="extract_problems\data\j30.sm.tgz\j3016_9.sm",timed_transition=True,logging=True,))
+
+
+# print(solve_file_problem_math(path="extract_problems\data\j30.sm.tgz\j3023_1.sm",timed_transition=False,logging=True,))
+#solve_rcpsp_optimizer(path="extract_problems\data\j30.sm.tgz\j301_1.sm")
 
 
 if __name__ == "__main__":

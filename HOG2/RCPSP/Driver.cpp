@@ -1016,22 +1016,23 @@ void runBenchmark() {
 // solveRCPSP_TT2(16,2,filename,"j30");
 //     solveRCPSP_TT(16,2,filename,"j30");
      //
-   //  solveRCPSP_TT2_Backward(16,9,filename,"j30");
+   solveRCPSP_TT2(3,2,filename,"j60");
   // solveRCPSP_TT(16,4,filename,"j30");
-    for(int i = 1; i < 2; i++) {
-        for(int j = 3; j < 4; j++) {
 
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
+    // for(int i = 1; i < 2; i++) {
+    //     for(int j = 3; j < 4; j++) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
+    // }
 
 
 

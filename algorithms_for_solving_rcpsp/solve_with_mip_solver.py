@@ -1,12 +1,13 @@
 # pyomo.environ provides the framework for build the model
 from itertools import product
+import time
 
 import gurobipy as gp
 import pyomo.environ as pyo
 from gurobipy import GRB
-
+from pyomo.environ import TerminationCondition
 from extract_problems.extract_problem import extract_rcpsp_for_solver
-
+from pyomo.environ import value # Ensure this is imported
 # SolverFactory allows to call the solver to solve
 
 # store the solver in a variable to call it later, we need to tell google colab
@@ -78,19 +79,149 @@ def solve_rcpsp(p, u, e, c):
                 for j in model.J
                 for t2 in range(max(0, t - p[j] + 1), t + 1)
             )
-            <= c[r]
+                 <= c[r]
         )
+
+
+    solver_name="scip"
+    opt = pyo.SolverFactory(solver_name)
+    #opt.options["Presolve"] = 0
+
+
+    if solver_name == "gurobi":
+        opt.options["TimeLimit"] = 300  # Change to 300 later
+        opt.options["Threads"] = 1
+        opt.options["MIPGap"] = 0.0
+        opt.options["Presolve"] = 0
+
+    elif solver_name == "cbc":
+        opt.options["preprocess"] = "off"
+        opt.options["seconds"] = 300  # Change to 300 later
+        opt.options["ratio"] = 0.0
+        opt.options["thread"] = 1
+        opt.options["threads"] = 1
+        opt.options['limits/time'] = 300#Sets a time limit of 600 seconds (10 minutes)
+        opt.options['timelimit'] = 300
+        opt.options['seconds'] = 300#the time limit to 1 second
+        opt.options["timeMode"] = "elapsed"  # <--- THIS IS THE FIX
+        # Disable ALL preprocessing in CBC
+    # opt.options["preprocess"] = "off"
+    # opt.options["presolve"] = "off"  # Alternative parameter name
+    # opt.options["cuts"] = "off"  # Also disable cut generation (related to preprocessing)
+    #opt.options["heuristics"] = "off"  # Disable heuristics that run during preprocessing
+    elif solver_name == "scip":
+        opt.options['limits/time'] = 300  # Change to 300 later
+        opt.options['limits/gap'] = 0.0
+        opt.options['presolving/maxrounds'] = 0
+        opt.options['presolving/maxrestarts'] = 0
+
+        opt.options['parallel/maxnthreads'] = 1
+        # Disable ALL preprocessing components
+    #         opt.options['presolving/maxrounds'] = 0
+    #         opt.options['presolving/maxrestarts'] = 0
+    #         opt.options['constraints/linear/presolpairwise'] = False
+    #         opt.options['constraints/linear/presolusehashing'] = False
+    #         opt.options['propagating/probing/maxprerounds'] = 0
+    # # This forces SCIP to skip the expensive "math analysis" loop
+    #         opt.options['separating/maxrounds'] = 0
+    #         opt.options['separating/maxroundsroot'] = 0
+
+    results = opt.solve(model, tee=False)
+
+    # ========== RESULT PARSING ==========
+    from pyomo.opt import TerminationCondition
+
+    term_cond = results.solver.termination_condition
+
+    if term_cond == TerminationCondition.optimal:
+        return {
+            "solved": True,
+            "makespan": results["Problem"][0]["Lower bound"],
+            "status": "OPTIMAL"
+        }
+    elif term_cond == TerminationCondition.infeasible:
+        return {
+            "solved": False,
+            "makespan": float('inf'),
+            "status": "INFEASIBLE"
+        }
+    else:
+        # Timeout or anything else
+        return {
+            "solved": False,
+            "makespan": -1,
+            "status": "TIMEOUT"
+        }
+
     # opt = pyo.SolverFactory(
     #     "scip", executable="/home/dsi/zaksiya/SCIPOptSuite-9.1.1-Linux/bin/scip"
     # )
-    # opt = pyo.SolverFactory("gurobi")
+    #    opt = pyo.SolverFactory("gurobi")
+
+
+
+    # opt = pyo.SolverFactory("gurobi", solver_io="python")
+
+    # opt.options["MemLimit"] = 100   # Limit to 100 GB
+    # opt.options["Threads"] = 20     # Limit to 20 Threads
+    # opt.options["LogFile"] = "gurobi.log"
+    # opt.options["TimeLimit"] = 300
+
+
+    # opt = pyo.SolverFactory("cbc")
+
+    # TIMEOUT SETTINGS:
+    # 'seconds': 300  -> Stop after 5 minutes
+    # 'ratio': 0.0    -> Stop only if we found the PERFECT solution (gap=0%)
+    # 'threads': 4    -> Use 4 cores (optional)
+    solver_options = {'seconds': 300, 'ratio': 0.0, 'threads': 1}
+
+
+
     # opt_glpk = pyo.SolverFactory(
     #     "cplex", executable="/Users/iyarzaks/Downloads/ampl.macos64/cplex"
     # )
-    opt = pyo.SolverFactory("cbc")
-    # opt = pyo.SolverFactory(
-    #     "scip",
-    # )
+    #opt = pyo.SolverFactory("cbc")
+    #     solver_options = {
+    #     'limits/time': 300,      # Correct parameter for time limit
+    #     'limits/gap': 0.0,       # Correct parameter for optimality gap
+    #     # 'threads': 4           # WARNING: Standard SCIP is single-threaded. This likely won't work.
+    # }
+
+    #     opt = pyo.SolverFactory("scip")
+    #     opt.options['limits/time'] = 300#Sets a time limit of 600 seconds (10 minutes)
+    #     opt.options['timelimit'] = 300
+    #     opt.options['seconds'] = 300#the time limit to 1 second
+
+    #     opt.options['parallel/maxnthreads'] = 1
+
+    # # Limit the underlying Linear Programming solver threads (e.g., if using CPLEX/Gurobi/SoPlex inside SCIP)
+    #     opt.options['lp/threads'] = 1
+    #     opt.options['limits/gap'] = 0  # Example: Stop at 5% gap
+
+    #     opt.options['limits/memory'] = 1024*100
+    #     opt.options['presolving/maxrounds'] = 0
+
+
+    opt = pyo.SolverFactory("gurobi")
+
+    # 1. TIMEOUT (5 Minutes = 300 Seconds)
+    opt.options["TimeLimit"] = 300
+    # opt.options['limits/time'] = 300#Sets a time limit of 600 seconds (10 minutes)
+    # opt.options['timelimit'] = 300
+    # opt.options['seconds'] = 300#the time limit to 1 second
+    # 2. SINGLE THREAD (1 Core)
+    opt.options["Threads"] = 1
+
+    # 3. OPTIMALITY GAP (0% = Find exact solution)
+    opt.options["MIPGap"] = 0.0
+
+    # 4. DISABLE PREPROCESSING
+    opt.options["Presolve"] = 0
+
+
+
+
     # optimizer = pyo.SolverFactory["cbc"]
     # opt_glpk.options["threads"] = 8
     # opt_glpk.options["tmlim"] = 50000
@@ -108,6 +239,43 @@ def solve_rcpsp(p, u, e, c):
     # print(results)
     # ask the solver to solve the model
     # results.write()
+
+    #for cbc
+
+    # term_cond = results.solver.termination_condition
+
+    # # # 2. Determine the status string and the makespan value
+    # if term_cond == TerminationCondition.optimal:
+    #     return {"solved": True, "makespan": results["Problem"][0]["Lower bound"]}
+
+
+    # # # --- THIS IS THE KEY BLOCK TO CHECK FOR ---
+    # elif term_cond in [TerminationCondition.maxTimeLimit, TerminationCondition.aborted]:
+    #     # Treat CBC's 'aborted' as a successful stop due to time limit
+    #     final_status = 'Feasible_Timeout'
+    #     # Based on your requirement, return -inf for timed out results
+    #     makespan_to_return = float('-inf')
+
+    # elif term_cond == TerminationCondition.infeasible:
+    #     final_status = 'Infeasible'
+    #     makespan_to_return = float('inf')
+
+    # else:
+    #     # Catching everything else (e.g., error)
+    #     final_status = term_cond.name
+    #     makespan_to_return = float('inf')
+
+    #     # --- 4. Fit to your desired output structure ---
+    #     # NOTE: The "makespan" key now holds the makespan or -inf/-inf
+    #     return {
+    #         "solved": final_status == 'Optimal', # Only TRUE if guaranteed optimal
+    #         "makespan": makespan_to_return,
+    #         "status": final_status,
+    #     }
+
+
+
+
     return {"solved": True, "makespan": results["Problem"][0]["Lower bound"]}
 
 
@@ -208,7 +376,7 @@ def solve_rcpsp_lp_relaxation(p, u, e, c, finished_activities):
                 for j in model.J
                 for t2 in range(max(0, t - p[j] + 1), t + 1)
             )
-            <= c[r]
+                 <= c[r]
         )
     opt_glpk = pyo.SolverFactory("gurobi")
     results = opt_glpk.solve(model)
@@ -220,6 +388,21 @@ def main():
 
 
 def solve_rcpsp_optimizer(path):
+    # DON'T time this - it's file I/O
+    p, u, e, c = extract_rcpsp_for_solver(path)
+
+    # Start timing ONLY the solver
+    start_time = time.time()
+    res = solve_rcpsp(p, u, e, c)
+    solve_time = time.time() - start_time
+
+    # Add the time to the result
+    res["solve_time"] = solve_time
+    return res
+
+
+
+
     p, u, e, c = extract_rcpsp_for_solver(path)
     res = solve_rcpsp(p, u, e, c)
     # res = solve_rcpsp_lp_relaxation(

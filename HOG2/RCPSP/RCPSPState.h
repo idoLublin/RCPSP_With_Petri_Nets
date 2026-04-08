@@ -249,23 +249,39 @@ public:
         }
         return true;
     }
-    // bool operator==(const RCPSPState_BI_TT2& other) const {
-    //     // 1. Bitset comparison (fast)
-    //     if (finishedActivitiys != other.finishedActivitiys) return false;
-    //
-    //     // 2. Vectors must be SORTED for this to work!
-    //     // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
-    //     // they are the same state, but == will return false if not sorted.
-    //     if (activity_nodes != other.activity_nodes) return false;
-    //     if (resource_nodes != other.resource_nodes) return false;
-    //
-    //     // CRITICAL: Do NOT compare activeTransitionIndices here!
-    //     // Since it is derived data, if it is calculated/sorted slightly differently
-    //     // it might prevent merging of identical states.
-    //     // Only compare the "Physical" state.
-    //
-    //     return true;
-    // }
+
+};
+struct Conflict {
+    short t;                        // conflict time (RVST)
+    short resourceType;                 // which resource
+    std::vector<short> activities;  // all activities in RVS (dynamic size)
+};
+class RCPSPState_CBS {
+public:
+    std::vector<short> start_times;
+    mutable std::vector<Conflict> RVS;
+    short sink_id;
+
+    void computeRVS() const;
+
+    void propagate(short activityId);
+
+    RCPSPState_CBS();
+    RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
+
+    // Equality is CRITICAL for Relative Time
+    bool operator==(const RCPSPState_CBS& other) const {
+
+        if (start_times != other.start_times) return false;
+        // if (activity_nodes != other.activity_nodes) return false;
+        // if (resource_nodes != other.resource_nodes) return false;
+
+        return true;
+    }
+    short makespan() const {
+        return start_times[sink_id] + start_times[sink_id];
+    }
+
 };
 
 // IN YOUR HEADER FILE (.h)

@@ -922,6 +922,104 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
     return 0;  // ADD THIS
 }
 
+int getOptimalMakespan(int group, int exam, const std::string& optFile) {
+    std::ifstream file(optFile);
+    std::string line;
+
+    // Skip header lines until "---"
+    while (std::getline(file, line)) {
+        if (line.find("---") != std::string::npos) break;
+    }
+
+    int g, e, makespan;
+    double cpu;
+    while (file >> g >> e >> makespan >> cpu) {
+        if (g == group && e == exam) return makespan;
+    }
+    return -1; // not found
+}
+int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
+    std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
+
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
+
+    RCPSPState_CBS first;
+    first.computeRVS();
+    RCPSPState_CBS last = first;
+last.RVS.clear();
+    RCPSP_CBS as1;
+
+    TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
+    std::vector<RCPSPState_CBS> path;
+
+    std::chrono::duration<double> elapsed;
+    auto start = std::chrono::high_resolution_clock::now();
+
+    astar.GetPath(&as1, first, last, path);
+
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    long peakMemKB = getPeakMemoryKB();
+
+    int makespan = 0;
+
+
+    if (!path.empty() || first.RVS.empty()) {
+
+        // Get final state - either from path or initial state if already feasible
+        RCPSPState_CBS& finalState = path.empty() ? first : path.back();
+
+        makespan = finalState.start_times[finalState.sink_id] +
+                   RCPSPex.activities[finalState.sink_id].duration;
+
+        std::cout << "{'scheduling': {";
+        bool firstActivity = true;
+        for (int i = 0; i < RCPSPex.activities.size(); i++) {
+            if (!firstActivity) std::cout << ", ";
+            std::cout << "'" << i+1 << "': " << finalState.start_times[i];
+            firstActivity = false;
+        }
+        std::cout << "}, ";
+        std::cout << "'makespan': " << makespan << ", ";
+        std::cout << "'solved': True, ";
+        std::cout << "}" << std::endl;
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+    }
+    else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+         << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+         << "CBS" << ","
+         << problemType << ","
+         << peakMemKB << ",";
+    // Verify optimality
+    int optMakespan = getOptimalMakespan(group, exam, "j30opt.sm");
+    if (optMakespan != -1) {
+        bool correct = (makespan == optMakespan);
+        std::cout << "Optimal makespan: " << optMakespan << std::endl;
+        std::cout << "Our makespan: " << makespan << std::endl;
+        std::cout << "Correct: " << (correct ? "YES" : "NO") << std::endl;
+
+        // Also write to file
+        file << (correct ? "True" : "False") << ","
+             << optMakespan << ",";
+    }
+    file << "\n";
+    return 0;
+}
+// Load optimal makespan from j30opt.sm
+
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
     if (!fs::exists(folder)) {
@@ -1016,23 +1114,25 @@ void runBenchmark() {
 // solveRCPSP_TT2(16,2,filename,"j30");
 //     solveRCPSP_TT(16,2,filename,"j30");
      //
-   solveRCPSP_TT2(3,2,filename,"j60");
+   // solveRCPSP_TT2(3,2,filename,"j60");
+   // solveRCPSP_CBS(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
 
-    // for(int i = 1; i < 2; i++) {
-    //     for(int j = 3; j < 4; j++) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //          // solveRCPSP_Bi(i, j, filename, "j30");
-    //     }
-    // }
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
+
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            solveRCPSP_CBS(i, j, filename, "j30");
+            // solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
+             // solveRCPSP_Bi(i, j, filename, "j30");
+        }
+    }
 
 
 

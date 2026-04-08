@@ -65,138 +65,173 @@ struct AStarCompareWithF {
 // HELPER FUNCTIONS FOR ALL STATE TYPES
 // Place this BEFORE "struct AStarCompareWithF"
 // =========================================================
-
 // --- 1. Standard RCPSPState ---
-inline size_t getcomper1(const RCPSPState& state) {
-	size_t count = 0;
-	for (int t : state.startedActivitiys) {
-		if (t != -1) count++;
-	}
-	return count;
+inline size_t getcomper1(const RCPSPState& state, double g) { return g; }
+inline size_t getcomper2(const RCPSPState& state, double g) {
+    size_t count = 0;
+    for (int t : state.startedActivitiys) {
+       if (t != -1) count++;
+    }
+    return count;
 }
-inline size_t getcomper2(const RCPSPState& state) {
-	size_t count = 0;
-	for (int t : state.finishedActivitiys) {
-		if (t != -1) count++;
-	}
-	return count;
+inline size_t getcomper3(const RCPSPState& state, double g) {
+    size_t count = 0;
+    for (int t : state.finishedActivitiys) {
+       if (t != -1) count++;
+    }
+    return count;
 }
 
-// --- 2. RCPSPState_TT (Old Timed Transition) ---
-inline size_t getcomper1(const RCPSPState_TT& state) {
-	return 0;
+// --- 2. RCPSPState_TT ---
+inline size_t getcomper1(const RCPSPState_TT& state, double g) { return g; }
+inline size_t getcomper2(const RCPSPState_TT& state, double g) { return 0; }
+inline size_t getcomper3(const RCPSPState_TT& state, double g) {
+    size_t count = 0;
+    for (int t : state.finishedActivitiys) {
+       if (t != -1) count++;
+    }
+    return count;
 }
-inline size_t getcomper2(const RCPSPState_TT& state) {
-	size_t count = 0;
-	for (int t : state.finishedActivitiys) {
-		if (t != -1) count++;
-	}
-	return count;
+
+// --- 3. RCPSPState_Bi ---
+inline size_t getcomper1(const RCPSPState_Bi& state, double g) { return g; }
+inline size_t getcomper2(const RCPSPState_Bi& state, double g) { return 0; }
+inline size_t getcomper3(const RCPSPState_Bi& state, double g) {
+    size_t count = 0;
+    for (int t : state.finishedActivitiys) {
+       if (t != -1) count++;
+    }
+    return count;
 }
-inline size_t getcomper1(const RCPSPState_Bi& state) {
-	return 0;
+
+// --- 4. RCPSPState_TT2 ---
+inline size_t getcomper1(const RCPSPState_TT2& state, double g) { return g; }
+inline size_t getcomper2(const RCPSPState_TT2& state, double g) {
+    return state.finishedActivitiys.count();
 }
-inline size_t getcomper2(const RCPSPState_Bi& state) {
-	size_t count = 0;
-	for (int t : state.finishedActivitiys) {
-		if (t != -1) count++;
-	}
-	return count;
+inline size_t getcomper3(const RCPSPState_TT2& state, double g) {
+    return state.activeTransitionIndices.size();
 }
-inline size_t getcomper2(const RCPSPState_TT2& state) {
-	return state.activeTransitionIndices.size();
+
+// --- 5. RCPSPState_CBS ---
+inline size_t getcomper1(const RCPSPState_CBS& state, double g) {
+    return -((short)(state.start_times[state.sink_id] +
+           RCPSPex.activities[state.sink_id].duration));
 }
-inline size_t getcomper1(const RCPSPState_TT2& state) {
-	// For bitset, use .count(). For array, use the cached variable if available.
-	// Based on your latest code using bitset:
-	return state.finishedActivitiys.count();
+inline size_t getcomper2(const RCPSPState_CBS& state, double g) {
+    return -((short)(state.start_times[state.sink_id] +
+           RCPSPex.activities[state.sink_id].duration));
 }
-// inline size_t getcomper1(const RCPSPState_TT2& state) {
-// 	if (state.direction == 1) { // FORWARD
-// 		// We want MORE bits (closer to end).
-// 		// Returning negative makes the "min" priority queue pick the largest count.
-// 		return -(size_t)state.finishedActivitiys.count();
+inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
+    return state.RVS.size();
+}
+// // --- 1. Standard RCPSPState ---
+// inline size_t getcomper1(const RCPSPState& state) {
+// 	size_t count = 0;
+// 	for (int t : state.startedActivitiys) {
+// 		if (t != -1) count++;
 // 	}
-// 	else { // BACKWARD (0)
-// 		// We want FEWER bits (closer to start).
-// 		// Returning positive makes the "min" priority queue pick the smallest count.
-// 		return (size_t)state.finishedActivitiys.count();
+// 	return count;
+// }
+// inline size_t getcomper2(const RCPSPState& state) {
+// 	size_t count = 0;
+// 	for (int t : state.finishedActivitiys) {
+// 		if (t != -1) count++;
 // 	}
+// 	return count;
 // }
 //
-// inline size_t getcomper2(const RCPSPState_TT2& state) {
-// 	size_t totalWeight = state.activeTransitionIndices.size() + state.finishedActivitiys.count();
-// 	if (state.direction == 1) { // FORWARD
-// 		return -totalWeight;
-// 	}
-// 	else { // BACKWARD (0)
-// 		return totalWeight;
-// 	}
+// // --- 2. RCPSPState_TT (Old Timed Transition) ---
+// inline size_t getcomper1(const RCPSPState_TT& state) {
+// 	return 0;
 // }
-// =========================================================
+// inline size_t getcomper2(const RCPSPState_TT& state) {
+// 	size_t count = 0;
+// 	for (int t : state.finishedActivitiys) {
+// 		if (t != -1) count++;
+// 	}
+// 	return count;
+// }
+// inline size_t getcomper1(const RCPSPState_Bi& state) {
+// 	return 0;
+// }
+// inline size_t getcomper2(const RCPSPState_Bi& state) {
+// 	size_t count = 0;
+// 	for (int t : state.finishedActivitiys) {
+// 		if (t != -1) count++;
+// 	}
+// 	return count;
+// }
+// inline size_t getcomper2(const RCPSPState_TT2& state) {
+// 	return state.activeTransitionIndices.size();
+// }
+// inline size_t getcomper1(const RCPSPState_TT2& state) {
+// 	// For bitset, use .count(). For array, use the cached variable if available.
+// 	// Based on your latest code using bitset:
+// 	return state.finishedActivitiys.count();
+// }
+// size_t getcomper1(const RCPSPState_CBS& state) {
+// 	return state.start_times[state.sink_id] +
+// 		   RCPSPex.activities[state.sink_id].duration;
+// }
+//
+// // getcomper2: return number of resolved conflicts (fewer RVS = better)
+// size_t getcomper2(const RCPSPState_CBS& state) {
+// 	return state.RVS.size();
+//}
 std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 //ido lublin 28.4 A*
 
 template <class state>
 
 struct AStarCompareWithF {
-	// 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
-	// 	{
-	// 		//auto startSCF = std::chrono::high_resolution_clock::now();
-	// 		if (fequal(i1.f, i2.f)) {
-	// 			if (fequal(i1.g, i2.g)) {
-	// 				// בדיקת כמות ה-finished_activities
-	// 				if (i1.data.finishedActivitiys.size() != i2.data.finishedActivitiys.size()){
-	// 					//auto endSCF = std::chrono::high_resolution_clock::now();
-	//
-	// 					//comperTime += endSCF-startSCF;
-	// 					return i1.data.finishedActivitiys.size() < i2.data.finishedActivitiys.size();//< or >
-	// 				}
-	// 				// בדיקת כמות ה-started_activities
-	// 				//auto endSCF = std::chrono::high_resolution_clock::now();
-	//
-	// 				//comperTime += endSCF-startSCF;
-	// 				return i1.data.startedActivitiys.size() < i2.data.startedActivitiys.size();
-	// 			}
-	// 			//auto endSCF = std::chrono::high_resolution_clock::now();
-	//
-	// 			//comperTime += endSCF-startSCF;
-	// 			return fless(i1.g, i2.g); // g גבוה יותר עדיף//change 10.6
-	// 		}
-	// 		//auto endSCF = std::chrono::high_resolution_clock::now();
-	//
-	// 		//comperTime += endSCF-startSCF;
-	// 		return fgreater(i1.f, i2.f); // f קטן יותר עדיף
-	// 	}
-	//
-	// };
-
-	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
+		bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const
 	{
 		// 1. Primary: f_score
 		if (i1.f != i2.f) return i1.f > i2.f;
 
-		// 2. Secondary: g_score
-		if (i1.g != i2.g) return i1.g < i2.g;
+			// 2. Tertiary: getcomper1
+			size_t c1_1 = getcomper1(i1.data, i1.g);
+			size_t c1_2 = getcomper1(i2.data, i2.g);
+			if (c1_1 != c1_2) return c1_1 < c1_2;
 
-		// 3. Tertiary: Started Count (Uses Helper)
-		size_t start1 = getcomper1(i1.data);
-		size_t start2 = getcomper1(i2.data);
+			// 3. Quaternary: getcomper2
+			size_t c2_1 = getcomper2(i1.data, i1.g);
+			size_t c2_2 = getcomper2(i2.data, i2.g);
+			if (c2_1 != c2_2) return c2_1 < c2_2;
 
-		if (start1 != start2) {
-			return start1 < start2;
-		}
-
-		// 4. Quaternary: Finished Count (Uses Helper)
-		// This will now correctly call .count() for TT2 (bitset)
-		// and the loop for others (array/vector).
-		size_t finish1 = getcomper2(i1.data);
-		size_t finish2 = getcomper2(i2.data);
-
-		return finish1 < finish2;
+			// 4. Quinary: getcomper3
+			size_t c3_1 = getcomper3(i1.data, i1.g);
+			size_t c3_2 = getcomper3(i2.data, i2.g);
+			return c3_1 < c3_2;
 	}
 
 };
+
+
+// {
+// 	// 1. Primary: f_score
+// 	if (i1.f != i2.f) return i1.f > i2.f;
+//
+// 	// 2. Secondary: g_score
+// 	if (i1.g != i2.g) return i1.g < i2.g;
+//
+// 	// 3. Tertiary: Started Count (Uses Helper)
+// 	size_t start1 = getcomper1(i1.data);
+// 	size_t start2 = getcomper1(i2.data);
+//
+// 	if (start1 != start2) {
+// 		return start1 < start2;
+// 	}
+//
+// 	// 4. Quaternary: Finished Count (Uses Helper)
+// 	// This will now correctly call .count() for TT2 (bitset)
+// 	// and the loop for others (array/vector).
+// 	size_t finish1 = getcomper2(i1.data);
+// 	size_t finish2 = getcomper2(i2.data);
+//
+// 	return finish1 < finish2;
+// }
 /*
 struct AStarCompareWithF {
 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const

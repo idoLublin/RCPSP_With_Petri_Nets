@@ -1867,6 +1867,109 @@ inline double RCPSP_TT2_Backward::GCost(const RCPSPState_TT2 &node, const int &a
 }
 
 
+class RCPSP_CBS : public SearchEnvironment<RCPSPState_CBS,int>{
+public:
+  RCPSP_CBS();
+  void GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const override;
+  bool GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const override;
+  double HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const override;
+  double GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const override;
+
+  int GetAction(const RCPSPState_CBS &nodeID, const RCPSPState_CBS &nodeID2) const override;
+  int GetNumSuccessors(const RCPSPState_CBS &stateID) const;
+  void GetActions(const RCPSPState_CBS &nodeID, std::vector<int> &actions) const override;
+  void ApplyAction(RCPSPState_CBS &s, int a) const override;
+  uint64_t GetActionHash(int act) const;
+  uint64_t GetStateHash(const RCPSPState_CBS &node) const;
+  bool InvertAction(int &a) const;
+  std::vector<RCPSPState_CBS> GetSuccessors(const RCPSPState_CBS &nodeID) const;
+  double GCost(const RCPSPState_CBS &node, const int &act) const override;
+};
+
+inline RCPSP_CBS::RCPSP_CBS() {
+}
+
+inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
+
+  if (nodeID.RVS.empty()) return;
+
+  const Conflict& first_conflict = nodeID.RVS[0];
+
+  // For each activity in RVS, create a successor where that activity is delayed
+  for (const short delayed_act : first_conflict.activities) {
+    neighbors.emplace_back(nodeID, delayed_act, first_conflict.t);
+  }
+}
+
+inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
+  if (node.RVS.size()==0) {
+    return true;
+  }
+  else {
+    return false;
+  }
+}
+
+inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+  return 0;
+  double h = 0;
+  for (const auto& conflict : state1.RVS) {
+    short min_remaining = SHRT_MAX;
+    for (const short act : conflict.activities) {
+      short remaining = state1.start_times[act] + state1.start_times[act] - conflict.t;
+      min_remaining = std::min(min_remaining, remaining);
+    }
+    h += min_remaining;
+    // h = std::max((int)h,(int)min_remaining);
+  }
+  return h;
+}
+
+inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+  return state2.start_times[state2.sink_id] - state1.start_times[state1.sink_id];
+}
+inline uint64_t RCPSP_CBS::GetStateHash(const RCPSPState_CBS &node) const {
+  std::size_t seed = 0;
+
+  for (const auto& st : node.start_times) {
+    seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  return seed;
+}
+
+
+
+inline int RCPSP_CBS::GetAction(const RCPSPState_CBS &nodeID, const RCPSPState_CBS &nodeID2) const {
+  return SearchEnvironment<RCPSPState_CBS, int>::GetAction(nodeID, nodeID2);
+}
+
+inline int RCPSP_CBS::GetNumSuccessors(const RCPSPState_CBS &stateID) const {
+  return SearchEnvironment<RCPSPState_CBS, int>::GetNumSuccessors(stateID);
+}
+
+inline void RCPSP_CBS::GetActions(const RCPSPState_CBS &nodeID, std::vector<int> &actions) const {
+}
+
+inline void RCPSP_CBS::ApplyAction(RCPSPState_CBS &s, int a) const {
+}
+
+inline uint64_t RCPSP_CBS::GetActionHash(int act) const {
+}
+
+
+
+inline bool RCPSP_CBS::InvertAction(int &a) const {
+}
+
+inline std::vector<RCPSPState_CBS> RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID) const {
+}
+
+inline double RCPSP_CBS::GCost(const RCPSPState_CBS &node, const int &act) const {
+}
+
+
+
 #endif //RCPSP_H
 //
 // Created by idolu on 06/01/2025.

@@ -2674,6 +2674,196 @@ else {
 
 
 }
+void RCPSPState_CBS::computeRVS() const {
+    RVS.clear();
+
+    // For each resource
+    for (int resIdx = 0; resIdx < RCPSPex.resources.size(); resIdx++) {
+        short capacity = RCPSPex.resources[resIdx].second;
+        std::string resName = RCPSPex.resources[resIdx].first;
+
+        // Collect all event points for this resource
+        std::set<short> events;
+        for (int i = 0; i < RCPSPex.activities.size(); i++) {
+            if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
+            if (RCPSPex.activities[i].resource_demands.at(resName) == 0) continue;
+            if (RCPSPex.activities[i].duration == 0) continue;
+
+            events.insert(start_times[i]);
+            events.insert(start_times[i] + RCPSPex.activities[i].duration);
+        }
+
+        // Check each event point
+        for (short t : events) {
+            Conflict conflict;
+            conflict.t = t;
+            conflict.resourceType = resIdx;
+            short total_demand = 0;
+
+            for (int i = 0; i < RCPSPex.activities.size(); i++) {
+                if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
+                short demand = RCPSPex.activities[i].resource_demands.at(resName);
+                if (demand == 0) continue;
+
+                short start = start_times[i];
+                short finish = start + RCPSPex.activities[i].duration;
+
+                if (start <= t && finish > t) {
+                    total_demand += demand;
+                    conflict.activities.push_back(i);
+                }
+            }
+
+            if (total_demand > capacity) {
+                RVS.push_back(conflict);
+            }
+        }
+    }
+
+    // Sort by time
+    std::sort(RVS.begin(), RVS.end(),
+        [](const Conflict& a, const Conflict& b) {
+            return a.t < b.t;
+        });
+}
+
+// void RCPSPState_CBS::propagate(short activityId) {
+//     // 1. Calculate the new finish time of the activity that just moved
+//     short pushed_finish = start_times[activityId];// + RCPSPex.activities[activityId].duration;
+//
+//     // (Assuming your dependencies use 1-based indexing)
+//     short pushed_1based = activityId + 1;
+//
+//     // 2. Find all immediate successors
+//     // (Note: If you have a 'forward_dependencies' list, loop over that instead of all activities!)
+//     for (short i = 0; i < RCPSPex.activities.size(); i++) {
+//
+//         // Check if activity 'i' depends on 'pushed_activity'
+//         bool is_successor = false;
+//         for (short dep : RCPSPex.backword_dependencies[i]) {
+//             if (dep == pushed_1based) {
+//                 is_successor = true;
+//                 break;
+//             }
+//         }
+//
+//         if (is_successor) {
+//             // 3. THE OPTIMIZATION: No need to recalculate from scratch!
+//             // Just compare the new finish time of the pushed predecessor
+//             // directly against the current start time of the successor.
+//             if (pushed_finish > start_times[i]) {
+//
+//                 // Update the start time
+//                 start_times[i] = pushed_finish;
+//
+//                 // Recurse to push this activity's children
+//                 propagate(i);
+//             }
+//         }
+//     }
+//     // std::string actName = RCPSPex.activities[activityId].name;
+//     // for (short dep :RCPSPex.dependencies[activityId]) {
+// // if (start_times[dep - 1]>) {
+// //
+// // }
+//
+//     }
+void RCPSPState_CBS::propagate(short activityId) {
+    short pushed_finish = start_times[activityId] + RCPSPex.activities[activityId].duration;
+    short pushed_1based = activityId + 1;
+
+    for (short i = activityId + 1; i < RCPSPex.activities.size(); i++) {
+        bool is_successor = false;
+        for (short dep : RCPSPex.backword_dependencies[i]) {
+            if (dep == pushed_1based) {
+                is_successor = true;
+                break;
+            }
+        }
+
+        if (is_successor) {
+            if (pushed_finish > start_times[i]) {
+                start_times[i] = pushed_finish;
+                propagate(i);
+            }
+        }
+    }
+}
+
+
+    // for (int i = activityId + 1; i < RCPSPex.activities.size(); i++) {
+    //     std::string succName = RCPSPex.activities[i].name;
+    //
+    //     if (RCPSPex.deep_dependencies.count({actName, succName})) {
+    //         short new_start = 0;
+    //         for (short dep : RCPSPex.backword_dependencies[i]) {
+    //             int depIdx = dep - 1;
+    //             short finish = start_times[depIdx] + RCPSPex.activities[depIdx].duration;
+    //             std::cout << "dep=" << dep
+    //                       << " depIdx=" << depIdx
+    //                       << " start=" << start_times[depIdx]
+    //                       << " duration=" << RCPSPex.activities[depIdx].duration
+    //                       << " finish=" << finish << std::endl;
+    //             new_start = std::max((int)new_start, (int)finish);
+    //         }
+    //         std::cout << "Activity " << succName
+    //                   << " old_start=" << start_times[i]
+    //                   << " new_start=" << new_start << std::endl;
+    //         start_times[i] = new_start;
+    //     }
+    // }
+
+// }
+
+RCPSPState_CBS::RCPSPState_CBS() {
+    std::vector<short> unstartedTransitions;
+    for (int i = 1; i <= RCPSPex.activities.size(); i++) {
+        unstartedTransitions.push_back(i);
+    }
+
+    std::map<int, int> earlyStartMap;
+
+    for (int activityId : unstartedTransitions) {
+        int maxFinishTime = 0;
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+            int depId = dep - 1;
+            maxFinishTime = std::max(maxFinishTime,
+                earlyStartMap[depId + 1] + RCPSPex.activities[depId].duration);
+        }
+        earlyStartMap[activityId] = maxFinishTime;
+    }
+    start_times.resize(RCPSPex.activities.size());
+    for (int i = 1; i <= RCPSPex.activities.size(); i++) {
+        start_times[i-1] = earlyStartMap[i];
+    }
+
+    // Sink is last activity in map (highest key)
+    sink_id = earlyStartMap.rbegin()->first - 1; // -1 for 0-indexed
+    // computeRVS hidden for now
+    computeRVS();
+}
+
+RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity, short conflict_t) {
+    // 1. Copy parent
+    start_times = prev.start_times;
+    sink_id = prev.sink_id;
+
+    // 2. Find latest finish of all other activities in conflict
+    short new_start = 0;
+    for (const short act : prev.RVS[0].activities) {
+        if (act == delayedActivity) continue;
+        new_start = std::max((int)new_start,
+            prev.start_times[act] + RCPSPex.activities[act].duration);
+    }
+
+    // 3. Update delayed activity
+    start_times[delayedActivity] = new_start;
+
+    // 4. Propagate forward
+    propagate(delayedActivity);
+    computeRVS();
+
+}
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,

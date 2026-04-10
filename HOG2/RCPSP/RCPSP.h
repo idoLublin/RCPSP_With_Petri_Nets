@@ -1884,8 +1884,70 @@ public:
   bool InvertAction(int &a) const;
   std::vector<RCPSPState_CBS> GetSuccessors(const RCPSPState_CBS &nodeID) const;
   double GCost(const RCPSPState_CBS &node, const int &act) const override;
+
 };
 
+// *****globals for CBS
+struct ResourceInfo {
+  short capacity;
+  std::vector<short> activity_indices; // 0-indexed activities using this resource
+  std::vector<short> demands;          // corresponding demands
+};
+
+std::vector<ResourceInfo> resource_info;
+std::vector<std::vector<short>> downstream; // downstream[i] = all activities downstream of i in topo order
+// ******
+void precomputeResourceInfo() {
+  resource_info.clear();
+  resource_info.resize(RCPSPex.resources.size());
+
+  for (int resIdx = 0; resIdx < RCPSPex.resources.size(); resIdx++) {
+    resource_info[resIdx].capacity = RCPSPex.resources[resIdx].second;
+    std::string resName = RCPSPex.resources[resIdx].first;
+
+    for (int i = 0; i < RCPSPex.activities.size(); i++) {
+      if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
+      short demand = RCPSPex.activities[i].resource_demands.at(resName);
+      if (demand == 0) continue;
+      if (RCPSPex.activities[i].duration == 0) continue;
+
+      resource_info[resIdx].activity_indices.push_back(i);
+      resource_info[resIdx].demands.push_back(demand);
+    }
+  }
+}
+// void precomputeDownstream();
+
+void precomputeDownstream() {
+  downstream.clear();
+  downstream.resize(RCPSPex.activities.size());
+
+  for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    // Run a "mock propagate" from activity i
+    // collect all activities that would be affected
+    std::vector<bool> visited(RCPSPex.activities.size(), false);
+    std::queue<short> queue;
+    queue.push(i);
+
+    while (!queue.empty()) {
+      short curr = queue.front();
+      queue.pop();
+
+      // Find direct successors of curr
+      for (int j = curr + 1; j < RCPSPex.activities.size(); j++) {
+        for (short dep : RCPSPex.backword_dependencies[j]) {
+          if (dep - 1 == curr && !visited[j]) {
+            visited[j] = true;
+            downstream[i].push_back(j);
+            queue.push(j);
+            break;
+          }
+        }
+      }
+    }
+    // Already in topological order since j > curr always
+  }
+}
 inline RCPSP_CBS::RCPSP_CBS() {
 }
 

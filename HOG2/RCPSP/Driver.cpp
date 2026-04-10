@@ -943,12 +943,16 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
 
     getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
-
+    RCPSP_CBS as1;
+    resource_info.clear();
+    downstream.clear();
+    precomputeDownstream(); // call once after loading
+    precomputeResourceInfo();
     RCPSPState_CBS first;
     first.computeRVS();
     RCPSPState_CBS last = first;
 last.RVS.clear();
-    RCPSP_CBS as1;
+
 
     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
     std::vector<RCPSPState_CBS> path;
@@ -1118,8 +1122,8 @@ void runBenchmark() {
    // solveRCPSP_CBS(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
 
-    for(int i = 1; i < 49; i++) {
-        for(int j = 2; j < 3; j++) {
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
@@ -1133,7 +1137,13 @@ void runBenchmark() {
              // solveRCPSP_Bi(i, j, filename, "j30");
         }
     }
-
+    //
+    // solveRCPSP_CBS(1, 1, filename, "j30");
+    // solveRCPSP_CBS(11, 2, filename, "j30");
+    // solveRCPSP_CBS(25, 2, filename, "j30");    //
+    solveRCPSP_CBS(1, 2, filename, "j30");
+    solveRCPSP_CBS(43, 2, filename, "j30");
+    solveRCPSP_CBS(44, 2, filename, "j30");
 
 
 }

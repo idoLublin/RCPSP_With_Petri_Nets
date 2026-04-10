@@ -2710,7 +2710,7 @@ void RCPSPState_CBS::computeRVS() const {
 
                 if (start <= t && finish > t) {
                     total_demand += demand;
-                    conflict.activities.push_back(i);
+                    conflict.activities[conflict.num_activities++] = i; // changed
                 }
             }
 
@@ -2849,15 +2849,17 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
     sink_id = prev.sink_id;
 
     // 2. Find latest finish of all other activities in conflict
-    short new_start = 0;
-    for (const short act : prev.RVS[0].activities) {
+    short new_start = 9999;
+    for (short j = 0; j < prev.RVS[0].num_activities; j++) {
+        short act = prev.RVS[0].activities[j];
         if (act == delayedActivity) continue;
-        new_start = std::max((int)new_start,
-            prev.start_times[act] + RCPSPex.activities[act].duration);
+        new_start = std::min(new_start,
+            (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
     }
+    start_times[delayedActivity] = new_start;
 
     // 3. Update delayed activity
-    start_times[delayedActivity] = new_start;
+    // start_times[delayedActivity] += mindelay;
 
     // 4. Propagate forward
     propagate(delayedActivity);

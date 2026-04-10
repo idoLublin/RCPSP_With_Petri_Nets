@@ -1893,11 +1893,9 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<R
 
   if (nodeID.RVS.empty()) return;
 
-  const Conflict& first_conflict = nodeID.RVS[0];
-
-  // For each activity in RVS, create a successor where that activity is delayed
-  for (const short delayed_act : first_conflict.activities) {
-    neighbors.emplace_back(nodeID, delayed_act, first_conflict.t);
+  const Conflict& first = nodeID.RVS[0];
+  for (short j = 0; j < first.num_activities; j++) {
+    neighbors.emplace_back(nodeID, first.activities[j], first.t);
   }
 }
 
@@ -1949,9 +1947,11 @@ inline int RCPSP_CBS::GetNumSuccessors(const RCPSPState_CBS &stateID) const {
 }
 
 inline void RCPSP_CBS::GetActions(const RCPSPState_CBS &nodeID, std::vector<int> &actions) const {
+  return;
 }
 
 inline void RCPSP_CBS::ApplyAction(RCPSPState_CBS &s, int a) const {
+return;
 }
 
 inline uint64_t RCPSP_CBS::GetActionHash(int act) const {
@@ -1960,12 +1960,18 @@ inline uint64_t RCPSP_CBS::GetActionHash(int act) const {
 
 
 inline bool RCPSP_CBS::InvertAction(int &a) const {
+  return true;
+
 }
 
 inline std::vector<RCPSPState_CBS> RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID) const {
+  std::vector<RCPSPState_CBS> neighbors;
+  return neighbors;
+
 }
 
 inline double RCPSP_CBS::GCost(const RCPSPState_CBS &node, const int &act) const {
+  return 0;;
 }
 
 

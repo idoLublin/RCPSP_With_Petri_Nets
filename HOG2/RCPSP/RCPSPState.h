@@ -252,9 +252,12 @@ public:
 
 };
 struct Conflict {
-    short t;                        // conflict time (RVST)
-    short resourceType;                 // which resource
-    std::vector<short> activities;  // all activities in RVS (dynamic size)
+    short t;
+    short resourceType;
+    short num_activities = 0;
+    std::array<short, 122> activities;
+
+    Conflict() : t(0), resourceType(0), num_activities(0) {}
 };
 class RCPSPState_CBS {
 public:

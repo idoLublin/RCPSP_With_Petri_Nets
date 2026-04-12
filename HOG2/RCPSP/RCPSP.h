@@ -1913,6 +1913,7 @@ void precomputeResourceInfo() {
 
       resource_info[resIdx].activity_indices.push_back(i);
       resource_info[resIdx].demands.push_back(demand);
+
     }
   }
 }
@@ -1922,7 +1923,10 @@ void precomputeDownstream() {
   downstream.clear();
   downstream.resize(RCPSPex.activities.size());
 
+
   for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    downstream[i].clear(); // clear each inner vector too
+
     // Run a "mock propagate" from activity i
     // collect all activities that would be affected
     std::vector<bool> visited(RCPSPex.activities.size(), false);
@@ -1946,6 +1950,8 @@ void precomputeDownstream() {
       }
     }
     // Already in topological order since j > curr always
+    std::sort(downstream[i].begin(), downstream[i].end());
+
   }
 }
 inline RCPSP_CBS::RCPSP_CBS() {
@@ -1956,7 +1962,7 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<R
   if (nodeID.RVS.empty()) return;
 
   const Conflict& first = nodeID.RVS[0];
-  for (short j = 0; j < first.num_activities; j++) {
+  for (short j = 0; j < first.activities.size(); j++) {
     neighbors.emplace_back(nodeID, first.activities[j], first.t);
   }
 }
@@ -2017,6 +2023,7 @@ return;
 }
 
 inline uint64_t RCPSP_CBS::GetActionHash(int act) const {
+  return 0;
 }
 
 

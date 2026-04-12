@@ -251,13 +251,17 @@ public:
     }
 
 };
+inline size_t CONFLICT_SIZE = 32; // set this before creating any object
+
 struct Conflict {
     short t;
     short resourceType;
     short num_activities = 0;
-    std::array<short, 122> activities;
+    std::vector<short> activities;
 
-    Conflict() : t(0), resourceType(0), num_activities(0) {}
+    Conflict() : t(0), resourceType(0), num_activities(0) {
+        activities.resize(CONFLICT_SIZE);
+    }
 };
 class RCPSPState_CBS {
 public:

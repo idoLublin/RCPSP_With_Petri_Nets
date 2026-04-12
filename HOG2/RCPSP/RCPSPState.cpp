@@ -2841,13 +2841,15 @@ void RCPSPState_CBS::propagate(short activityId) {
         short new_start = 0;
         for (short dep : RCPSPex.backword_dependencies[succ]) {
             int depIdx = dep - 1;
-            new_start = std::max((short)new_start,
-                (short)(start_times[depIdx] + RCPSPex.activities[depIdx].duration));
+            new_start = std::max((int)new_start,
+                start_times[depIdx] + RCPSPex.activities[depIdx].duration);
         }
-        start_times[succ] = new_start;
+        // Only update if pushing FORWARD - never allow going backwards
+        if (new_start > start_times[succ]) {
+            start_times[succ] = new_start;
+        }
     }
 }
-
 
 
     // for (int i = activityId + 1; i < RCPSPex.activities.size(); i++) {

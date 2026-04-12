@@ -938,8 +938,13 @@ int getOptimalMakespan(int group, int exam, const std::string& optFile) {
     }
     return -1; // not found
 }
+void setProblemSize(const std::string& problemType) {
+    // extracts the number from "j30", "j60", "j120" etc.
+    CONFLICT_SIZE = std::stoul(problemType.substr(1))+2;
+}
 int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
+    setProblemSize("j30");  // CONFLICT_SIZE = 30
 
     getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
@@ -949,9 +954,9 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     precomputeDownstream(); // call once after loading
     precomputeResourceInfo();
     RCPSPState_CBS first;
-    first.computeRVS();
+    // first.computeRVS();
     RCPSPState_CBS last = first;
-last.RVS.clear();
+    last.RVS.clear();
 
 
     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
@@ -1122,28 +1127,30 @@ void runBenchmark() {
    // solveRCPSP_CBS(16,9,filename,"j30");
   // solveRCPSP_TT(16,4,filename,"j30");
 
-    for(int i = 16; i < 17; i++) {
-        for(int j = 1; j < 11; j++) {
-
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_CBS(i, j, filename, "j30");
-            // solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
+    // for(int i = 16; i < 17; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         solveRCPSP_CBS(i, j, filename, "j30");
+    //         // solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
+    // }
     //
     // solveRCPSP_CBS(1, 1, filename, "j30");
     // solveRCPSP_CBS(11, 2, filename, "j30");
     // solveRCPSP_CBS(25, 2, filename, "j30");    //
-    solveRCPSP_CBS(1, 2, filename, "j30");
-    solveRCPSP_CBS(43, 2, filename, "j30");
-    solveRCPSP_CBS(44, 2, filename, "j30");
+    solveRCPSP_CBS(1, 6, filename, "j30");
+    solveRCPSP_CBS(5, 1, filename, "j30");
+
+    // solveRCPSP_CBS(43, 2, filename, "j30");
+    // solveRCPSP_CBS(44, 2, filename, "j30");
 
 
 }

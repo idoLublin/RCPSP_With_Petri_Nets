@@ -5,11 +5,15 @@
 #include <set>
 #include "petriclasses.h"
 #include "readPetri.cpp"
+#include <span> // Only if you are using C++20 for the helper function
+
 #ifndef RCPSPSTATE_H
 #define RCPSPSTATE_H
 using namespace P_RCPSP;
 thread_local PetriExample petri;
 thread_local RCPSP_example RCPSPex;
+extern short g_num_activities;
+extern short g_sink_id;
 std::string finalstatename;
 std::string initialstatename;
 class RCPSPState {
@@ -253,40 +257,87 @@ public:
 };
 inline size_t CONFLICT_SIZE = 32; // set this before creating any object
 
+// struct Conflict {
+//     short t;
+//     short resourceType;
+//     short num_activities = 0;
+//     std::vector<short> activities;
+//
+//     Conflict() : t(0), resourceType(0), num_activities(0) {
+//         activities.resize(CONFLICT_SIZE);
+//     }
+// };
 struct Conflict {
     short t;
     short resourceType;
-    short num_activities = 0;
-    std::vector<short> activities;
+    short num_activities;
+    int activity_start_index; // Replaces the vector
 
-    Conflict() : t(0), resourceType(0), num_activities(0) {
-        activities.resize(CONFLICT_SIZE);
-    }
+    // Clean constructor
+    Conflict() : t(0), resourceType(0), num_activities(0), activity_start_index(0) {}
 };
+
+
 class RCPSPState_CBS {
 public:
-    std::vector<short> start_times;
+    std::array<short, 122> start_times; // 244 bytes
     mutable std::vector<Conflict> RVS;
-    short sink_id;
-
+    // short sink_id;
+    mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
     void computeRVS() const;
 
     void propagate(short activityId);
 
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
+    // In RCPSPState.h - replace span function with:
+    // const short* get_conflict_start(const Conflict& c) const {
+    //     return rvs_activities_pool.data() + c.activity_start_index;
+    // }
+    std::span<const short> get_conflict_activities(const Conflict& c) const {
+        return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);
+    }
 
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_CBS& other) const {
 
         if (start_times != other.start_times) return false;
-        // if (activity_nodes != other.activity_nodes) return false;
-        // if (resource_nodes != other.resource_nodes) return false;
-
         return true;
     }
     short makespan() const {
-        return start_times[sink_id] + start_times[sink_id];
+        return start_times[g_sink_id] + start_times[g_sink_id];
+    }
+
+};
+class RCPSPState_BAP {
+public:
+    std::array<short, 122> start_times; // 244 bytes
+    mutable short t;
+    mutable short resourceType;
+    mutable short num_activities;    // short sink_id;
+    mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
+    void computeFirstRVS() const;
+
+    void propagate(short activityId);
+
+    RCPSPState_BAP();
+    RCPSPState_BAP(const RCPSPState_BAP& prev, short delayedActivity, short duration);
+    // In RCPSPState.h - replace span function with:
+    // const short* get_conflict_start(const Conflict& c) const {
+    //     return rvs_activities_pool.data() + c.activity_start_index;
+    // }
+    std::span<const short> get_conflict_activities(const Conflict& c) const {
+        return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);
+    }
+
+    // Equality is CRITICAL for Relative Time
+    bool operator==(const RCPSPState_BAP& other) const {
+
+        if (start_times != other.start_times) return false;
+        return true;
+    }
+    short makespan() const {
+        return start_times[g_sink_id] + start_times[g_sink_id];
     }
 
 };

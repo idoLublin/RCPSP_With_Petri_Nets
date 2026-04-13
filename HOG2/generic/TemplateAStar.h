@@ -115,12 +115,10 @@ inline size_t getcomper3(const RCPSPState_TT2& state, double g) {
 
 // --- 5. RCPSPState_CBS ---
 inline size_t getcomper1(const RCPSPState_CBS& state, double g) {
-    return -((short)(state.start_times[state.sink_id] +
-           RCPSPex.activities[state.sink_id].duration));
+    return -((short)(state.start_times[g_sink_id] + RCPSPex.activities[g_sink_id].duration));
 }
 inline size_t getcomper2(const RCPSPState_CBS& state, double g) {
-    return -((short)(state.start_times[state.sink_id] +
-           RCPSPex.activities[state.sink_id].duration));
+    return -((short)(state.start_times[g_sink_id] + RCPSPex.activities[g_sink_id].duration));
 }
 inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
     return state.RVS.size();
@@ -273,18 +271,18 @@ struct AStarCompareWithF {
 };
 */
 
-template <class state>
-struct AStarCompare {
-	// returns true if i2 is preferred over i1
-	bool operator()(const AStarOpenClosedData<state> &i1, const AStarOpenClosedData<state> &i2) const
-	{
-		if (fequal(i1.g+i1.h, i2.g+i2.h))
-		{
-			return (fless(i1.g, i2.g));
-		}
-		return fgreater(i1.g+i1.h, i2.g+i2.h);
-	}
-};
+// template <class state>
+// struct AStarCompare {
+// 	// returns true if i2 is preferred over i1
+// 	bool operator()(const AStarOpenClosedData<state> &i1, const AStarOpenClosedData<state> &i2) const
+// 	{
+// 		if (fequal(i1.g+i1.h, i2.g+i2.h))
+// 		{
+// 			return (fless(i1.g, i2.g));
+// 		}
+// 		return fgreater(i1.g+i1.h, i2.g+i2.h);
+// 	}
+// };
 
 /**
  * A templated version of A*, based on HOG genericAStar

@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>RCPSP Lower Bounds Visualization</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#FFFFFF;
+  font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',system-ui,sans-serif;
+  color:#222;min-height:100vh;overflow-x:hidden;
+}
+.container{max-width:1000px;margin:0 auto;padding:36px 24px 60px}
+
+.card{
+  background:#F7F7F7;border:1px solid #DDD;border-radius:12px;
+  padding:24px;margin-bottom:20px;
+}
+
+.hero-title{font-size:34px;font-weight:700;text-align:center;margin-bottom:4px;color:#222}
+.hero-sub{text-align:center;color:#888;font-size:15px;margin-bottom:28px}
+.section-title{font-size:18px;font-weight:600;margin-bottom:12px}
+
+/* Top-level tab row */
+.tab-row{display:flex;gap:0;justify-content:center;margin-bottom:24px}
+.tab-btn{
+  padding:10px 32px;border:1.5px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:16px;
+  font-weight:600;transition:all 0.2s;font-family:inherit;
+}
+.tab-btn:first-child{border-radius:8px 0 0 8px}
+.tab-btn:last-child{border-radius:0 8px 8px 0}
+.tab-btn:not(:first-child){border-left:none}
+.tab-btn:hover{background:#EEE}
+.tab-btn.active{color:#222;background:#E8E8E8;border-color:#999}
+
+/* Sub-phase pills */
+.pill-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:18px}
+.pill{
+  padding:8px 20px;border-radius:100px;border:1.5px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:13px;
+  font-weight:500;transition:all 0.2s;font-family:inherit;
+}
+.pill:hover{background:#EEE;border-color:#AAA}
+.pill.active{color:#222;border-color:#333;background:#E8E8E8}
+
+.nbtn{
+  padding:7px 14px;border-radius:8px;border:1px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:13px;
+  font-weight:500;transition:all 0.2s;font-family:inherit;
+}
+.nbtn:hover:not(:disabled){background:#EEE;color:#222}
+.nbtn:disabled{opacity:0.25;cursor:default}
+
+.play-btn{
+  width:34px;height:34px;border-radius:50%;border:2px solid #333;
+  background:transparent;color:#333;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:all 0.2s;font-family:inherit;
+}
+.play-btn:hover{background:#EEE}
+.play-btn.playing{background:#EEE}
+
+.step-text{font-size:15px;line-height:1.9;color:#222}
+.step-final{font-weight:600}
+
+.kb-hint{
+  position:fixed;bottom:16px;right:16px;z-index:100;
+  background:#F7F7F7ee;border:1px solid #DDD;border-radius:10px;
+  padding:10px 16px;font-size:11px;color:#999;
+  pointer-events:none;text-align:left;
+}
+
+svg text{user-select:none;-webkit-user-select:none;pointer-events:none}
+
+:fullscreen .container{max-width:1300px;padding:50px 40px}
+:fullscreen .hero-title{font-size:44px}
+:fullscreen .step-text{font-size:18px}
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+const C = {
+  black: "#222",
+  gray: "#888",
+  lightGray: "#CCC",
+  blue: "#2563EB",
+  red: "#DC2626",
+  border: "#999",
+  nodeFill: "#FAFAFA",
+  nodeHLFill: "#EBF5FF",
+  critFill: "#FEF2F2",
+};
+
+/* ── Data ── */
+const activities = [
+  { id: 0, name: "Start", dur: 0, res: 0, pred: [] },
+  { id: 1, name: "1",     dur: 10, res: 2, pred: [0] },
+  { id: 2, name: "2",     dur: 6,  res: 7, pred: [0] },
+  { id: 3, name: "3",     dur: 4,  res: 10, pred: [1] },
+  { id: 4, name: "4",     dur: 8,  res: 6,  pred: [1, 2] },
+  { id: 5, name: "End",   dur: 0,  res: 0,  pred: [3, 4] },
+];
+const RESOURCE_CAP = 10;
+
+const positions = {
+  0: { x: 80,  y: 200 },
+  1: { x: 280, y: 100 },
+  2: { x: 280, y: 310 },
+  3: { x: 520, y: 100 },
+  4: { x: 520, y: 260 },
+  5: { x: 720, y: 200 },
+};
+
+/* ── Algorithms ── */
+function computeForwardPass(acts) {
+  const ES = {}, EF = {};
+  for (const a of [...acts].sort((x, y) => x.id - y.id)) {
+    ES[a.id] = a.pred.length === 0 ? 0 : Math.max(...a.pred.map(p => EF[p]));
+    EF[a.id] = ES[a.id] + a.dur;
+  }
+  return { ES, EF };
+}
+
+function computeBackwardPass(acts, makespan) {
+  const LF = {}, LS = {};
+  const succs = {};
+  for (const a of acts) succs[a.id] = [];
+  for (const a of acts) for (const p of a.pred) succs[p].push(a.id);
+  for (const a of [...acts].sort((x, y) => y.id - x.id)) {
+    LF[a.id] = succs[a.id].length === 0 ? makespan : Math.min(...succs[a.id].map(s => LS[s]));
+    LS[a.id] = LF[a.id] - a.dur;
+  }
+  return { LS, LF };
+}
+
+function computeSlackAndCP(acts, ES, EF, LS, LF) {
+  const slack = {};
+  const cp = new Set();
+  for (const a of acts) {
+    slack[a.id] = LF[a.id] - EF[a.id];
+    if (slack[a.id] === 0) cp.add(a.id);
+  }
+  return { slack, cp };
+}
+
+function getSuccs(acts) {
+  const succs = {};
+  for (const a of acts) succs[a.id] = [];
+  for (const a of acts) for (const p of a.pred) succs[p].push(a.id);
+  return succs;
+}
+
+/* ── CPM Step Builder ── */
+function buildCPMSteps(acts) {
+  const { ES, EF } = computeForwardPass(acts);
+  const makespan = Math.max(...acts.map(a => EF[a.id]));
+  const { LS, LF } = computeBackwardPass(acts, makespan);
+  const { slack, cp } = computeSlackAndCP(acts, ES, EF, LS, LF);
+  const succs = getSuccs(acts);
+
+  const steps = [];
+  const topo = [...acts].sort((a, b) => a.id - b.id);
+  const revTopo = [...acts].sort((a, b) => b.id - a.id);
+
+  /* Forward Pass */
+  steps.push({
+    phase: "forward", highlight: new Set(),
+    esShow: {}, efShow: {}, lsShow: {}, lfShow: {}, slackShow: {}, cpHighlight: false,
+    text: "Forward Pass: compute ES and EF for each activity in topological order. ES(i) = max{EF(j) | j \u2208 pred(i)}. EF(i) = ES(i) + d\u1d62.",
+  });
+  const runES = {}, runEF = {};
+  for (const a of topo) {
+    runES[a.id] = ES[a.id];
+    runEF[a.id] = EF[a.id];
+    let predText = a.pred.length === 0 ? "No predecessors." :
+      `Predecessors: ${a.pred.map(p => `EF(${acts.find(x => x.id === p).name})=${EF[p]}`).join(", ")}.`;
+    let formula;
+    if (a.pred.length === 0) formula = `ES(${a.name}) = 0.`;
+    else if (a.pred.length === 1) formula = `ES(${a.name}) = EF(${acts.find(x => x.id === a.pred[0]).name}) = ${ES[a.id]}.`;
+    else formula = `ES(${a.name}) = max(${a.pred.map(p => EF[p]).join(", ")}) = ${ES[a.id]}.`;
+    const efF = a.dur === 0 ? `EF(${a.name}) = ${ES[a.id]} + 0 = ${EF[a.id]}.` : `EF(${a.name}) = ${ES[a.id]} + ${a.dur} = ${EF[a.id]}.`;
+    steps.push({ phase: "forward", highlight: new Set([a.id]), esShow: { ...runES }, efShow: { ...runEF }, lsShow: {}, lfShow: {}, slackShow: {}, cpHighlight: false, text: `Activity ${a.name}: ${predText} ${formula} ${efF}` });
+  }
+
+  /* Backward Pass */
+  steps.push({ phase: "backward", highlight: new Set(), esShow: { ...ES }, efShow: { ...EF }, lsShow: {}, lfShow: {}, slackShow: {}, cpHighlight: false,
+    text: `Backward Pass: compute LF and LS in reverse order. Makespan = ${makespan}. LF(i) = min{LS(j) | j \u2208 succ(i)}. LS(i) = LF(i) \u2212 d\u1d62.` });
+  const runLS = {}, runLF = {};
+  for (const a of revTopo) {
+    runLF[a.id] = LF[a.id]; runLS[a.id] = LS[a.id];
+    let succText = succs[a.id].length === 0 ? "No successors (end)." :
+      `Successors: ${succs[a.id].map(s => `LS(${acts.find(x => x.id === s).name})=${LS[s]}`).join(", ")}.`;
+    let lfF;
+    if (succs[a.id].length === 0) lfF = `LF(${a.name}) = ${makespan}.`;
+    else if (succs[a.id].length === 1) lfF = `LF(${a.name}) = LS(${acts.find(x => x.id === succs[a.id][0]).name}) = ${LF[a.id]}.`;
+    else lfF = `LF(${a.name}) = min(${succs[a.id].map(s => LS[s]).join(", ")}) = ${LF[a.id]}.`;
+    const lsF = a.dur === 0 ? `LS(${a.name}) = ${LF[a.id]} \u2212 0 = ${LS[a.id]}.` : `LS(${a.name}) = ${LF[a.id]} \u2212 ${a.dur} = ${LS[a.id]}.`;
+    steps.push({ phase: "backward", highlight: new Set([a.id]), esShow: { ...ES }, efShow: { ...EF }, lsShow: { ...runLS }, lfShow: { ...runLF }, slackShow: {}, cpHighlight: false, text: `Activity ${a.name}: ${succText} ${lfF} ${lsF}` });
+  }
+
+  /* Critical Path & Slack */
+  const slackTexts = acts.filter(a => a.dur > 0).map(a => `${a.name}: ${LF[a.id]}\u2212${EF[a.id]}=${slack[a.id]}`).join(", ");
+  steps.push({ phase: "critical", highlight: new Set(acts.map(a => a.id)), esShow: { ...ES }, efShow: { ...EF }, lsShow: { ...LS }, lfShow: { ...LF }, slackShow: { ...slack }, cpHighlight: false,
+    text: `Slack = LF \u2212 EF for each activity: ${slackTexts}.` });
+  const cpNames = [...cp].map(id => acts.find(a => a.id === id).name).join(" \u2192 ");
+  steps.push({ phase: "critical", highlight: cp, esShow: { ...ES }, efShow: { ...EF }, lsShow: { ...LS }, lfShow: { ...LF }, slackShow: { ...slack }, cpHighlight: true,
+    text: `Critical Path (Slack = 0): ${cpNames}. Makespan = ${makespan}.`, isFinal: true });
+
+  /* Gantt */
+  steps.push({ phase: "gantt", highlight: cp, esShow: { ...ES }, efShow: { ...EF }, lsShow: { ...LS }, lfShow: { ...LF }, slackShow: { ...slack }, cpHighlight: true,
+    gantt: { ES, EF, LS, LF, slack, cp, makespan },
+    text: `Gantt Chart: red bars = critical (Slack=0), gray bars = non-critical. Dashed = float. Makespan = ${makespan}.`, isFinal: true });
+
+  return { steps, phases: ["forward", "backward", "critical", "gantt"] };
+}
+
+/* ── LBCS Step Builder ── */
+function buildLBCSSteps(acts) {
+  const { ES, EF } = computeForwardPass(acts);
+  const makespan = Math.max(...acts.map(a => EF[a.id]));
+  const { LS, LF } = computeBackwardPass(acts, makespan);
+  const { slack, cp } = computeSlackAndCP(acts, ES, EF, LS, LF);
+  const succs = getSuccs(acts);
+
+  const allES = { ...ES }, allEF = { ...EF }, allLS = { ...LS }, allLF = { ...LF }, allSlack = { ...slack };
+
+  const steps = [];
+
+  /* Step 1: Recap CPM result */
+  const cpNames = [...cp].map(id => acts.find(a => a.id === id).name).join(" \u2192 ");
+  steps.push({
+    phase: "recap", highlight: cp,
+    esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: true,
+    text: `LBCS starts from CPM. Recall: Critical Path = ${cpNames}, CPM = ${makespan}. Now we add resource constraints (capacity a = ${RESOURCE_CAP}).`,
+  });
+
+  /* Step 2: Build CP resource profile */
+  const cpProfile = new Array(makespan).fill(0);
+  for (const id of cp) {
+    const a = acts.find(x => x.id === id);
+    if (a.dur > 0) {
+      for (let t = ES[a.id]; t < EF[a.id] && t < makespan; t++) cpProfile[t] += a.res;
+    }
+  }
+  const baseRP = { cpProfile, capacity: RESOURCE_CAP, makespan, activeWindow: null };
+
+  const cpActList = [...cp].filter(id => acts.find(a => a.id === id).dur > 0);
+  const profileDesc = cpActList.map(id => {
+    const a = acts.find(x => x.id === id);
+    return `Act ${a.name} (r=${a.res}) at t=[${ES[a.id]},${EF[a.id]})`;
+  }).join(", ");
+
+  steps.push({
+    phase: "profile", highlight: cp,
+    esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: true,
+    resourceProfile: { ...baseRP },
+    text: `Build resource profile from critical activities: ${profileDesc}. At each time slot, residual = a \u2212 CP usage.`,
+  });
+
+  /* Step 3: Sort non-critical activities by descending duration */
+  const nonCp = acts.filter(a => !cp.has(a.id) && a.dur > 0).sort((a, b) => b.dur - a.dur);
+  const sortedList = nonCp.map(a => `Act ${a.name} (d=${a.dur})`).join(", ");
+  steps.push({
+    phase: "sorting", highlight: new Set(nonCp.map(a => a.id)),
+    esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: true,
+    resourceProfile: { ...baseRP },
+    text: `Sort non-critical activities by descending duration: ${sortedList}. This enables early termination \u2014 if max(\u03B4) \u2265 d of the next activity, we can stop (no shorter activity can produce a larger \u03B4).`,
+  });
+
+  /* Step 4+: Per non-critical activity analysis with early termination */
+  let maxDelta = 0, maxDeltaAct = null;
+
+  for (let idx = 0; idx < nonCp.length; idx++) {
+    const a = nonCp[idx];
+    const aES = ES[a.id], aLF = LF[a.id];
+    let e = 0;
+    const fittingSlots = [];
+    for (let t = aES; t < aLF; t++) {
+      const usage = t < makespan ? cpProfile[t] : 0;
+      if (RESOURCE_CAP - usage >= a.res) { e++; fittingSlots.push(t); }
+    }
+    const delta = Math.max(0, a.dur - e);
+    if (delta > maxDelta) { maxDelta = delta; maxDeltaAct = a; }
+
+    let etText = "";
+    const nextAct = idx < nonCp.length - 1 ? nonCp[idx + 1] : null;
+    if (nextAct) {
+      if (maxDelta >= nextAct.dur) {
+        etText = ` Early termination: max(\u03B4)=${maxDelta} \u2265 d(Act ${nextAct.name})=${nextAct.dur} \u2014 no remaining activity can exceed this. Stop.`;
+      } else {
+        etText = ` Early termination check: max(\u03B4)=${maxDelta} < d(Act ${nextAct.name})=${nextAct.dur} \u2192 continue.`;
+      }
+    } else {
+      etText = ` No more activities. max(\u03B4)=${maxDelta}.`;
+    }
+
+    steps.push({
+      phase: "analysis", highlight: new Set([a.id]),
+      esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: true,
+      resourceProfile: {
+        ...baseRP,
+        activeWindow: { es: aES, lf: aLF, demand: a.res, fittingSlots, actName: a.name },
+      },
+      text: `Activity ${a.name} (d=${a.dur}, r=${a.res}): window [ES=${aES}, LF=${aLF}). Slots with residual \u2265 ${a.res}: ${e > 0 ? fittingSlots.map(s => `t=${s}`).join(", ") : "none"} \u2192 e=${e}. \u03B4 = max(0, ${a.dur}\u2212${e}) = ${delta}.${etText}`,
+    });
+
+    if (nextAct && maxDelta >= nextAct.dur) break;
+  }
+
+  /* Final result */
+  const lbcs = makespan + maxDelta;
+  steps.push({
+    phase: "result", highlight: maxDeltaAct ? new Set([...cp, maxDeltaAct.id]) : cp,
+    esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: true,
+    resourceProfile: { ...baseRP },
+    text: `LBCS = CPM + max(\u03B4) = ${makespan} + ${maxDelta} = ${lbcs}.${maxDeltaAct ? ` Activity ${maxDeltaAct.name} cannot fit alongside the critical path, extending the bound by ${maxDelta}.` : ""}`,
+    isFinal: true,
+  });
+
+  return { steps, phases: ["recap", "profile", "sorting", "analysis", "result"] };
+}
+
+/* ── LBCC Step Builder ── */
+function buildLBCCSteps(acts) {
+  const { ES, EF } = computeForwardPass(acts);
+  const makespan = Math.max(...acts.map(a => EF[a.id]));
+  const { LS, LF } = computeBackwardPass(acts, makespan);
+  const { slack, cp } = computeSlackAndCP(acts, ES, EF, LS, LF);
+
+  const allES = { ...ES }, allEF = { ...EF }, allLS = { ...LS }, allLF = { ...LF }, allSlack = { ...slack };
+  const base = { esShow: allES, efShow: allEF, lsShow: allLS, lfShow: allLF, slackShow: allSlack, cpHighlight: false };
+
+  const steps = [];
+  const real = acts.filter(a => a.dur > 0);
+
+  /* Phase 1: Recap — show ES values */
+  const cpNames = [...cp].map(id => acts.find(a => a.id === id).name).join(" \u2192 ");
+  const esDesc = real.map(a => `Act ${a.name}: ES=${ES[a.id]}`).join(", ");
+  steps.push({
+    phase: "recap", highlight: new Set(real.map(a => a.id)), ...base, cpHighlight: true,
+    text: `LBCC uses Earliest Start times from CPM. ${esDesc}. Critical Path = ${cpNames}, CPM = ${makespan}. Resource availability a = ${RESOURCE_CAP}.`,
+  });
+
+  /* Phase 2: Work Content per activity */
+  steps.push({
+    phase: "workcontent", highlight: new Set(), ...base,
+    text: `Work Content (WC) of activity i = d\u1D62 \u00D7 r\u1D62. This is the total resource\u00B7time units that must be processed.`,
+  });
+
+  let totalWC = 0;
+  const wcPerAct = {};
+  for (const a of real) {
+    const wc = a.dur * a.res;
+    wcPerAct[a.id] = wc;
+    totalWC += wc;
+    steps.push({
+      phase: "workcontent", highlight: new Set([a.id]), ...base,
+      text: `Activity ${a.name}: WC = ${a.dur} \u00D7 ${a.res} = ${wc}.`,
+    });
+  }
+
+  const lbrc = Math.ceil(totalWC / RESOURCE_CAP);
+  steps.push({
+    phase: "workcontent", highlight: new Set(real.map(a => a.id)), ...base,
+    text: `Total WC = ${real.map(a => a.dur * a.res).join(" + ")} = ${totalWC}. Pure resource capacity bound LB\u1D63\u1D04 = \u2308${totalWC}/${RESOURCE_CAP}\u2309 = ${lbrc}. LBCC improves this by incorporating ES times.`,
+  });
+
+  /* Phase 3: Timeline — event-by-event walk */
+  const esTimes = [...new Set(real.map(a => ES[a.id]))].sort((a, b) => a - b);
+
+  // Build the full timeline events for the chart
+  const events = [];
+  let tank = 0, t = 0;
+  for (let ei = 0; ei < esTimes.length; ei++) {
+    const esTime = esTimes[ei];
+    // Drain from t to esTime
+    if (esTime > t) {
+      const drained = (esTime - t) * RESOURCE_CAP;
+      tank = Math.max(0, tank - drained);
+      t = esTime;
+    }
+    // Fill
+    const batch = real.filter(a => ES[a.id] === esTime);
+    const added = batch.reduce((s, a) => s + a.dur * a.res, 0);
+    tank += added;
+    events.push({ t: esTime, tank, batch, added });
+  }
+
+  // Compute final LBCC
+  const finalT = t + Math.ceil(tank / RESOURCE_CAP);
+
+  // Now build timeline steps with chart data
+  // Reset for step-by-step
+  let stepTank = 0, stepT = 0;
+  const wcTimeline = []; // array of { t, wc } points for the chart
+
+  steps.push({
+    phase: "timeline", highlight: new Set(), ...base,
+    wcChart: { points: [{ t: 0, wc: 0 }], capacity: RESOURCE_CAP, lbcc: null, currentT: 0 },
+    text: `Walk through ES event times: [${esTimes.join(", ")}]. At each event, add WC of starting activities. Between events, drain at rate a = ${RESOURCE_CAP}/period. Tank cannot go below 0.`,
+  });
+
+  wcTimeline.push({ t: 0, wc: 0 });
+
+  for (let ei = 0; ei < esTimes.length; ei++) {
+    const esTime = esTimes[ei];
+    const batch = real.filter(a => ES[a.id] === esTime);
+    const added = batch.reduce((s, a) => s + a.dur * a.res, 0);
+    const batchNames = batch.map(a => a.name).join(", ");
+    const batchDesc = batch.map(a => `${a.dur}\u00D7${a.res}`).join(" + ");
+
+    // Drain step (if there's a gap)
+    if (esTime > stepT && stepTank > 0) {
+      const drained = (esTime - stepT) * RESOURCE_CAP;
+      const beforeTank = stepTank;
+      stepTank = Math.max(0, stepTank - drained);
+      wcTimeline.push({ t: esTime, wc: stepTank });
+      const clampText = beforeTank - drained < 0 ? ` \u2192 clamped to 0 (idle time, no credit)` : "";
+      steps.push({
+        phase: "timeline", highlight: new Set(), ...base,
+        wcChart: { points: [...wcTimeline], capacity: RESOURCE_CAP, lbcc: null, currentT: esTime },
+        text: `t=${stepT}\u2192${esTime}: Drain ${RESOURCE_CAP}\u00D7${esTime - stepT} = ${drained}. Tank: ${beforeTank} \u2212 ${drained} = ${beforeTank - drained}${clampText}. Tank = ${stepTank}.`,
+      });
+      stepT = esTime;
+    }
+
+    // Fill step
+    const beforeFill = stepTank;
+    stepTank += added;
+    wcTimeline.push({ t: esTime, wc: stepTank });
+    steps.push({
+      phase: "timeline", highlight: new Set(batch.map(a => a.id)), ...base,
+      wcChart: { points: [...wcTimeline], capacity: RESOURCE_CAP, lbcc: null, currentT: esTime },
+      text: `t=${esTime}: Activities [${batchNames}] start. Add WC = ${batchDesc} = ${added}. Tank: ${beforeFill} + ${added} = ${stepTank}.`,
+    });
+
+    stepT = esTime;
+  }
+
+  // Final drain
+  const remaining = stepTank;
+  const drainPeriods = Math.ceil(remaining / RESOURCE_CAP);
+  const lbcc = stepT + drainPeriods;
+  wcTimeline.push({ t: lbcc, wc: 0 });
+
+  steps.push({
+    phase: "timeline", highlight: new Set(), ...base,
+    wcChart: { points: [...wcTimeline], capacity: RESOURCE_CAP, lbcc, currentT: lbcc },
+    text: `From t=${stepT}: remaining WC = ${remaining}. Need \u2308${remaining}/${RESOURCE_CAP}\u2309 = ${drainPeriods} more time units to drain. Tank reaches 0 at t = ${stepT} + ${drainPeriods} = ${lbcc}.`,
+  });
+
+  /* Phase 4: Result */
+  steps.push({
+    phase: "result", highlight: new Set(real.map(a => a.id)), ...base, cpHighlight: true,
+    wcChart: { points: [...wcTimeline], capacity: RESOURCE_CAP, lbcc, currentT: lbcc },
+    text: `LBCC = ${lbcc}. This combines precedence timing (ES) with resource capacity, improving both LB\u1D04\u1D18 = ${makespan} and LB\u1D63\u1D04 = ${lbrc}.`,
+    isFinal: true,
+  });
+
+  return { steps, phases: ["recap", "workcontent", "timeline", "result"] };
+}
+
+/* ── Tab definitions ── */
+const tabs = [
+  { key: "cpm",  label: "LB\u1D04\u1D18 (CPM)", builder: buildCPMSteps,
+    phaseLabels: { forward: "Forward Pass", backward: "Backward Pass", critical: "Critical Path", gantt: "Gantt Chart" },
+    formulas: [
+      { label: "Forward Pass", text: "ES(i) = max{EF(j) | j \u2208 pred(i)} \u00B7 EF(i) = ES(i) + d\u1D62" },
+      { label: "Backward Pass", text: "LF(i) = min{LS(j) | j \u2208 succ(i)} \u00B7 LS(i) = LF(i) \u2212 d\u1D62" },
+      { label: "Slack", text: "Slack(i) = LF(i) \u2212 EF(i) = LS(i) \u2212 ES(i)" },
+      { label: "Critical Path", text: "All activities where Slack(i) = 0" },
+    ],
+  },
+  { key: "lbcs", label: "LBCS", builder: buildLBCSSteps,
+    phaseLabels: { recap: "CPM Recap", profile: "Resource Profile", sorting: "Sorting", analysis: "Activity Analysis", result: "Result" },
+    formulas: [
+      { label: "LBCS", text: "LBCS = CPM + max{\u03B4\u1D62}" },
+      { label: "\u03B4\u1D62", text: "\u03B4\u1D62 = max(0, d\u1D62 \u2212 e\u1D62)" },
+      { label: "e\u1D62", text: "e\u1D62 = slots in [ES\u1D62, LF\u1D62) where residual \u2265 r\u1D62" },
+      { label: "Residual", text: "residual(t) = a \u2212 \u03A3 r\u2C7C for critical j active at t" },
+      { label: "Early stop", text: "If max(\u03B4) \u2265 d of next activity (sorted desc.), stop \u2014 no later activity can exceed current max(\u03B4)" },
+    ],
+  },
+  { key: "lbcc", label: "LBCC", builder: buildLBCCSteps,
+    phaseLabels: { recap: "CPM Recap", workcontent: "Work Content", timeline: "Timeline", result: "Result" },
+    formulas: [
+      { label: "Work Content", text: "WC(i) = d\u1D62 \u00D7 r\u1D62" },
+      { label: "LB\u1D63\u1D04", text: "LB\u1D63\u1D04 = \u2308\u03A3 WC(i) / a\u2309 (ignores precedence)" },
+      { label: "LBCC", text: "Walk ES events: tank += WC at each ES, drain at rate a between events, tank \u2265 0" },
+      { label: "Tank rule", text: "At ES(i): tank += WC(i). Between events: tank \u2212= a \u00D7 \u0394t. Tank clamped to \u2265 0 (no idle credit)." },
+    ],
+  },
+];
+
+/* ── SVG Components ── */
+function CPMArrow({ fromId, toId, acts, isCriticalEdge, isHighlighted }) {
+  const fp = positions[fromId], tp = positions[toId];
+  const fromAct = acts.find(a => a.id === fromId);
+  const toAct = acts.find(a => a.id === toId);
+  const W = 140, H = 96, R = 30;
+  const fromDummy = fromAct.dur === 0, toDummy = toAct.dur === 0;
+  const dx = tp.x - fp.x, dy = tp.y - fp.y;
+  const angle = Math.atan2(dy, dx);
+  let sx, sy, ex, ey;
+  if (fromDummy) { sx = fp.x + R * Math.cos(angle); sy = fp.y + R * Math.sin(angle); }
+  else { sx = fp.x + W / 2; sy = fp.y + Math.max(-H/2, Math.min(H/2, dy * 0.3)); }
+  if (toDummy) { ex = tp.x - R * Math.cos(angle); ey = tp.y - R * Math.sin(angle); }
+  else { ex = tp.x - W / 2; ey = tp.y; }
+  const color = isCriticalEdge ? C.red : isHighlighted ? C.blue : C.lightGray;
+  const sw = isCriticalEdge ? 3 : isHighlighted ? 2 : 1.5;
+  const mid = isCriticalEdge ? "ah-crit" : isHighlighted ? "ah-hl" : "ah-def";
+  return <line x1={sx} y1={sy} x2={ex} y2={ey} stroke={color} strokeWidth={sw} markerEnd={`url(#${mid})`} />;
+}
+
+function CPMNode({ act, step, showResource, showWC }) {
+  const pos = positions[act.id];
+  const x = pos.x, y = pos.y;
+  const isHL = step.highlight.has(act.id);
+  const isCrit = step.cpHighlight && step.slackShow[act.id] === 0;
+  const W = 140, H = 96, R = 30;
+  const hasExtra = (showResource && act.res > 0) || (showWC && act.res > 0);
+
+  if (act.dur === 0) {
+    const fill = isCrit ? C.critFill : isHL ? C.nodeHLFill : C.nodeFill;
+    const stroke = isCrit ? C.red : isHL ? C.blue : C.lightGray;
+    const sw = isCrit ? 3 : isHL ? 2.5 : 1.5;
+    const es = step.esShow[act.id], ls = step.lsShow[act.id];
+    return (
+      <g>
+        <circle cx={x} cy={y} r={R} fill={fill} stroke={stroke} strokeWidth={sw} />
+        <text x={x} y={y+1} textAnchor="middle" dominantBaseline="middle" fill={C.black} fontSize={15} fontWeight={700}>{act.name}</text>
+        {es !== undefined && <text x={x} y={y+R+16} textAnchor="middle" fill={C.blue} fontSize={11} fontWeight={500}>ES={es} EF={step.efShow[act.id]}</text>}
+        {ls !== undefined && <text x={x} y={y+R+30} textAnchor="middle" fill={C.black} fontSize={11} fontWeight={500}>LS={ls} LF={step.lfShow[act.id]}</text>}
+      </g>
+    );
+  }
+
+  const fill = isCrit ? C.critFill : isHL ? C.nodeHLFill : C.nodeFill;
+  const stroke = isCrit ? C.red : isHL ? C.blue : "#BBB";
+  const sw = isCrit ? 2.5 : isHL ? 2 : 1;
+  const es = step.esShow[act.id], ef = step.efShow[act.id], ls = step.lsShow[act.id], lf = step.lfShow[act.id], sl = step.slackShow[act.id];
+  const topH = 26, lc = "#CCC";
+
+  return (
+    <g>
+      <rect x={x-W/2} y={y-H/2} width={W} height={H} rx={6} fill={fill} stroke={stroke} strokeWidth={sw} />
+      <line x1={x-W/2} y1={y-H/2+topH} x2={x+W/2} y2={y-H/2+topH} stroke={lc} strokeWidth={0.8} />
+      <line x1={x-W/2} y1={y+H/2-topH} x2={x+W/2} y2={y+H/2-topH} stroke={lc} strokeWidth={0.8} />
+      <line x1={x-W/6} y1={y-H/2} x2={x-W/6} y2={y-H/2+topH} stroke={lc} strokeWidth={0.5} />
+      <line x1={x+W/6} y1={y-H/2} x2={x+W/6} y2={y-H/2+topH} stroke={lc} strokeWidth={0.5} />
+      <line x1={x-W/6} y1={y+H/2-topH} x2={x-W/6} y2={y+H/2} stroke={lc} strokeWidth={0.5} />
+      <line x1={x+W/6} y1={y+H/2-topH} x2={x+W/6} y2={y+H/2} stroke={lc} strokeWidth={0.5} />
+      <text x={x-W/3} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>ES</text>
+      <text x={x} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>d</text>
+      <text x={x+W/3} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>EF</text>
+      {es !== undefined ? <text x={x-W/3} y={y-H/2+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{es}</text> : <text x={x-W/3} y={y-H/2+21} textAnchor="middle" fill="#DDD" fontSize={14}>?</text>}
+      <text x={x} y={y-H/2+21} textAnchor="middle" fill={C.black} fontSize={13} fontWeight={600}>{act.dur}</text>
+      {ef !== undefined ? <text x={x+W/3} y={y-H/2+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{ef}</text> : <text x={x+W/3} y={y-H/2+21} textAnchor="middle" fill="#DDD" fontSize={14}>?</text>}
+      <text x={x} y={hasExtra ? y - 6 : y+2} textAnchor="middle" dominantBaseline="middle" fill={C.black} fontSize={20} fontWeight={700}>{act.name}</text>
+      {hasExtra && act.res > 0 && <text x={x} y={y + 10} textAnchor="middle" fill={C.gray} fontSize={11} fontWeight={500}>{showWC ? `r=${act.res}  WC=${act.dur * act.res}` : `r=${act.res}`}</text>}
+      <text x={x-W/3} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>LS</text>
+      <text x={x} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>Slack</text>
+      <text x={x+W/3} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>LF</text>
+      {ls !== undefined ? <text x={x-W/3} y={y+H/2-topH+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{ls}</text> : <text x={x-W/3} y={y+H/2-topH+21} textAnchor="middle" fill="#DDD" fontSize={14}>?</text>}
+      {sl !== undefined ? <text x={x} y={y+H/2-topH+21} textAnchor="middle" fill={sl===0?C.red:C.black} fontSize={14} fontWeight={700}>{sl}</text> : <text x={x} y={y+H/2-topH+21} textAnchor="middle" fill="#DDD" fontSize={14}>?</text>}
+      {lf !== undefined ? <text x={x+W/3} y={y+H/2-topH+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{lf}</text> : <text x={x+W/3} y={y+H/2-topH+21} textAnchor="middle" fill="#DDD" fontSize={14}>?</text>}
+    </g>
+  );
+}
+
+function CPMGraph({ acts, step, showResource, showWC }) {
+  const edges = [];
+  acts.forEach(a => a.pred.forEach(p => edges.push({ from: p, to: a.id })));
+  return (
+    <svg viewBox="0 0 800 420" style={{ width: "100%", maxWidth: 800, display: "block", margin: "0 auto" }}>
+      <defs>
+        <marker id="ah-def" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.lightGray}/></marker>
+        <marker id="ah-hl" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.blue}/></marker>
+        <marker id="ah-crit" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.red}/></marker>
+      </defs>
+      {edges.map((e, i) => {
+        const bothHL = step.highlight.has(e.from) && step.highlight.has(e.to);
+        const isCE = step.cpHighlight && step.slackShow[e.from] === 0 && step.slackShow[e.to] === 0;
+        return <CPMArrow key={i} fromId={e.from} toId={e.to} acts={acts} isCriticalEdge={isCE} isHighlighted={bothHL} />;
+      })}
+      {acts.map(a => <CPMNode key={a.id} act={a} step={step} showResource={showResource} showWC={showWC} />)}
+    </svg>
+  );
+}
+
+function GanttChart({ gantt, acts }) {
+  const { ES, EF, LS, LF, slack, cp, makespan } = gantt;
+  const real = acts.filter(a => a.dur > 0);
+  const rowH = 38, left = 70, top = 10, timeW = 540 / makespan;
+  const chartH = real.length * rowH + top + 40;
+  return (
+    <svg viewBox={`0 0 660 ${chartH}`} style={{ width: "100%", maxWidth: 660, display: "block", margin: "0 auto" }}>
+      {Array.from({ length: makespan + 1 }, (_, t) => (
+        <g key={t}>
+          <line x1={left+t*timeW} y1={top} x2={left+t*timeW} y2={chartH-30} stroke="#EEE" strokeWidth={0.5} />
+          <text x={left+t*timeW} y={chartH-15} textAnchor="middle" fill="#999" fontSize={10}>{t}</text>
+        </g>
+      ))}
+      <text x={left+makespan*timeW/2} y={chartH-2} textAnchor="middle" fill="#888" fontSize={11}>Time</text>
+      {real.map((a, i) => {
+        const es=ES[a.id], ef=EF[a.id], lf=LF[a.id], isCrit=cp.has(a.id), yy=top+i*rowH+4, barH=rowH-10;
+        return (
+          <g key={a.id}>
+            <text x={left-10} y={yy+barH/2+1} textAnchor="end" dominantBaseline="middle" fill={C.black} fontSize={13} fontWeight={600}>Act {a.name}</text>
+            {slack[a.id]>0 && <rect x={left+ef*timeW} y={yy+2} width={slack[a.id]*timeW} height={barH-4} fill="none" stroke="#999" strokeWidth={1} strokeDasharray="4 3" rx={3}/>}
+            <rect x={left+es*timeW} y={yy} width={(ef-es)*timeW} height={barH} fill={isCrit?"#DC262618":"#E8E8E8"} stroke={isCrit?C.red:"#999"} strokeWidth={isCrit?2:1} rx={4}/>
+            <text x={left+(es+ef)/2*timeW} y={yy+barH/2+1} textAnchor="middle" dominantBaseline="middle" fill={isCrit?C.red:C.black} fontSize={11} fontWeight={600}>d={a.dur}</text>
+            <text x={left+es*timeW+3} y={yy-2} fill={C.black} fontSize={9}>ES={es}</text>
+            <text x={left+ef*timeW-3} y={yy-2} textAnchor="end" fill={C.black} fontSize={9}>EF={ef}</text>
+            {slack[a.id]>0 && <text x={left+lf*timeW-3} y={yy-2} textAnchor="end" fill="#888" fontSize={9}>LF={lf}</text>}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function ResourceProfileChart({ profile }) {
+  const { cpProfile, capacity, makespan, activeWindow } = profile;
+  const left = 50, top = 14, barW = 500 / makespan, maxH = 100;
+  const chartH = maxH + top + 35;
+  const scale = maxH / capacity;
+  return (
+    <svg viewBox={`0 0 600 ${chartH}`} style={{ width: "100%", maxWidth: 600, display: "block", margin: "0 auto" }}>
+      <line x1={left} y1={top+maxH-capacity*scale} x2={left+makespan*barW} y2={top+maxH-capacity*scale} stroke="#999" strokeWidth={1} strokeDasharray="6 3"/>
+      <text x={left-6} y={top+maxH-capacity*scale+4} textAnchor="end" fill="#999" fontSize={10}>a={capacity}</text>
+      <line x1={left} y1={top+maxH} x2={left+makespan*barW} y2={top+maxH} stroke="#CCC" strokeWidth={0.5}/>
+      {activeWindow && <rect x={left+activeWindow.es*barW} y={top} width={(activeWindow.lf-activeWindow.es)*barW} height={maxH} fill="#2563EB08" stroke={C.blue} strokeWidth={1} strokeDasharray="4 2" rx={3}/>}
+      {cpProfile.map((usage, t) => {
+        if (usage === 0) return null;
+        const residual = capacity - usage;
+        const inW = activeWindow && t >= activeWindow.es && t < activeWindow.lf;
+        const fits = inW && residual >= activeWindow.demand;
+        const noFit = inW && residual < activeWindow.demand;
+        return (
+          <g key={t}>
+            <rect x={left+t*barW+1} y={top+maxH-usage*scale} width={barW-2} height={usage*scale} fill={noFit?"#DC262630":"#E8E8E8"} stroke={noFit?C.red:"#BBB"} strokeWidth={0.8} rx={1}/>
+            {inW && barW > 18 && <text x={left+t*barW+barW/2} y={top+maxH-usage*scale-4} textAnchor="middle" fill={fits?C.black:C.red} fontSize={9} fontWeight={500}>{residual}</text>}
+          </g>
+        );
+      })}
+      {activeWindow && activeWindow.fittingSlots && activeWindow.fittingSlots.map(t => (
+        <rect key={`f${t}`} x={left+t*barW+1} y={top+maxH+2} width={barW-2} height={5} fill={C.blue} rx={1}/>
+      ))}
+      {Array.from({ length: makespan + 1 }, (_, t) => (
+        <g key={`a${t}`}>
+          <line x1={left+t*barW} y1={top+maxH} x2={left+t*barW} y2={top+maxH+4} stroke="#CCC" strokeWidth={0.5}/>
+          {(t%2===0||makespan<=20) && <text x={left+t*barW} y={chartH-10} textAnchor="middle" fill="#999" fontSize={9}>{t}</text>}
+        </g>
+      ))}
+      <text x={left+makespan*barW/2} y={chartH} textAnchor="middle" fill="#888" fontSize={10}>Time</text>
+      {activeWindow && <text x={left+(activeWindow.es+activeWindow.lf)/2*barW} y={top-2} textAnchor="middle" fill={C.blue} fontSize={10} fontWeight={500}>Act {activeWindow.actName} window [ES={activeWindow.es}, LF={activeWindow.lf}) needs r={activeWindow.demand}</text>}
+    </svg>
+  );
+}
+
+function WorkContentChart({ chart }) {
+  const { points, capacity, lbcc, currentT } = chart;
+  const maxT = Math.max(lbcc || 20, ...points.map(p => p.t), currentT || 0) + 1;
+  const maxWC = Math.max(...points.map(p => p.wc), 10);
+  const left = 60, top = 20, chartW = 520, chartH_inner = 140;
+  const totalH = chartH_inner + top + 40;
+  const xScale = chartW / maxT;
+  const yScale = chartH_inner / (maxWC * 1.15);
+  const toX = t => left + t * xScale;
+  const toY = wc => top + chartH_inner - wc * yScale;
+
+  // Build polyline path
+  let pathD = "";
+  for (let i = 0; i < points.length; i++) {
+    const p = points[i];
+    const cmd = i === 0 ? "M" : "L";
+    pathD += `${cmd}${toX(p.t)},${toY(p.wc)} `;
+  }
+
+  // Fill area
+  let areaD = pathD;
+  if (points.length > 0) {
+    const last = points[points.length - 1];
+    areaD += `L${toX(last.t)},${toY(0)} L${toX(points[0].t)},${toY(0)} Z`;
+  }
+
+  // Slope reference line from first fill point
+  const firstFill = points.find(p => p.wc > 0);
+
+  return (
+    <svg viewBox={`0 0 620 ${totalH}`} style={{ width: "100%", maxWidth: 620, display: "block", margin: "0 auto" }}>
+      {/* Y-axis */}
+      <line x1={left} y1={top} x2={left} y2={top + chartH_inner} stroke="#CCC" strokeWidth={0.5} />
+      <text x={left - 8} y={top + chartH_inner / 2} textAnchor="middle" fill="#888" fontSize={10} transform={`rotate(-90,${left - 8},${top + chartH_inner / 2})`}>Work Content</text>
+      {/* X-axis */}
+      <line x1={left} y1={toY(0)} x2={left + chartW} y2={toY(0)} stroke="#CCC" strokeWidth={0.5} />
+      {/* Grid lines */}
+      {Array.from({ length: maxT + 1 }, (_, t) => (
+        <g key={t}>
+          <line x1={toX(t)} y1={top} x2={toX(t)} y2={toY(0) + 4} stroke="#EEE" strokeWidth={0.5} />
+          {(t % 2 === 0 || maxT <= 22) && <text x={toX(t)} y={totalH - 12} textAnchor="middle" fill="#999" fontSize={9}>{t}</text>}
+        </g>
+      ))}
+      <text x={left + chartW / 2} y={totalH - 1} textAnchor="middle" fill="#888" fontSize={10}>Time</text>
+      {/* Slope reference: show drain rate from first fill */}
+      {firstFill && <line x1={toX(firstFill.t)} y1={toY(firstFill.wc)} x2={toX(firstFill.t + firstFill.wc / capacity)} y2={toY(0)} stroke="#CCC" strokeWidth={1} strokeDasharray="6 3" />}
+      {firstFill && <text x={toX(firstFill.t + firstFill.wc / capacity / 2) + 6} y={toY(firstFill.wc / 2) - 6} fill="#999" fontSize={9} transform={`rotate(${-Math.atan2(firstFill.wc * yScale, firstFill.wc / capacity * xScale) * 180 / Math.PI},${toX(firstFill.t + firstFill.wc / capacity / 2) + 6},${toY(firstFill.wc / 2) - 6})`}>slope = a = {capacity}</text>}
+      {/* Area fill */}
+      <path d={areaD} fill="#2563EB10" />
+      {/* Line */}
+      <path d={pathD} fill="none" stroke={C.blue} strokeWidth={2} />
+      {/* Points */}
+      {points.map((p, i) => (
+        <g key={i}>
+          <circle cx={toX(p.t)} cy={toY(p.wc)} r={3.5} fill="#FFF" stroke={C.blue} strokeWidth={2} />
+          {p.wc > 0 && <text x={toX(p.t) + 6} y={toY(p.wc) - 8} fill={C.black} fontSize={10} fontWeight={600}>WC={p.wc}</text>}
+        </g>
+      ))}
+      {/* LBCC marker */}
+      {lbcc && (
+        <g>
+          <line x1={toX(lbcc)} y1={top} x2={toX(lbcc)} y2={toY(0)} stroke={C.red} strokeWidth={1.5} strokeDasharray="4 2" />
+          <text x={toX(lbcc)} y={top - 4} textAnchor="middle" fill={C.red} fontSize={11} fontWeight={600}>LBCC={lbcc}</text>
+        </g>
+      )}
+      {/* Event time markers */}
+      {points.filter(p => p.wc > 0 && points.findIndex(q => q.t === p.t && q.wc > 0) === points.indexOf(p)).map(p => (
+        <text key={`es${p.t}`} x={toX(p.t)} y={toY(0) + 14} textAnchor="middle" fill={C.blue} fontSize={9} fontWeight={500}>ES={p.t}</text>
+      ))}
+    </svg>
+  );
+}
+
+function StepNavigator({ steps, stepIdx, setStepIdx, isPlaying, setIsPlaying }) {
+  const s = steps[stepIdx];
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 13, color: "#888", fontWeight: 500 }}>Step {stepIdx + 1} / {steps.length}</span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button className="nbtn" onClick={() => setStepIdx(0)} disabled={stepIdx === 0}>{"\u23EE"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(Math.max(0, stepIdx - 1))} disabled={stepIdx === 0}>{"\u25C0 Prev"}</button>
+          <button className={`play-btn${isPlaying ? " playing" : ""}`} onClick={() => setIsPlaying(!isPlaying)}>{isPlaying ? "\u23F8" : "\u25B6"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(Math.min(steps.length - 1, stepIdx + 1))} disabled={stepIdx === steps.length - 1}>{"Next \u25B6"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(steps.length - 1)} disabled={stepIdx === steps.length - 1}>{"\u23ED"}</button>
+        </div>
+      </div>
+      <div style={{ width: "100%", height: 3, background: "#EEE", borderRadius: 2, marginBottom: 12 }}>
+        <div style={{ width: `${((stepIdx + 1) / steps.length) * 100}%`, height: "100%", background: "#333", borderRadius: 2, transition: "width 0.3s" }} />
+      </div>
+      <p className={`step-text${s.isFinal ? " step-final" : ""}`}>{s.text}</p>
+    </div>
+  );
+}
+
+/* ── App ── */
+function App() {
+  const [tabIdx, setTabIdx] = useState(0);
+  const [stepIdx, setStepIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playRef = useRef(null);
+
+  const tab = tabs[tabIdx];
+  const built = useMemo(() => tab.builder(activities), [tabIdx]);
+  const steps = built.steps;
+  const subPhases = built.phases;
+  const clampedStep = Math.min(stepIdx, steps.length - 1);
+  const curStep = steps[clampedStep];
+  const curPhase = curStep.phase;
+
+  // Switch tab
+  const switchTab = useCallback((i) => { setTabIdx(i); setStepIdx(0); setIsPlaying(false); }, []);
+
+  // Jump to sub-phase
+  const jumpToPhase = useCallback((phaseKey) => {
+    const idx = steps.findIndex(s => s.phase === phaseKey);
+    if (idx >= 0) setStepIdx(idx);
+  }, [steps]);
+
+  // Auto-play
+  useEffect(() => {
+    if (isPlaying) {
+      playRef.current = setInterval(() => {
+        setStepIdx(prev => {
+          if (prev >= steps.length - 1) { setIsPlaying(false); return prev; }
+          return prev + 1;
+        });
+      }, 3500);
+    }
+    return () => { if (playRef.current) clearInterval(playRef.current); };
+  }, [isPlaying, steps.length]);
+
+  // Keyboard
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "ArrowRight") { e.preventDefault(); setStepIdx(p => Math.min(steps.length - 1, p + 1)); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); setStepIdx(p => Math.max(0, p - 1)); }
+      else if (e.key === " ") { e.preventDefault(); setIsPlaying(p => !p); }
+      else if (e.key === "f" || e.key === "F") {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+        else document.exitFullscreen?.();
+      }
+      else if (e.key === "Tab") { e.preventDefault(); switchTab((tabIdx + 1) % tabs.length); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [steps, tabIdx]);
+
+  return (
+    <div className="container">
+      <h1 className="hero-title">RCPSP Lower Bounds</h1>
+      <p className="hero-sub">Interactive step-by-step visualization &middot; Coelho &amp; Vanhoucke (2018)</p>
+
+      {/* Top-level tabs: CPM / LBCS / LBCC */}
+      <div className="tab-row">
+        {tabs.map((t, i) => (
+          <button key={t.key} className={`tab-btn${tabIdx === i ? " active" : ""}`}
+            onClick={() => switchTab(i)}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sub-phase pills */}
+      <div className="pill-row">
+        {subPhases.map(pk => (
+          <button key={pk} className={`pill${curPhase === pk ? " active" : ""}`}
+            onClick={() => jumpToPhase(pk)}>
+            {tab.phaseLabels[pk] || pk}
+          </button>
+        ))}
+      </div>
+
+      {/* Network graph */}
+      <div className="card">
+        <h2 className="section-title">Project Network (AoN){tab.key !== "cpm" && <span style={{ fontWeight: 400, fontSize: 14, color: "#888", marginLeft: 12 }}>Resource availability a = {RESOURCE_CAP}</span>}</h2>
+        <CPMGraph acts={activities} step={curStep} showResource={tab.key !== "cpm"} showWC={tab.key === "lbcc"} />
+      </div>
+
+      {/* Resource profile (LBCS) */}
+      {curStep.resourceProfile && (
+        <div className="card">
+          <h2 className="section-title">Resource Profile (CP activities only, a={RESOURCE_CAP})</h2>
+          <ResourceProfileChart profile={curStep.resourceProfile} />
+        </div>
+      )}
+
+      {/* Work content chart (LBCC) */}
+      {curStep.wcChart && (
+        <div className="card">
+          <h2 className="section-title">Work Content Tank</h2>
+          <WorkContentChart chart={curStep.wcChart} />
+        </div>
+      )}
+
+      {/* Gantt chart (CPM) */}
+      {curStep.gantt && (
+        <div className="card">
+          <h2 className="section-title">Gantt Chart</h2>
+          <GanttChart gantt={curStep.gantt} acts={activities} />
+        </div>
+      )}
+
+      {/* Step navigator */}
+      <StepNavigator steps={steps} stepIdx={clampedStep} setStepIdx={setStepIdx}
+        isPlaying={isPlaying} setIsPlaying={setIsPlaying} />
+
+      {/* Formal definitions for current tab */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>Formal Definitions</h3>
+        <div style={{ fontSize: 14, lineHeight: 2.0, color: "#444" }}>
+          {tab.formulas.map((f, i) => (
+            <p key={i}><strong>{f.label}:</strong> {f.text}</p>
+          ))}
+        </div>
+      </div>
+
+      <div className="kb-hint">
+        <strong>Keys:</strong> &larr;&rarr; step &middot; Tab switch bound &middot; Space play &middot; F fullscreen
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

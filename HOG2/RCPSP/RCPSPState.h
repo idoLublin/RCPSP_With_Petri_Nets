@@ -276,19 +276,30 @@ struct Conflict {
     // Clean constructor
     Conflict() : t(0), resourceType(0), num_activities(0), activity_start_index(0) {}
 };
-
+enum class ConflictType : uint8_t {
+    CARDINAL      = 0,  // all branches raise LB — resolve first
+    SEMI_CARDINAL = 1,  // some branches raise LB
+    NON_CARDINAL  = 2   // no branch raises LB — resolve last
+};
 
 class RCPSPState_CBS {
 public:
-    std::array<short, 122> start_times; // 244 bytes
+    std::array<short, 32> start_times; // 244 bytes
+    std::array<short, 32> latest_start_times = {};  // zero initialize
     mutable short t;
     mutable short resourceType;
     mutable short num_activities;
     mutable size_t full_RVS_size=0;
     mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
+    // mutable ConflictType conflict_type = ConflictType::NON_CARDINAL;
+    // mutable short        num_costly_branches = 0;
+    mutable short h_cost = 0;
+
+
     void computeRVS() const;
 
     void propagate(short activityId);
+    void propagate_latest(short delayedActivity);
 
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);

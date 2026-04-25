@@ -76,7 +76,7 @@ int solveRCPSP_Bi();
 
 #include <windows.h>
 #include <psapi.h>
-
+bool allcorrect=true;
 long getPeakMemoryKB() {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
@@ -89,6 +89,47 @@ long getPeakMemoryKB() {
 //     getrusage(RUSAGE_SELF, &usage);
 //     return usage.ru_maxrss;
 // }
+
+struct Bounds {
+    int lb = -1;
+    int ub = -1;
+    bool optimal_known = false;
+};
+
+Bounds getBounds(int group, int exam, const std::string& problemType) {
+    std::string filename = problemType + "lb.sm";  // j60lb_.sm, j90lb_.sm
+
+    std::string path1 = filename;
+    std::string path2 = "HOG2/RCPSP/" + filename;
+
+    std::ifstream file(path1);
+    if (!file.is_open()) { file.clear(); file.open(path2); }
+    if (!file.is_open()) {
+        std::cout << "Could not open " << filename << "\n";
+        return {};
+    }
+
+    // Skip header until separator
+    std::string line;
+    while (std::getline(file, line))
+        if (line.find("===") != std::string::npos) break;
+
+    int g, e, ub, lb;
+    std::string rest;
+    while (std::getline(file, line)) {
+        std::istringstream iss(line);
+        if (!(iss >> g >> e >> ub >> lb)) continue;
+        if (g == group && e == exam) {
+            Bounds b;
+            b.ub = ub;
+            b.lb = lb;
+            b.optimal_known = (line.find('*') != std::string::npos);
+            return b;
+        }
+    }
+    return {};
+}
+
 double HCost_TT(const RCPSPState_TT &state1, const RCPSPState_TT &state2) {
   //return 0;
   // 9. Optimized independent set calculation
@@ -922,11 +963,26 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename, const std::s
     return 0;  // ADD THIS
 }
 
-int getOptimalMakespan(int group, int exam, const std::string& optFile) {
-    std::ifstream file(optFile);
-    std::string line;
+int getOptimalMakespan(int group, int exam, const std::string& problemType) {
+    std::string filename = problemType + "opt.sm";
 
-    // Skip header lines until "---"
+    std::string path1 = filename;                    // Console
+    std::string path2 = "HOG2/RCPSP/" + filename;   // Green button
+
+    std::ifstream file(path1);
+    if (!file.is_open()) {
+        file.clear();
+        file.open(path2);
+    }
+
+    if (!file.is_open()) {
+        std::cout << "Could not open " << filename << "\n";
+        std::cout << "Tried: " << path1 << "\n";
+        std::cout << "Tried: " << path2 << "\n";
+        return -1;
+    }
+
+    std::string line;
     while (std::getline(file, line)) {
         if (line.find("---") != std::string::npos) break;
     }
@@ -934,10 +990,31 @@ int getOptimalMakespan(int group, int exam, const std::string& optFile) {
     int g, e, makespan;
     double cpu;
     while (file >> g >> e >> makespan >> cpu) {
-        if (g == group && e == exam) return makespan;
+        if (g == group && e == exam)
+            return makespan;
     }
-    return -1; // not found
+
+    return -1;
 }
+
+struct InstanceParams {
+    float NC, RF, RS;
+};
+
+InstanceParams getParams(int group) {
+    // group is 1-based, 1-48
+    static const float NC_vals[] = {1.5f, 1.8f, 2.1f, 2.4f};
+    static const float RF_vals[] = {0.25f, 0.50f, 0.75f, 1.0f};
+    static const float RS_vals[] = {0.2f, 0.5f, 0.7f, 1.0f};
+
+    int g = group - 1;  // 0-based
+    int rs_idx = (g % 20) / 10;      // changes every 10
+    int rf_idx = (g % 80) / 20;      // changes every 20
+    int nc_idx = g / 80;             // changes every 80
+
+    return {NC_vals[nc_idx], RF_vals[rf_idx], RS_vals[rs_idx]};
+}
+
 void setProblemSize(const std::string& problemType) {
     // extracts the number from "j30", "j60", "j120" etc.
     CONFLICT_SIZE = std::stoul(problemType.substr(1))+2;
@@ -945,13 +1022,18 @@ void setProblemSize(const std::string& problemType) {
 int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
     setProblemSize(problemType);  // CONFLICT_SIZE = 30
+    // int optMakespan = getOptimalMakespan(group, exam, problemType);
+    // std::ifstream test("j30opt.sm");
+
 
     // getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
     RCPSP_CBS as1;
     resource_info.clear();
     downstream.clear();
+    upstream.clear();
     precomputeDownstream(); // call once after loading
+    precomputeUpstream(); // call once after loading
     precomputeResourceInfo();
     RCPSPState_CBS first;
     // first.computeRVS();
@@ -1006,29 +1088,40 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+
+
+
+
     std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << elapsed.count() << ","
-         << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
-         << makespan << ","
+
+    // Verify optimality
+    InstanceParams p = getParams(group);
+
+    file << group << ","
+         << exam << ","
+         << elapsed.count() << ","
+         << makespan << ",";
+
+    if (problemType == "j30") {
+        int opt = getOptimalMakespan(group, exam, problemType);
+        file << (makespan == opt ? "True" : "False") << ","
+             << problemType << ","
+             << "CBS" << ","
+             << opt << ",-1,";
+    } else {
+        Bounds b = getBounds(group, exam, problemType);
+        file << (b.optimal_known ? (makespan == b.lb ? "True" : "False") : "Unknown") << ","
+             << problemType << ","
+             << "CBS" << ","
+             << b.lb << "," << b.ub << ",";
+    }
+
+    file << p.NC << "," << p.RF << "," << p.RS << ","
+         << ((!path.empty() || first.rvs_activities_pool.empty()) ? "True" : "False") << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-         << "CBS" << ","
-         << problemType << ","
-         << peakMemKB << ",";
-    // Verify optimality
-    int optMakespan = getOptimalMakespan(group, exam, "j30opt.sm");
-    if (optMakespan != -1) {
-        bool correct = (makespan == optMakespan);
-        std::cout << "Optimal makespan: " << optMakespan << std::endl;
-        std::cout << "Our makespan: " << makespan << std::endl;
-        std::cout << "Correct: " << (correct ? "YES" : "NO") << std::endl;
-
-        // Also write to file
-        file << (correct ? "True" : "False") << ","
-             << optMakespan << ",";
-    }
-    file << "\n";
+         << peakMemKB << "\n";
     return 0;
 }
 
@@ -1204,52 +1297,46 @@ void runBenchmark() {
     }
 
     // Write header
-    //file << "group,exam,time,finished,makespan,expand number,generated number,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave)" << std::endl;
-    file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
-    //file << "group,exam,initialHcost" << std::endl;
- //omp_set_num_threads(10);
-     //omp_set_num_threads(2); // 1. Set the core count.
-     //#pragma omp parallel for collapse(2) schedule(dynamic)
-   //  solveRCPSP_Bi(16, 1, filename, "j30");
-    // solveRCPSP_TT(16, 9, filename, "j30");
-//solveRCPSP_TT2(16,8,filename,"j30");
-// solveRCPSP(16,9,filename,"j30");
- //solveRCPSP_TT2(3,1,filename,"j30");
-// solveRCPSP_TT2(16,2,filename,"j30");
-//     solveRCPSP_TT(16,2,filename,"j30");
-     //
-   // solveRCPSP_TT2(3,2,filename,"j60");
-   // solveRCPSP_CBS(16,9,filename,"j30");
-  // solveRCPSP_TT(16,4,filename,"j30");
 
-    // for(int i = 16; i < 17; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //
-    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         solveRCPSP_CBS(i, j, filename, "j30");
-    //         // solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //          // solveRCPSP_Bi(i, j, filename, "j30");
-    //     }
-    // }
+    // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+         << "finished,expandNumber,generatedNumber,depth,maxMem"
+         << std::endl;
+
+
+    for(int i = 16; i < 17; i++) {
+        for(int j = 1; j < 11; j++) {
+
+            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+            petri.reset();
+            RCPSPex.reset();
+
+            // 2. SOLVE
+            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            solveRCPSP_CBS(i, j, filename, "j30");
+            solveRCPSP_CBS(i, j, filename, "j60");
+             // solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
+             // solveRCPSP_Bi(i, j, filename, "j30");
+        }
+    }
     //
     // solveRCPSP_CBS(1, 1, filename, "j30");
     // solveRCPSP_CBS(11, 2, filename, "j30");
     // solveRCPSP_CBS(25, 2, filename, "j30");    //
     // solveRCPSP_CBS(1, 6, filename, "j30");
-    solveRCPSP_CBS(18, 9, filename, "j60");
-    solveRCPSP_TT2(18, 9, filename, "j60");
+    // solveRCPSP_CBS(18, 9, filename, "j30");
+    // solveRCPSP_TT2(18, 9, filename, "j30");
     // solveRCPSP_CBS(5, 1, filename, "j30");
 
     // solveRCPSP_CBS(43, 2, filename, "j30");
     // solveRCPSP_CBS(44, 2, filename, "j30");
-
-
+if (allcorrect) {
+    std::cout <<"All correct" <<std::endl;
+}
+else {
+    std::cout <<"Error: incorrect results" <<std::endl;
+}
 }
 
 struct ResultRow {

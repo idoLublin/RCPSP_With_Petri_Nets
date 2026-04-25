@@ -1896,6 +1896,7 @@ struct ResourceInfo {
 
 std::vector<ResourceInfo> resource_info;
 std::vector<std::vector<short>> downstream; // downstream[i] = all activities downstream of i in topo order
+std::vector<std::vector<short>> upstream; // downstream[i] = all activities downstream of i in topo order
 // ******
 void precomputeResourceInfo() {
   resource_info.clear();
@@ -1954,6 +1955,38 @@ void precomputeDownstream() {
 
   }
 }
+
+void precomputeUpstream() {
+  upstream.clear();
+  upstream.resize(RCPSPex.activities.size());
+
+  for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    upstream[i].clear();
+
+    std::vector<bool> visited(RCPSPex.activities.size(), false);
+    std::queue<short> queue;
+    queue.push(i);
+
+    while (!queue.empty()) {
+      short curr = queue.front();
+      queue.pop();
+
+      // Find direct predecessors of curr — reverse of downstream
+      for (short dep : RCPSPex.backword_dependencies[curr]) {
+        short pred = dep - 1;
+        if (!visited[pred]) {
+          visited[pred] = true;
+          upstream[i].push_back(pred);
+          queue.push(pred);
+        }
+      }
+    }
+
+    // Reverse topological order — largest index first
+    std::sort(upstream[i].begin(), upstream[i].end(), std::greater<short>());
+  }
+}
+
 inline RCPSP_CBS::RCPSP_CBS() {
 }
 

@@ -112,16 +112,27 @@ inline size_t getcomper2(const RCPSPState_TT2& state, double g) {
 inline size_t getcomper3(const RCPSPState_TT2& state, double g) {
     return state.activeTransitionIndices.size();
 }
-
+// --- 5. RCPSPState_BAP ---
+inline size_t getcomper1(const RCPSPState_BAP& state, double g) {
+	return -((short)(state.start_times[g_sink_id] +
+		   RCPSPex.activities[g_sink_id].duration));
+}
+inline size_t getcomper2(const RCPSPState_BAP& state, double g) {
+	return -((short)(state.start_times[g_sink_id] +
+		   RCPSPex.activities[g_sink_id].duration));
+}
+inline size_t getcomper3(const RCPSPState_BAP& state, double g) {
+	return state.rvs_activities_pool.size();
+}
 // --- 5. RCPSPState_CBS ---
 inline size_t getcomper1(const RCPSPState_CBS& state, double g) {
-    return -((short)(state.start_times[g_sink_id] + RCPSPex.activities[g_sink_id].duration));
+    return state.start_times[g_sink_id];
 }
 inline size_t getcomper2(const RCPSPState_CBS& state, double g) {
-    return -((short)(state.start_times[g_sink_id] + RCPSPex.activities[g_sink_id].duration));
+    return state.start_times[g_sink_id];
 }
 inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
-    return state.RVS.size();
+    return state.full_RVS_size;
 }
 // // --- 1. Standard RCPSPState ---
 // inline size_t getcomper1(const RCPSPState& state) {

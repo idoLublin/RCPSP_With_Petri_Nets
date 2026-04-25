@@ -281,8 +281,10 @@ struct Conflict {
 class RCPSPState_CBS {
 public:
     std::array<short, 122> start_times; // 244 bytes
-    mutable std::vector<Conflict> RVS;
-    // short sink_id;
+    mutable short t;
+    mutable short resourceType;
+    mutable short num_activities;
+    mutable size_t full_RVS_size=0;
     mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
     void computeRVS() const;
 
@@ -305,7 +307,7 @@ public:
         return true;
     }
     short makespan() const {
-        return start_times[g_sink_id] + start_times[g_sink_id];
+        return start_times[g_sink_id];
     }
 
 };

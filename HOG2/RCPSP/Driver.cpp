@@ -944,7 +944,7 @@ void setProblemSize(const std::string& problemType) {
 }
 int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
-    setProblemSize("j30");  // CONFLICT_SIZE = 30
+    setProblemSize(problemType);  // CONFLICT_SIZE = 30
 
     // getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
@@ -956,7 +956,11 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     RCPSPState_CBS first;
     // first.computeRVS();
     RCPSPState_CBS last = first;
-    last.RVS.clear();
+    last.full_RVS_size=0;
+    last.num_activities=0;
+    last.resourceType=-1;
+    last.rvs_activities_pool.clear();
+
 
 
     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
@@ -974,7 +978,7 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     int makespan = 0;
 
 
-    if (!path.empty() || first.RVS.empty()) {
+    if (!path.empty() || first.rvs_activities_pool.empty()) {
 
         // Get final state - either from path or initial state if already feasible
         RCPSPState_CBS& finalState = path.empty() ? first : path.back();
@@ -1004,7 +1008,7 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
 
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
-         << ((!path.empty()|| first.RVS.empty()) ? "True" : "False") << ","
+         << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
@@ -1031,7 +1035,7 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
 
 int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
-    setProblemSize("j30");  // CONFLICT_SIZE = 30
+    setProblemSize(problemType);  // CONFLICT_SIZE = 30
 
     // getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
@@ -1043,7 +1047,10 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
     RCPSPState_CBS first;
     // first.computeRVS();
     RCPSPState_CBS last = first;
-    last.RVS.clear();
+    last.full_RVS_size=0;
+    last.t=0;
+    last.resourceType=-1;
+    last.full_RVS_size=0;
 
 
     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
@@ -1061,7 +1068,7 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
     int makespan = 0;
 
 
-    if (!path.empty() || first.RVS.empty()) {
+    if (!path.empty() || first.rvs_activities_pool.empty()) {
 
         // Get final state - either from path or initial state if already feasible
         RCPSPState_CBS& finalState = path.empty() ? first : path.back();
@@ -1091,12 +1098,12 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
 
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
-         << ((!path.empty()|| first.RVS.empty()) ? "True" : "False") << ","
+         << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-         << "CBS" << ","
+         << "BAP" << ","
          << problemType << ","
          << peakMemKB << ",";
     // Verify optimality
@@ -1235,7 +1242,8 @@ void runBenchmark() {
     // solveRCPSP_CBS(11, 2, filename, "j30");
     // solveRCPSP_CBS(25, 2, filename, "j30");    //
     // solveRCPSP_CBS(1, 6, filename, "j30");
-    solveRCPSP_BAP(1, 6, filename, "j30");
+    solveRCPSP_CBS(18, 9, filename, "j60");
+    solveRCPSP_TT2(18, 9, filename, "j60");
     // solveRCPSP_CBS(5, 1, filename, "j30");
 
     // solveRCPSP_CBS(43, 2, filename, "j30");

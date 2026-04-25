@@ -1968,19 +1968,23 @@ inline RCPSP_CBS::RCPSP_CBS() {
 // }
 inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
 
-  if (nodeID.RVS.empty()) return;
+  if (nodeID.rvs_activities_pool.empty()) return;
 
   // const Conflict& first = nodeID.RVS[0];
 
   // Use the helper to stream activities directly out of the global pool
-  const Conflict& first = nodeID.RVS[0];
-  std::span<const short> acts = nodeID.get_conflict_activities(first);
-  for (short j = 0; j < first.num_activities; j++) {
-    neighbors.emplace_back(nodeID, acts[j], first.t);
+  // const Conflict& first = nodeID.rvs_activities_pool;
+  std::span<const short> acts = nodeID.rvs_activities_pool;
+  for (short j = 0; j < nodeID.num_activities; j++) {
+    neighbors.emplace_back(nodeID, acts[j], nodeID.t);
   }
+  std::sort(neighbors.begin(), neighbors.end(),
+[](const auto& a, const auto& b) {
+    return a.makespan() < b.makespan();
+});
 }
 inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
-  if (node.RVS.size()==0) {
+  if (node.full_RVS_size==0) {
     return true;
   }
   else {

@@ -2676,6 +2676,7 @@ else {
 }
 void RCPSPState_CBS::computeRVS() const {
     // 1. Clear both pools!
+    std::vector<Conflict> RVS;
     RVS.clear();
     rvs_activities_pool.clear();
 
@@ -2738,6 +2739,19 @@ void RCPSPState_CBS::computeRVS() const {
         [](const Conflict& a, const Conflict& b) {
             return a.t < b.t;
         });
+    std::sort(rvs_activities_pool.begin(), rvs_activities_pool.end(),
+    [&](short a, short b) {
+        return start_times[a] < start_times[b];
+    });
+    full_RVS_size=RVS.size();
+
+
+    //pick first conflict
+    t=RVS[0].t;
+    resourceType=RVS[0].resourceType;
+    num_activities=RVS[0].num_activities;
+
+
 }
 // void RCPSPState_CBS::computeRVS() const {
 //     RVS.clear();
@@ -2980,8 +2994,8 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
 
     // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
     // 2. Iterate directly over the 'act' values
-    std::span<const short> acts = prev.get_conflict_activities(prev.RVS[0]);
-    for (short j = 0; j < prev.RVS[0].num_activities; j++) {
+    std::span<const short> acts = prev.rvs_activities_pool;
+    for (short j = 0; j < prev.num_activities; j++) {
         short act = acts[j];
         if (act == delayedActivity) continue;
         new_start = std::min(new_start,
@@ -3010,12 +3024,26 @@ void RCPSPState_BAP::computeFirstRVS() const {
         const ResourceInfo& res = resource_info[resIdx];
 
         // 2. Collect event points (std::set automatically sorts them from earliest to latest)
-        std::set<short> events;
+        // std::set<short> events;
+        // for (short actIdx : res.activity_indices) {
+        //     events.insert(start_times[actIdx]);
+        //     events.insert(start_times[actIdx] + RCPSPex.activities[actIdx].duration);
+        // }
+        thread_local std::vector<short> events;
+        events.clear(); // Resets size to 0, but keeps the underlying memory intact
+
+        // 2. Dump all times into the flat array
         for (short actIdx : res.activity_indices) {
-            events.insert(start_times[actIdx]);
-            events.insert(start_times[actIdx] + RCPSPex.activities[actIdx].duration);
+            events.push_back(start_times[actIdx]);
+            events.push_back(start_times[actIdx] + RCPSPex.activities[actIdx].duration);
         }
 
+        // 3. Sort chronologically (Massively faster than a Red-Black Tree for small N)
+        std::sort(events.begin(), events.end());
+
+        // 4. Strip out duplicates
+        // (std::unique shifts duplicates to the back, erase chops them off)
+        events.erase(std::unique(events.begin(), events.end()), events.end());
         // 3. Check each event point in chronological order
         for (short current_t : events) {
 

@@ -2025,7 +2025,7 @@ inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CB
   // std::cout << "node makespan: " << state1.start_times[g_sink_id]
   //           << " h_cost: " << state1.h_cost
   //           << " f: " << state1.start_times[g_sink_id] + state1.h_cost << "\n";
-return 0;
+// return 0;
   return state1.h_cost;
   // double h = 0;
   // for (const auto& conflict : state1.RVS) {

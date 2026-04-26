@@ -62,6 +62,11 @@ std::atomic<bool> stop_printing1(false); // Flag to stop the printing thread
 //         std::this_thread::sleep_for(std::chrono::seconds(60*5)); // Wait for a second
 //     }
 // }
+
+
+
+
+
 int solveRCPSP();
 int solveRCPSP_TT();
 int solveRCPSP_Bi();
@@ -1124,7 +1129,9 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-         << peakMemKB << "\n";
+         << peakMemKB << ","
+         << setting.use_conflict_prioritization << ","
+         << setting.use_heuristic << "\n";
     return 0;
 }
 
@@ -1302,14 +1309,20 @@ void runBenchmark() {
     }
 
     // Write header
-
+    setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
+    setting.use_heuristic               = true;  // set cover h-cost
     // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
-         << "finished,expandNumber,generatedNumber,depth,maxMem"
+         << "finished,expandNumber,generatedNumber,depth,maxMem,"
+         << "useConflictPrioritization,useHeuristic"
          << std::endl;
 
 
-    for(int i = 1; i < 5; i++) {
+    if (!setting.use_conflict_prioritization&& !setting.use_heuristic) {
+        std::cout <<"Error: invalid setting"<< std::endl;
+        exit(0);
+    }
+    for(int i = 1; i < 49; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)

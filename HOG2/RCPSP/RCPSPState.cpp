@@ -2914,44 +2914,14 @@ void RCPSPState_CBS::computeRVS() const {
                 best_type     = type;
                 found_any     = true;
             }
-        }
-    }
-
-    // Link conflicts via downstream
-    for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
-        for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
-            bool linked = false;
-            for (short job_i : cardinal_conflicts[i]) {
-                if (linked) break;
-                for (short job_j : cardinal_conflicts[j]) {
-                    if (std::find(downstream[job_i].begin(),
-                                  downstream[job_i].end(),
-                                  job_j) != downstream[job_i].end() ||
-                        std::find(downstream[job_j].begin(),
-                                  downstream[job_j].end(),
-                                  job_i) != downstream[job_j].end()) {
-                        // Merge conflict j into conflict i
-                        for (short job : cardinal_conflicts[j])
-                            cardinal_conflicts[i].push_back(job);
-                        cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
-                        j--;
-                        linked = true;
-                        break;
-                    }
-                }
+            if (setting.use_conflict_prioritization && !setting.use_heuristic) {
+                if (best_type == ConflictType::CARDINAL) goto done; // early exit ok
             }
         }
     }
 
-    // Enrich conflict sets with upstream jobs
-    for (auto& conflict : cardinal_conflicts) {
-        std::set<short> conflict_set(conflict.begin(), conflict.end());
-        for (short job : conflict)
-            for (short pred : upstream[job])
-                conflict_set.insert(pred);
-        conflict.assign(conflict_set.begin(), conflict_set.end());
-    }
 
+done:
     // Write winning conflict
     rvs_activities_pool = std::move(best_jobs);
     t              = best_t;
@@ -2960,8 +2930,50 @@ void RCPSPState_CBS::computeRVS() const {
     found_conflict = found_any;
 
     // Fix bug 1: always set h_cost, even when no cardinals
-    h_cost = cardinal_conflicts.empty() ? 0 : computeSetCover(cardinal_conflicts);
-    // std::cout <<"hcost: "<<h_cost<<std::endl;
+    if (setting.use_heuristic && setting.use_conflict_prioritization) {
+        // enrichment + set cover
+        // Link conflicts via downstream
+        for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
+            for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
+                bool linked = false;
+                for (short job_i : cardinal_conflicts[i]) {
+                    if (linked) break;
+                    for (short job_j : cardinal_conflicts[j]) {
+                        if (std::find(downstream[job_i].begin(),
+                                      downstream[job_i].end(),
+                                      job_j) != downstream[job_i].end() ||
+                            std::find(downstream[job_j].begin(),
+                                      downstream[job_j].end(),
+                                      job_i) != downstream[job_j].end()) {
+                            // Merge conflict j into conflict i
+                            for (short job : cardinal_conflicts[j])
+                                cardinal_conflicts[i].push_back(job);
+                            cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
+                            j--;
+                            linked = true;
+                            break;
+                                      }
+                    }
+                }
+            }
+        }
+        std::set<short> cardinal_jobs;
+        for (auto& conflict : cardinal_conflicts)
+            for (short job : conflict)
+                cardinal_jobs.insert(job);
+        // Enrich conflict sets with upstream jobs
+        for (auto& conflict : cardinal_conflicts) {
+            std::set<short> conflict_set(conflict.begin(), conflict.end());
+            for (short job : conflict)
+                for (short pred : upstream[job])
+                    if (cardinal_jobs.count(pred))
+                        conflict_set.insert(pred);
+            conflict.assign(conflict_set.begin(), conflict_set.end());
+        }
+        h_cost = cardinal_conflicts.empty() ? 0 : computeSetCover(cardinal_conflicts);
+    } else {
+        h_cost = 0;
+    }    // std::cout <<"hcost: "<<h_cost<<std::endl;
 }
 // void RCPSPState_CBS::computeRVS() const {
 //     // 1. Clear both pools!

@@ -281,6 +281,13 @@ enum class ConflictType : uint8_t {
     SEMI_CARDINAL = 1,  // some branches raise LB
     NON_CARDINAL  = 2   // no branch raises LB — resolve last
 };
+struct CBSConfig {
+    bool use_conflict_prioritization = true;  // cardinal > semi > non cardinal
+    bool use_heuristic               = true;  // set cover h-cost
+    bool use_upstream_enrichment     = true;  // only relevant when use_heuristic=true
+    // adds upstream cardinal jobs to conflict sets
+};
+CBSConfig setting;
 
 class RCPSPState_CBS {
 public:

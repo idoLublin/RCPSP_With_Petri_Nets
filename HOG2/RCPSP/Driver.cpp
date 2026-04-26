@@ -1322,24 +1322,24 @@ void runBenchmark() {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 49; i++) {
-        for(int j = 1; j < 11; j++) {
+    // for(int i = 1; i < 49; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //
+    //         // 1. CLEAN THE SLATE (Crucial for thread_local variables)
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         solveRCPSP_CBS(i, j, filename, "j30");
+    //         // solveRCPSP_CBS(i, j, filename, "j60");
+    //          // solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
+    // }
 
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_CBS(i, j, filename, "j30");
-            // solveRCPSP_CBS(i, j, filename, "j60");
-             // solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
-
-    // solveRCPSP_CBS(2, 9, filename, "j30");
+    solveRCPSP_CBS(11, 5, filename, "j30");
     // solveRCPSP_BAP(18, 4, filename, "j60");
     // solveRCPSP_CBS(11, 2, filename, "j30");
     // solveRCPSP_CBS(25, 2, filename, "j30");    //
@@ -1350,6 +1350,8 @@ void runBenchmark() {
 
     // solveRCPSP_CBS(43, 2, filename, "j30");
     // solveRCPSP_CBS(44, 2, filename, "j30");
+    std::cout <<debug_cardinal_num <<std::endl;
+
 if (allcorrect) {
     std::cout <<"All correct" <<std::endl;
 }

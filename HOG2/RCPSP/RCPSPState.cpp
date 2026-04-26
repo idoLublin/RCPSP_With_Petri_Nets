@@ -2723,7 +2723,7 @@ short computeMVC(std::vector<std::pair<short,short>>& edges) {
     bnb(edges, 0);
     return best;
 }
-void RCPSPState_CBS::computeLatestStarts(std::array<short, 62>& latest) const {
+void RCPSPState_CBS::computeLatestStarts(std::array<short, 32>& latest) const {
     short makespan = start_times[g_sink_id];
 
     // Initialize all to makespan
@@ -2819,11 +2819,102 @@ short computeSetCover(std::vector<std::vector<short>>& conflicts) {
     bnb(0, {}, 0);
     return best;
 }
+short computeWeightedSetCover(
+    std::vector<std::pair<std::vector<short>, short>>& conflicts) {
 
+    if (conflicts.empty()) return 0;
+
+    // Greedy upper bound
+    std::vector<bool> covered(conflicts.size(), false);
+    short greedy = 0;
+
+    while (true) {
+        int uncovered = -1;
+        for (int i = 0; i < (int)conflicts.size(); i++)
+            if (!covered[i]) { uncovered = i; break; }
+        if (uncovered == -1) break;
+
+        // Pick job that covers most conflicts, weighted by max min_forced
+        short best_job = conflicts[uncovered].first[0];
+        short best_contribution = 0;
+
+        for (short job : conflicts[uncovered].first) {
+            // Find max min_forced across all conflicts this job covers
+            short max_forced = 0;
+            int count = 0;
+            for (int i = 0; i < (int)conflicts.size(); i++) {
+                if (!covered[i]) {
+                    for (short j : conflicts[i].first) {
+                        if (j == job) {
+                            max_forced = std::max(max_forced, conflicts[i].second);
+                            count++;
+                            break;
+                        }
+                    }
+                }
+            }
+            // Contribution = max_forced (cost of selecting this job)
+            // but we want to maximize conflicts covered per unit cost
+            if (max_forced > best_contribution) {
+                best_contribution = max_forced;
+                best_job = job;
+            }
+        }
+
+        // Select best_job
+        greedy += best_contribution;
+        for (int i = 0; i < (int)conflicts.size(); i++)
+            if (!covered[i])
+                for (short j : conflicts[i].first)
+                    if (j == best_job) { covered[i] = true; break; }
+    }
+
+    short best = greedy;
+
+    // Branch and bound
+    std::function<void(int, std::map<short,short>, short)>
+    bnb = [&](int idx, std::map<short,short> selected, short current) {
+        if (current >= best) return;
+
+        // Find first uncovered conflict from idx
+        while (idx < (int)conflicts.size()) {
+            bool is_covered = false;
+            for (short job : conflicts[idx].first)
+                if (selected.count(job)) { is_covered = true; break; }
+            if (!is_covered) break;
+            idx++;
+        }
+
+        if (idx == (int)conflicts.size()) {
+            best = std::min(best, current);
+            return;
+        }
+
+        // Branch on each job in uncovered conflict
+        for (short job : conflicts[idx].first) {
+            // Cost of selecting this job = max min_forced of all conflicts it covers
+            short max_forced = 0;
+            for (int i = idx; i < (int)conflicts.size(); i++) {
+                bool covers = false;
+                for (short j : conflicts[i].first)
+                    if (j == job) { covers = true; break; }
+                if (covers)
+                    max_forced = std::max(max_forced, conflicts[i].second);
+            }
+
+            selected[job] = max_forced;
+            bnb(idx + 1, selected, current + max_forced);
+            selected.erase(job);
+        }
+    };
+
+    bnb(0, {}, 0);
+    return best;
+}
 
 void RCPSPState_CBS::computeRVS() const {
     // Compute latest starts fresh each time — no copy bug
-    std::array<short, 62> latest_starts = {};
+    std::array<short, 32> latest_starts = {};
     computeLatestStarts(latest_starts);
     // for (int i = 0; i < RCPSPex.activities.size(); i++) {
     //     std::cout << "Job " << i+1
@@ -2838,7 +2929,7 @@ void RCPSPState_CBS::computeRVS() const {
     short        best_resource = -1;
     std::vector<short> best_jobs;
     bool         found_any     = false;
-    std::vector<std::vector<short>> cardinal_conflicts;
+    std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
 
     static short max_conflict_seen = 0;
 
@@ -2870,10 +2961,10 @@ void RCPSPState_CBS::computeRVS() const {
 
             if (total_demand <= res.capacity) continue;
 
-            if ((short)current_jobs.size() > max_conflict_seen) {
-                max_conflict_seen = current_jobs.size();
-                std::cout << "New max conflict size: " << max_conflict_seen << "\n";
-            }
+            // if ((short)current_jobs.size() > max_conflict_seen) {
+            //     max_conflict_seen = current_jobs.size();
+            //     std::cout << "New max conflict size: " << max_conflict_seen << "\n";
+            // }
 
             short costly    = 0;
             short min_forced = std::numeric_limits<short>::max();
@@ -2900,9 +2991,10 @@ void RCPSPState_CBS::computeRVS() const {
             else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
             else                                           type = ConflictType::NON_CARDINAL;
 
-            if (type == ConflictType::CARDINAL)
-                cardinal_conflicts.push_back(current_jobs);
-
+            if (type == ConflictType::CARDINAL) {
+                cardinal_conflicts.push_back({current_jobs, min_forced});
+                debug_cardinal_num++;
+            }
             bool is_better = !found_any
                 || (type < best_type)
                 || (type == best_type && t < best_t);
@@ -2930,48 +3022,58 @@ done:
     found_conflict = found_any;
 
     // Fix bug 1: always set h_cost, even when no cardinals
-    if (setting.use_heuristic && setting.use_conflict_prioritization) {
-        // enrichment + set cover
-        // Link conflicts via downstream
-        for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
-            for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
-                bool linked = false;
-                for (short job_i : cardinal_conflicts[i]) {
-                    if (linked) break;
-                    for (short job_j : cardinal_conflicts[j]) {
-                        if (std::find(downstream[job_i].begin(),
-                                      downstream[job_i].end(),
-                                      job_j) != downstream[job_i].end() ||
-                            std::find(downstream[job_j].begin(),
-                                      downstream[job_j].end(),
-                                      job_i) != downstream[job_j].end()) {
-                            // Merge conflict j into conflict i
-                            for (short job : cardinal_conflicts[j])
-                                cardinal_conflicts[i].push_back(job);
-                            cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
-                            j--;
-                            linked = true;
-                            break;
-                                      }
+if (setting.use_heuristic && setting.use_conflict_prioritization) {
+    // Link conflicts via downstream — merge linked conflicts
+    for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
+        for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
+            bool linked = false;
+            for (short job_i : cardinal_conflicts[i].first) {
+                if (linked) break;
+                for (short job_j : cardinal_conflicts[j].first) {
+                    if (std::find(downstream[job_i].begin(),
+                                  downstream[job_i].end(),
+                                  job_j) != downstream[job_i].end() ||
+                        std::find(downstream[job_j].begin(),
+                                  downstream[job_j].end(),
+                                  job_i) != downstream[job_j].end()) {
+                        // Merge conflict j into conflict i
+                        // Keep max min_forced of the two
+                        cardinal_conflicts[i].second = std::max(
+                            cardinal_conflicts[i].second,
+                            cardinal_conflicts[j].second);
+                        for (short job : cardinal_conflicts[j].first)
+                            cardinal_conflicts[i].first.push_back(job);
+                        cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
+                        j--;
+                        linked = true;
+                        break;
                     }
                 }
             }
         }
-        std::set<short> cardinal_jobs;
-        for (auto& conflict : cardinal_conflicts)
-            for (short job : conflict)
-                cardinal_jobs.insert(job);
-        // Enrich conflict sets with upstream jobs
-        for (auto& conflict : cardinal_conflicts) {
-            std::set<short> conflict_set(conflict.begin(), conflict.end());
-            for (short job : conflict)
-                for (short pred : upstream[job])
-                    if (cardinal_jobs.count(pred))
-                        conflict_set.insert(pred);
-            conflict.assign(conflict_set.begin(), conflict_set.end());
-        }
-        h_cost = cardinal_conflicts.empty() ? 0 : computeSetCover(cardinal_conflicts);
-    } else {
+    }
+
+    // Upstream enrichment
+    std::set<short> cardinal_jobs;
+    for (auto& [conflict, weight] : cardinal_conflicts)
+        for (short job : conflict)
+            cardinal_jobs.insert(job);
+
+    for (auto& [conflict, weight] : cardinal_conflicts) {
+        std::set<short> conflict_set(conflict.begin(), conflict.end());
+        for (short job : conflict)
+            for (short pred : upstream[job])
+                if (cardinal_jobs.count(pred))
+                    conflict_set.insert(pred);
+        conflict.assign(conflict_set.begin(), conflict_set.end());
+    }
+
+    h_cost = computeWeightedSetCover(cardinal_conflicts);
+    if (h_cost>0) {
+        std::cout << h_cost << std::endl;
+    }
+}
+    else {
         h_cost = 0;
     }    // std::cout <<"hcost: "<<h_cost<<std::endl;
 }

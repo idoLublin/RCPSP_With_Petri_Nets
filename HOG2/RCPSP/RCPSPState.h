@@ -288,10 +288,10 @@ struct CBSConfig {
     // adds upstream cardinal jobs to conflict sets
 };
 CBSConfig setting;
-
+long debug_cardinal_num=0;
 class RCPSPState_CBS {
 public:
-    std::array<short, 62> start_times;
+    std::array<short, 32> start_times;
     // std::array<short, 32> latest_start_times = {};  // zero initialize
     mutable short t;
     mutable short resourceType;
@@ -305,12 +305,13 @@ public:
     mutable short h_cost = 0;
 
 
+    // short computeWeightedSetCover(const std::vector<std::pair<std::vector<short>, short>> & pairs) const;
 
     void computeRVS() const;
 
     void propagate(short activityId);
     // void propagate_latest(short delayedActivity);
-    void computeLatestStarts(std::array<short, 62>& latest) const;
+    void computeLatestStarts(std::array<short, 32>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
     // In RCPSPState.h - replace span function with:

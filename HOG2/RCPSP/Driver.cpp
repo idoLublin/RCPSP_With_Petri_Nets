@@ -1108,6 +1108,9 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
              << problemType << ","
              << "CBS" << ","
              << opt << ",-1,";
+        if (makespan != opt) {
+            allcorrect = false;
+        }
     } else {
         Bounds b = getBounds(group, exam, problemType);
         file << (b.optimal_known ? (makespan == b.lb ? "True" : "False") : "Unknown") << ","
@@ -1188,7 +1191,6 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
-
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
          << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
@@ -1210,6 +1212,9 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
         // Also write to file
         file << (correct ? "True" : "False") << ","
              << optMakespan << ",";
+        if (!correct) {
+            allcorrect = false;
+        }
     }
     file << "\n";
     return 0;
@@ -1304,7 +1309,7 @@ void runBenchmark() {
          << std::endl;
 
 
-    for(int i = 16; i < 17; i++) {
+    for(int i = 1; i < 5; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)
@@ -1314,14 +1319,15 @@ void runBenchmark() {
             // 2. SOLVE
             // solveRCPSP_TT2_Backward(i, j, filename, "j30");
             solveRCPSP_CBS(i, j, filename, "j30");
-            solveRCPSP_CBS(i, j, filename, "j60");
+            // solveRCPSP_CBS(i, j, filename, "j60");
              // solveRCPSP_TT2(i, j, filename, "j30");
             //solveRCPSP_TT(i, j, filename, "j30");
              // solveRCPSP_Bi(i, j, filename, "j30");
         }
     }
-    //
-    // solveRCPSP_CBS(1, 1, filename, "j30");
+
+    // solveRCPSP_CBS(2, 9, filename, "j30");
+    // solveRCPSP_BAP(18, 4, filename, "j60");
     // solveRCPSP_CBS(11, 2, filename, "j30");
     // solveRCPSP_CBS(25, 2, filename, "j30");    //
     // solveRCPSP_CBS(1, 6, filename, "j30");

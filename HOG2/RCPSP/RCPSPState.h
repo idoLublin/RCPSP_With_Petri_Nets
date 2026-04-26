@@ -284,23 +284,26 @@ enum class ConflictType : uint8_t {
 
 class RCPSPState_CBS {
 public:
-    std::array<short, 32> start_times; // 244 bytes
-    std::array<short, 32> latest_start_times = {};  // zero initialize
+    std::array<short, 62> start_times;
+    // std::array<short, 32> latest_start_times = {};  // zero initialize
     mutable short t;
     mutable short resourceType;
     mutable short num_activities;
     mutable size_t full_RVS_size=0;
     mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
+    mutable bool  found_conflict      = false;
+
     // mutable ConflictType conflict_type = ConflictType::NON_CARDINAL;
     // mutable short        num_costly_branches = 0;
     mutable short h_cost = 0;
 
 
+
     void computeRVS() const;
 
     void propagate(short activityId);
-    void propagate_latest(short delayedActivity);
-
+    // void propagate_latest(short delayedActivity);
+    void computeLatestStarts(std::array<short, 62>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
     // In RCPSPState.h - replace span function with:

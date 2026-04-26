@@ -2017,16 +2017,16 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<R
 });
 }
 inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
-  if (node.full_RVS_size==0) {
-    return true;
-  }
-  else {
-    return false;
-  }
+  return !node.found_conflict;
+
 }
 
 inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
-  return 0;
+  // std::cout << "node makespan: " << state1.start_times[g_sink_id]
+  //           << " h_cost: " << state1.h_cost
+  //           << " f: " << state1.start_times[g_sink_id] + state1.h_cost << "\n";
+return 0;
+  return state1.h_cost;
   // double h = 0;
   // for (const auto& conflict : state1.RVS) {
   //   short min_remaining = SHRT_MAX;
@@ -2039,9 +2039,10 @@ inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CB
   // }
   // return h;
 }
-inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
-  return state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
-}
+  inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+    // return state2.start_times[g_sink_id];
+    return state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
+  }
 inline uint64_t RCPSP_CBS::GetStateHash(const RCPSPState_CBS &node) const {
   std::size_t seed = 0;
 

@@ -2916,15 +2916,9 @@ void RCPSPState_CBS::computeRVS() const {
     // Compute latest starts fresh each time — no copy bug
     std::array<short, 32> latest_starts = {};
     computeLatestStarts(latest_starts);
-    // for (int i = 0; i < RCPSPex.activities.size(); i++) {
-    //     std::cout << "Job " << i+1
-    //               << " early=" << start_times[i]
-    //               << " late=" << latest_starts[i]
-    //               << " float=" << latest_starts[i] - start_times[i] << "\n";
-    // }
     rvs_activities_pool.clear();
 
-    ConflictType best_type     = ConflictType::NON_CARDINAL;
+    float           best_score = -1.0f;
     short        best_t        = -1;
     short        best_resource = -1;
     std::vector<short> best_jobs;
@@ -2986,28 +2980,28 @@ void RCPSPState_CBS::computeRVS() const {
                 }
             }
 
-            ConflictType type;
-            if      (costly == (short)current_jobs.size()) type = ConflictType::CARDINAL;
-            else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
-            else                                           type = ConflictType::NON_CARDINAL;
+            // ConflictType type;
+            // if      (costly == (short)current_jobs.size()) type = ConflictType::CARDINAL;
+            // else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
+            // else                                           type = ConflictType::NON_CARDINAL;
+            float score = (float)costly / (float)current_jobs.size();
 
-            if (type == ConflictType::CARDINAL) {
+            if (score == 1.0f){
                 cardinal_conflicts.push_back({current_jobs, min_forced});
-                debug_cardinal_num++;
+                // debug_cardinal_num++;
             }
             bool is_better = !found_any
-                || (type < best_type)
-                || (type == best_type && t < best_t);
-
+                || (score > best_score)  // BUG: should be score > best_score!
+                || (score == best_score && t < best_t);
             if (is_better) {
                 best_jobs     = current_jobs;
                 best_t        = t;
                 best_resource = resIdx;
-                best_type     = type;
+                best_score     = score;
                 found_any     = true;
             }
             if (setting.use_conflict_prioritization && !setting.use_heuristic) {
-                if (best_type == ConflictType::CARDINAL) goto done; // early exit ok
+                if (best_score == 1) goto done; // early exit ok
             }
         }
     }
@@ -3069,9 +3063,9 @@ if (setting.use_heuristic && setting.use_conflict_prioritization) {
     }
 
     h_cost = computeWeightedSetCover(cardinal_conflicts);
-    if (h_cost>0) {
-        std::cout << h_cost << std::endl;
-    }
+    // if (h_cost>0) {
+    //     std::cout << h_cost << std::endl;
+    // }
 }
     else {
         h_cost = 0;

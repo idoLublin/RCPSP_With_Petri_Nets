@@ -4,7 +4,7 @@
 #include "petriclasses.h"
 
 
-
+#include "Globals.h"
 using json = nlohmann::json;  // alias for nlohmann::json
 
 

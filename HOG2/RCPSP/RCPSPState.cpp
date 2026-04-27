@@ -3174,8 +3174,96 @@ void RCPSPState_CBS::propagate(short activityId) {
 
 // }
 // Definition - only in ONE .cpp file
-short g_sink_id = 0;
-short g_num_activities = 0;
+
+// ******
+void precomputeResourceInfo() {
+  resource_info.clear();
+  resource_info.resize(RCPSPex.resources.size());
+
+  for (int resIdx = 0; resIdx < RCPSPex.resources.size(); resIdx++) {
+    resource_info[resIdx].capacity = RCPSPex.resources[resIdx].second;
+    std::string resName = RCPSPex.resources[resIdx].first;
+
+    for (int i = 0; i < RCPSPex.activities.size(); i++) {
+      if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
+      short demand = RCPSPex.activities[i].resource_demands.at(resName);
+      if (demand == 0) continue;
+      if (RCPSPex.activities[i].duration == 0) continue;
+
+      resource_info[resIdx].activity_indices.push_back(i);
+      resource_info[resIdx].demands.push_back(demand);
+
+    }
+  }
+}
+// void precomputeDownstream();
+
+void precomputeDownstream() {
+  downstream.clear();
+  downstream.resize(RCPSPex.activities.size());
+
+
+  for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    downstream[i].clear(); // clear each inner vector too
+
+    // Run a "mock propagate" from activity i
+    // collect all activities that would be affected
+    std::vector<bool> visited(RCPSPex.activities.size(), false);
+    std::queue<short> queue;
+    queue.push(i);
+
+    while (!queue.empty()) {
+      short curr = queue.front();
+      queue.pop();
+
+      // Find direct successors of curr
+      for (int j = curr + 1; j < RCPSPex.activities.size(); j++) {
+        for (short dep : RCPSPex.backword_dependencies[j]) {
+          if (dep - 1 == curr && !visited[j]) {
+            visited[j] = true;
+            downstream[i].push_back(j);
+            queue.push(j);
+            break;
+          }
+        }
+      }
+    }
+    // Already in topological order since j > curr always
+    std::sort(downstream[i].begin(), downstream[i].end());
+
+  }
+}
+
+void precomputeUpstream() {
+  upstream.clear();
+  upstream.resize(RCPSPex.activities.size());
+
+  for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    upstream[i].clear();
+
+    std::vector<bool> visited(RCPSPex.activities.size(), false);
+    std::queue<short> queue;
+    queue.push(i);
+
+    while (!queue.empty()) {
+      short curr = queue.front();
+      queue.pop();
+
+      // Find direct predecessors of curr — reverse of downstream
+      for (short dep : RCPSPex.backword_dependencies[curr]) {
+        short pred = dep - 1;
+        if (!visited[pred]) {
+          visited[pred] = true;
+          upstream[i].push_back(pred);
+          queue.push(pred);
+        }
+      }
+    }
+
+    // Reverse topological order — largest index first
+    std::sort(upstream[i].begin(), upstream[i].end(), std::greater<short>());
+  }
+}
 RCPSPState_CBS::RCPSPState_CBS() {
     // ── Forward pass: earliest start times ──────────────────────────────
     std::map<int, int> earlyStartMap;

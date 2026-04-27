@@ -2,7 +2,7 @@
 // Created by idol on 29/12/2024.
 //
 // Your First C++ Program
-
+#include "Globals.h"
 #include <iostream>
 #include "RCPSPState.h"
 #include "RCPSPState.cpp"
@@ -53,9 +53,9 @@ namespace fs = std::filesystem;
 void runBenchmark();
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
-std::atomic<bool> cancel_requested(false);
-
-std::atomic<bool> stop_printing1(false); // Flag to stop the printing thread
+// std::atomic<bool> cancel_requested(false);
+//
+// std::atomic<bool> stop_printing1(false); // Flag to stop the printing thread
 
 // void printNetworkSize1() {
 //     while (!stop_printing1) {
@@ -81,7 +81,6 @@ int solveRCPSP_Bi();
 
 #include <windows.h>
 #include <psapi.h>
-bool allcorrect=true;
 long getPeakMemoryKB() {
     PROCESS_MEMORY_COUNTERS pmc;
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
@@ -1247,9 +1246,12 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 
     return newFilename;
 }
-
+// void settingglobals() {
+//
+// }
 
  int main() {
+    // settingglobals();
      runBenchmark();
 
 

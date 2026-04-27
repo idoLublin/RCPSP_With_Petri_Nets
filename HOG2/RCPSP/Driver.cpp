@@ -1263,7 +1263,7 @@ void runBenchmark() {
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
     setting.use_first_conflict = false;  // cardinal > semi > non cardinal
     // setting.heuristic = HeuristicType::NONE;   // no heuristic
-    setting.heuristic = HeuristicType::CG;     // cardinal hitting set
+    setting.heuristic = HeuristicType::CG;    // cardinal hitting set
     // setting.heuristic = HeuristicType::DG;     // dependency graph
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;

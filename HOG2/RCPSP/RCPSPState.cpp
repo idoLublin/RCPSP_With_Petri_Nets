@@ -3183,48 +3183,95 @@ if (setting.heuristic == HeuristicType::NONE) {
 }
 else if (setting.heuristic == HeuristicType::CG) {
     // Link conflicts via downstream
-    for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
-        for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
-            bool linked = false;
-            for (short job_i : cardinal_conflicts[i].first) {
-                if (linked) break;
-                for (short job_j : cardinal_conflicts[j].first) {
-                    if (std::find(downstream[job_i].begin(),
-                                  downstream[job_i].end(),
-                                  job_j) != downstream[job_i].end() ||
-                        std::find(downstream[job_j].begin(),
-                                  downstream[job_j].end(),
-                                  job_i) != downstream[job_j].end()) {
-                        cardinal_conflicts[i].second = std::max(
-                            cardinal_conflicts[i].second,
-                            cardinal_conflicts[j].second);
-                        for (short job : cardinal_conflicts[j].first)
-                            cardinal_conflicts[i].first.push_back(job);
-                        cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
-                        j--;
-                        linked = true;
-                        break;
+    // for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
+    //     for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
+    //         bool linked = false;
+    //         for (short job_i : cardinal_conflicts[i].first) {
+    //             if (linked) break;
+    //             for (short job_j : cardinal_conflicts[j].first) {
+    //                 if (std::find(downstream[job_i].begin(),
+    //                               downstream[job_i].end(),
+    //                               job_j) != downstream[job_i].end() ||
+    //                     std::find(downstream[job_j].begin(),
+    //                               downstream[job_j].end(),
+    //                               job_i) != downstream[job_j].end()) {
+    //                     cardinal_conflicts[i].second = std::max(
+    //                         cardinal_conflicts[i].second,
+    //                         cardinal_conflicts[j].second);
+    //                     for (short job : cardinal_conflicts[j].first)
+    //                         cardinal_conflicts[i].first.push_back(job);
+    //                     cardinal_conflicts.erase(cardinal_conflicts.begin() + j);
+    //                     j--;
+    //                     linked = true;
+    //                     break;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+    //
+    // // Upstream enrichment
+    // std::set<short> cardinal_jobs;
+    // for (auto& [conflict, weight] : cardinal_conflicts)
+    //     for (short job : conflict)
+    //         cardinal_jobs.insert(job);
+    //
+    // for (auto& [conflict, weight] : cardinal_conflicts) {
+    //     std::set<short> conflict_set(conflict.begin(), conflict.end());
+    //     for (short job : conflict)
+    //         for (short pred : upstream[job])
+    //             if (cardinal_jobs.count(pred))
+    //                 conflict_set.insert(pred);
+    //     conflict.assign(conflict_set.begin(), conflict_set.end());
+    // }
+    // Upstream enrichment (Corrected for Admissibility & Common Ancestors)
+    for (auto& [conflict, weight] : cardinal_conflicts) {
+
+        // 1. Keep a copy of the original jobs in this specific conflict
+        std::vector<short> original_jobs = conflict;
+
+        std::set<short> union_ancestors;
+        std::set<short> intersection_ancestors;
+        bool first_job = true;
+
+        // 2. Find the Union (all possible ancestors) and Intersection (common ancestors)
+        for (short job : original_jobs) {
+            // Assuming upstream[job] gives us the ancestors.
+            std::set<short> current_ancestors(upstream[job].begin(), upstream[job].end());
+
+            // Build the union of all ancestors
+            for (short pred : current_ancestors) {
+                union_ancestors.insert(pred);
+            }
+
+            // Build the intersection of all ancestors
+            if (first_job) {
+                intersection_ancestors = current_ancestors;
+                first_job = false;
+            } else {
+                std::set<short> new_intersection;
+                for (short pred : current_ancestors) {
+                    if (intersection_ancestors.count(pred)) {
+                        new_intersection.insert(pred);
                     }
                 }
+                intersection_ancestors = new_intersection;
             }
         }
+
+        // 3. Add valid ancestors to the conflict set
+        std::set<short> final_conflict_set(original_jobs.begin(), original_jobs.end());
+
+        for (short pred : union_ancestors) {
+            // ONLY add if it is NOT a common ancestor to ALL original jobs
+            if (intersection_ancestors.count(pred) == 0) {
+                final_conflict_set.insert(pred);
+            }
+        }
+
+        // 4. Update the actual conflict vector
+        conflict.assign(final_conflict_set.begin(), final_conflict_set.end());
     }
-
-    // Upstream enrichment
-    std::set<short> cardinal_jobs;
-    for (auto& [conflict, weight] : cardinal_conflicts)
-        for (short job : conflict)
-            cardinal_jobs.insert(job);
-
-    for (auto& [conflict, weight] : cardinal_conflicts) {
-        std::set<short> conflict_set(conflict.begin(), conflict.end());
-        for (short job : conflict)
-            for (short pred : upstream[job])
-                if (cardinal_jobs.count(pred))
-                    conflict_set.insert(pred);
-        conflict.assign(conflict_set.begin(), conflict_set.end());
-    }
-
     h_cost = cardinal_conflicts.empty() ? 0 : computeWeightedSetCover(cardinal_conflicts);
 }
 else if (setting.heuristic == HeuristicType::DG) {

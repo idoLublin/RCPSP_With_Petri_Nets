@@ -1009,14 +1009,20 @@ struct InstanceParams {
 
 InstanceParams getParams(int group) {
     // group is 1-based, 1-48
-    static const float NC_vals[] = {1.5f, 1.8f, 2.1f, 2.4f};
-    static const float RF_vals[] = {0.25f, 0.50f, 0.75f, 1.0f};
-    static const float RS_vals[] = {0.2f, 0.5f, 0.7f, 1.0f};
+    static const float NC_vals[] = {1.5f, 1.8f, 2.1f};         // 3 values
+    static const float RF_vals[] = {0.25f, 0.50f, 0.75f, 1.0f}; // 4 values
+    static const float RS_vals[] = {0.2f, 0.5f, 0.7f, 1.0f};    // 4 values
 
-    int g = group - 1;  // 0-based
-    int rs_idx = (g % 20) / 10;      // changes every 10
-    int rf_idx = (g % 80) / 20;      // changes every 20
-    int nc_idx = g / 80;             // changes every 80
+    int g = group - 1;  // 0-based index: 0 to 47
+
+    // RS changes every 1: Cycle of 4
+    int rs_idx = g % 4;
+
+    // RF changes every 4: Cycle of 4 (4 * 4 = 16)
+    int rf_idx = (g / 4) % 4;
+
+    // NC changes every 16: 3 total values (16 * 3 = 48)
+    int nc_idx = g / 16;
 
     return {NC_vals[nc_idx], RF_vals[rf_idx], RS_vals[rs_idx]};
 }
@@ -1263,7 +1269,7 @@ void runBenchmark() {
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
     setting.use_first_conflict = false;  // cardinal > semi > non cardinal
     // setting.heuristic = HeuristicType::NONE;   // no heuristic
-    setting.heuristic = HeuristicType::CG;    // cardinal hitting set
+    setting.heuristic = HeuristicType::CG;   // cardinal hitting set
     // setting.heuristic = HeuristicType::DG;     // dependency graph
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;

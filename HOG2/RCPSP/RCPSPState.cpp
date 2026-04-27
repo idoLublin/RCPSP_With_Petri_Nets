@@ -2819,68 +2819,88 @@ short computeSetCover(std::vector<std::vector<short>>& conflicts) {
     bnb(0, {}, 0);
     return best;
 }
+
 short computeWeightedSetCover(
-    std::vector<std::pair<std::vector<short>, short>>& conflicts) {
+    const std::vector<std::pair<std::vector<short>, short>>& conflicts) {
 
     if (conflicts.empty()) return 0;
 
-    // Greedy upper bound
+    // 1. Find the maximum job ID to size our fast lookup vector
+    short max_job_id = 0;
+    for (const auto& conflict : conflicts) {
+        for (short job : conflict.first) {
+            max_job_id = std::max(max_job_id, job);
+        }
+    }
+
+    // 2. Greedy Upper Bound (Fixed to minimize cost-per-coverage)
     std::vector<bool> covered(conflicts.size(), false);
-    short greedy = 0;
+    short greedy_cost = 0;
 
     while (true) {
         int uncovered = -1;
-        for (int i = 0; i < (int)conflicts.size(); i++)
+        for (int i = 0; i < (int)conflicts.size(); i++) {
             if (!covered[i]) { uncovered = i; break; }
+        }
         if (uncovered == -1) break;
 
-        // Pick job that covers most conflicts, weighted by max min_forced
         short best_job = conflicts[uncovered].first[0];
-        short best_contribution = 0;
+        short best_job_cost = 0;
+        double best_ratio = std::numeric_limits<double>::max();
 
         for (short job : conflicts[uncovered].first) {
-            // Find max min_forced across all conflicts this job covers
             short max_forced = 0;
-            int count = 0;
+            int conflicts_covered = 0;
+
             for (int i = 0; i < (int)conflicts.size(); i++) {
                 if (!covered[i]) {
                     for (short j : conflicts[i].first) {
                         if (j == job) {
                             max_forced = std::max(max_forced, conflicts[i].second);
-                            count++;
+                            conflicts_covered++;
                             break;
                         }
                     }
                 }
             }
-            // Contribution = max_forced (cost of selecting this job)
-            // but we want to maximize conflicts covered per unit cost
-            if (max_forced > best_contribution) {
-                best_contribution = max_forced;
+
+            // Ratio = Cost / Benefit (We want the lowest ratio)
+            double ratio = (double)max_forced / conflicts_covered;
+            if (ratio < best_ratio) {
+                best_ratio = ratio;
+                best_job_cost = max_forced;
                 best_job = job;
             }
         }
 
-        // Select best_job
-        greedy += best_contribution;
-        for (int i = 0; i < (int)conflicts.size(); i++)
-            if (!covered[i])
-                for (short j : conflicts[i].first)
+        // Apply chosen job
+        // --> CHANGE TO std::max(greedy_cost, best_job_cost) IF MAKESPAN
+        greedy_cost += best_job_cost;
+
+        for (int i = 0; i < (int)conflicts.size(); i++) {
+            if (!covered[i]) {
+                for (short j : conflicts[i].first) {
                     if (j == best_job) { covered[i] = true; break; }
+                }
+            }
+        }
     }
 
-    short best = greedy;
+    short best = greedy_cost;
 
-    // Branch and bound
-    std::function<void(int, std::map<short,short>, short)>
-    bnb = [&](int idx, std::map<short,short> selected, short current) {
-        if (current >= best) return;
+    // 3. Optimized Branch & Bound
+    // Using a single boolean vector passed by reference to eliminate allocations
+    std::vector<bool> selected(max_job_id + 1, false);
 
-        // Find first uncovered conflict from idx
+    std::function<void(int, short)> bnb = [&](int idx, short current) {
+        if (current >= best) return; // Prune
+
+        // Find first uncovered conflict
         while (idx < (int)conflicts.size()) {
             bool is_covered = false;
-            for (short job : conflicts[idx].first)
-                if (selected.count(job)) { is_covered = true; break; }
+            for (short job : conflicts[idx].first) {
+                if (selected[job]) { is_covered = true; break; }
+            }
             if (!is_covered) break;
             idx++;
         }
@@ -2890,31 +2910,129 @@ short computeWeightedSetCover(
             return;
         }
 
-        // Branch on each job in uncovered conflict
+        // Branch on each job in the uncovered conflict
         for (short job : conflicts[idx].first) {
-            // Cost of selecting this job = max min_forced of all conflicts it covers
             short max_forced = 0;
             for (int i = idx; i < (int)conflicts.size(); i++) {
                 bool covers = false;
-                for (short j : conflicts[i].first)
+                for (short j : conflicts[i].first) {
                     if (j == job) { covers = true; break; }
-                if (covers)
+                }
+                if (covers) {
                     max_forced = std::max(max_forced, conflicts[i].second);
+                }
             }
 
-            selected[job] = max_forced;
-            bnb(idx + 1, selected, current + max_forced);
-            selected.erase(job);
+            // Backtracking: Apply -> Recurse -> Undo
+            selected[job] = true;
+
+            // --> CHANGE TO std::max(current, max_forced) IF MAKESPAN
+            bnb(idx + 1, current + max_forced);
+
+            selected[job] = false;
         }
     };
 
-    bnb(0, {}, 0);
+    bnb(0, 0);
     return best;
 }
 
+// short computeWeightedSetCover(
+//     std::vector<std::pair<std::vector<short>, short>>& conflicts) {
+//
+//     if (conflicts.empty()) return 0;
+//
+//     // Greedy upper bound
+//     std::vector<bool> covered(conflicts.size(), false);
+//     short greedy = 0;
+//
+//     while (true) {
+//         int uncovered = -1;
+//         for (int i = 0; i < (int)conflicts.size(); i++)
+//             if (!covered[i]) { uncovered = i; break; }
+//         if (uncovered == -1) break;
+//
+//         // Pick job that covers most conflicts, weighted by max min_forced
+//         short best_job = conflicts[uncovered].first[0];
+//         short best_contribution = 0;
+//
+//         for (short job : conflicts[uncovered].first) {
+//             // Find max min_forced across all conflicts this job covers
+//             short max_forced = 0;
+//             int count = 0;
+//             for (int i = 0; i < (int)conflicts.size(); i++) {
+//                 if (!covered[i]) {
+//                     for (short j : conflicts[i].first) {
+//                         if (j == job) {
+//                             max_forced = std::max(max_forced, conflicts[i].second);
+//                             count++;
+//                             break;
+//                         }
+//                     }
+//                 }
+//             }
+//             // Contribution = max_forced (cost of selecting this job)
+//             // but we want to maximize conflicts covered per unit cost
+//             if (max_forced > best_contribution) {
+//                 best_contribution = max_forced;
+//                 best_job = job;
+//             }
+//         }
+//
+//         // Select best_job
+//         greedy += best_contribution;
+//         for (int i = 0; i < (int)conflicts.size(); i++)
+//             if (!covered[i])
+//                 for (short j : conflicts[i].first)
+//                     if (j == best_job) { covered[i] = true; break; }
+//     }
+//
+//     short best = greedy;
+//
+//     // Branch and bound
+//     std::function<void(int, std::map<short,short>, short)>
+//     bnb = [&](int idx, std::map<short,short> selected, short current) {
+//         if (current >= best) return;
+//
+//         // Find first uncovered conflict from idx
+//         while (idx < (int)conflicts.size()) {
+//             bool is_covered = false;
+//             for (short job : conflicts[idx].first)
+//                 if (selected.count(job)) { is_covered = true; break; }
+//             if (!is_covered) break;
+//             idx++;
+//         }
+//
+//         if (idx == (int)conflicts.size()) {
+//             best = std::min(best, current);
+//             return;
+//         }
+//
+//         // Branch on each job in uncovered conflict
+//         for (short job : conflicts[idx].first) {
+//             // Cost of selecting this job = max min_forced of all conflicts it covers
+//             short max_forced = 0;
+//             for (int i = idx; i < (int)conflicts.size(); i++) {
+//                 bool covers = false;
+//                 for (short j : conflicts[i].first)
+//                     if (j == job) { covers = true; break; }
+//                 if (covers)
+//                     max_forced = std::max(max_forced, conflicts[i].second);
+//             }
+//
+//             selected[job] = max_forced;
+//             bnb(idx + 1, selected, current + max_forced);
+//             selected.erase(job);
+//         }
+//     };
+//
+//     bnb(0, {}, 0);
+//     return best;
+// }
+
 void RCPSPState_CBS::computeRVS() const {
 
-    if (setting.use_first_conflict) {
+    if (!setting.use_conflict_prioritization &&setting.use_first_conflict) {
         rvs_activities_pool.clear();
         for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
             const ResourceInfo& res = resource_info[resIdx];
@@ -2946,7 +3064,6 @@ void RCPSPState_CBS::computeRVS() const {
                 rvs_activities_pool = std::move(current_jobs);
                 this->t      = t;
                 resourceType = resIdx;
-                num_activities = (short)rvs_activities_pool.size();
                 found_conflict = true;
                 h_cost = 0;
                 return;
@@ -2963,14 +3080,15 @@ void RCPSPState_CBS::computeRVS() const {
     computeLatestStarts(latest_starts);
     rvs_activities_pool.clear();
 
-    float           best_score = -1.0f;
+                 // best_score = -1.0f;
+    float        best_score = -1.0f;
     short        best_t        = -1;
     short        best_resource = -1;
     std::vector<short> best_jobs;
     bool         found_any     = false;
     std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
 
-    static short max_conflict_seen = 0;
+    // static short max_conflict_seen = 0;
 
     for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
         const ResourceInfo& res = resource_info[resIdx];
@@ -3030,7 +3148,7 @@ void RCPSPState_CBS::computeRVS() const {
             // else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
             // else                                           type = ConflictType::NON_CARDINAL;
             float score = (float)costly / (float)current_jobs.size();
-
+            conflict_number++;
             if (score == 1.0f){
                 cardinal_conflicts.push_back({current_jobs, min_forced});
                 debug_cardinal_num++;
@@ -3057,7 +3175,6 @@ done:
     rvs_activities_pool = std::move(best_jobs);
     t              = best_t;
     resourceType   = best_resource;
-    num_activities = (short)rvs_activities_pool.size();
     found_conflict = found_any;
 
     // Fix bug 1: always set h_cost, even when no cardinals
@@ -3323,6 +3440,7 @@ RCPSPState_CBS::RCPSPState_CBS() {
 RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity, short conflict_t) {
     // 1. Copy parent
     start_times = prev.start_times;
+    // depth=prev.depth+1;
     // start_times = prev.latest_start_times;
     // sink_id = prev.sink_id;
 
@@ -3332,7 +3450,7 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
     // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
     // 2. Iterate directly over the 'act' values
     std::span<const short> acts = prev.rvs_activities_pool;
-    for (short j = 0; j < prev.num_activities; j++) {
+    for (short j = 0; j < prev.rvs_activities_pool.size(); j++) {
         short act = acts[j];
         if (act == delayedActivity) continue;
         new_start = std::min(new_start,

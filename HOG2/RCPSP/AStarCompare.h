@@ -93,11 +93,13 @@ template<>
 struct AStarCompareWithF<RCPSPState_CBS> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
-        if (i1.f != i2.f) return i1.f > i2.f;
-        if (i1.g != i2.g) return i1.g < i2.g;
-        if (i1.data.best_score != i2.data.best_score)
-            return i1.data.best_score < i2.data.best_score;
-        return i1.data.depth < i2.data.depth;
+        if (i1.f != i2.f) return i1.f > i2.f;//less
+        if (i1.g != i2.g) return i1.g < i2.g;//more
+        // if (i1.data.best_score != i2.data.best_score)
+        //     return i1.data.best_score > i2.data.best_score;
+        // return i1.data.depth < i2.data.depth;
+        return i1.data.conflict_number > i2.data.conflict_number;
+        return i1.g < i2.g;
     }
 };
 

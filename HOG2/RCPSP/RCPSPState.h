@@ -259,19 +259,15 @@ inline size_t CONFLICT_SIZE = 32; // set this before creating any object
 class RCPSPState_CBS {
 public:
     std::array<short, 32> start_times;
-    // std::array<short, 32> latest_start_times = {};  // zero initialize
     mutable short t;
     mutable short resourceType;
-    mutable short num_activities;
-    mutable size_t full_RVS_size=0;
+    // mutable short num_activities;
     mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
     mutable bool  found_conflict      = false;
-    short best_score=0;
-    short depth=0;
-    // mutable ConflictType conflict_type = ConflictType::NON_CARDINAL;
-    // mutable short        num_costly_branches = 0;
+    // mutable float best_score=0;
+    // short depth=0;
     mutable short h_cost = 0;
-
+    mutable short conflict_number=0;
 
     // short computeWeightedSetCover(const std::vector<std::pair<std::vector<short>, short>> & pairs) const;
 
@@ -282,10 +278,7 @@ public:
     void computeLatestStarts(std::array<short, 32>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
-    // In RCPSPState.h - replace span function with:
-    // const short* get_conflict_start(const Conflict& c) const {
-    //     return rvs_activities_pool.data() + c.activity_start_index;
-    // }
+
     std::span<const short> get_conflict_activities(const Conflict& c) const {
         return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);
     }
@@ -335,17 +328,17 @@ public:
 };
 #include "../../HOG2/generic/TemplateAStar.h"
 
-template<>
-struct AStarCompareWithF<RCPSPState_CBS> {
-    bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
-                    const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
-        if (i1.f != i2.f) return i1.f > i2.f;
-        if (i1.g != i2.g) return i1.g < i2.g;
-        if (i1.data.best_score != i2.data.best_score)
-            return i1.data.best_score < i2.data.best_score;
-        return i1.data.depth < i2.data.depth;
-    }
-};
+// template<>
+// struct AStarCompareWithF<RCPSPState_CBS> {
+//     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
+//                     const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
+//         if (i1.f != i2.f) return i1.f > i2.f;
+//         if (i1.g != i2.g) return i1.g < i2.g;
+//         if (i1.data.best_score != i2.data.best_score)
+//             return i1.data.best_score < i2.data.best_score;
+//         return i1.data.depth < i2.data.depth;
+//     }
+// };
 // IN YOUR HEADER FILE (.h)
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,

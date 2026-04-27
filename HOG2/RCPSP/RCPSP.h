@@ -1911,7 +1911,7 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<R
   // Use the helper to stream activities directly out of the global pool
   // const Conflict& first = nodeID.rvs_activities_pool;
   std::span<const short> acts = nodeID.rvs_activities_pool;
-  for (short j = 0; j < nodeID.num_activities; j++) {
+  for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
     neighbors.emplace_back(nodeID, acts[j], nodeID.t);
   }
 //   std::sort(neighbors.begin(), neighbors.end(),
@@ -1925,34 +1925,16 @@ inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS
 }
 
 inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
-  // std::cout << "node makespan: " << state1.start_times[g_sink_id]
-  //           << " h_cost: " << state1.h_cost
-  //           << " f: " << state1.start_times[g_sink_id] + state1.h_cost << "\n";
-// return 0;
   return state1.h_cost;
-  // double h = 0;
-  // for (const auto& conflict : state1.RVS) {
-  //   short min_remaining = SHRT_MAX;
-  //   for (const short act : conflict.activities) {
-  //     short remaining = state1.start_times[act] + state1.start_times[act] - conflict.t;
-  //     min_remaining = std::min(min_remaining, remaining);
-  //   }
-  //   h += min_remaining;
-  //   // h = std::max((int)h,(int)min_remaining);
-  // }
-  // return h;
 }
   inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
-    // return state2.start_times[g_sink_id];
     return state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
   }
 inline uint64_t RCPSP_CBS::GetStateHash(const RCPSPState_CBS &node) const {
   std::size_t seed = 0;
-
   for (const auto& st : node.start_times) {
     seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-
   return seed;
 }
 

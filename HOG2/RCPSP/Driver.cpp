@@ -9,7 +9,9 @@
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
 #include "../../HOG2/generic/EPEAStar.h"
-#include <filesystem> // <--- 1. Make sure this is here
+#include "AStarCompare.h"
+
+#include <filesystem>
 namespace fs = std::filesystem;
 #include "RCPSP.h"
 //****importent i changed GLUtil.h with recVec == operator abit****//
@@ -1042,8 +1044,7 @@ debug_cardinal_num=0;
     RCPSPState_CBS first;
     // first.computeRVS();
     RCPSPState_CBS last = first;
-    last.full_RVS_size=0;
-    last.num_activities=0;
+    // last.num_activities=0;
     last.resourceType=-1;
     last.rvs_activities_pool.clear();
 
@@ -1139,22 +1140,17 @@ debug_cardinal_num=0;
 
 int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
     std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
-    setProblemSize(problemType);  // CONFLICT_SIZE = 30
-
-    // getPetri(petri, group, exam, problemType);
+    setProblemSize(problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
     RCPSP_CBS as1;
     resource_info.clear();
     downstream.clear();
-    precomputeDownstream(); // call once after loading
+    precomputeDownstream();
     precomputeResourceInfo();
     RCPSPState_CBS first;
-    // first.computeRVS();
     RCPSPState_CBS last = first;
-    last.full_RVS_size=0;
     last.t=0;
     last.resourceType=-1;
-    last.full_RVS_size=0;
 
 
     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
@@ -1228,8 +1224,6 @@ int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::
     return 0;
 }
 
-// Load optimal makespan from j30opt.sm
-
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
     if (!fs::exists(folder)) {
@@ -1246,15 +1240,10 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 
     return newFilename;
 }
-// void settingglobals() {
-//
-// }
+
 
  int main() {
-    // settingglobals();
      runBenchmark();
-
-
     return 0;
 }
 
@@ -1263,25 +1252,20 @@ void runBenchmark() {
     std::string folder = "new_results";
     std::string baseName = "output!!!!!!_";
     std::string extension = ".csv";
-
     std::string filename = getNextFilename(folder, baseName, extension);
-
-    // Create and write to file
     std::ofstream file(filename);
     // Open file stream
-
-    // Check if file is open
     if (!file.is_open()) {
         std::cerr << "Error opening file!" << std::endl;
         return;
     }
 
-    // Write header
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    // Wherever you initialize CBSConfig:
+    setting.use_first_conflict = false;  // cardinal > semi > non cardinal
     // setting.heuristic = HeuristicType::NONE;   // no heuristic
-    setting.heuristic = HeuristicType::CG;     // cardinal set cover
+    setting.heuristic = HeuristicType::CG;     // cardinal hitting set
     // setting.heuristic = HeuristicType::DG;     // dependency graph
+
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
@@ -1295,8 +1279,6 @@ void runBenchmark() {
     }
     for(int i = 1; i < 5; i++) {
         for(int j = 1; j < 11; j++) {
-
-            // 1. CLEAN THE SLATE (Crucial for thread_local variables)
             petri.reset();
             RCPSPex.reset();
 
@@ -1311,16 +1293,7 @@ void runBenchmark() {
     }
 
     // solveRCPSP_CBS(6, 7, filename, "j30");
-    // solveRCPSP_BAP(18, 4, filename, "j60");
-    // solveRCPSP_CBS(11, 2, filename, "j30");
-    // solveRCPSP_CBS(25, 2, filename, "j30");    //
-    // solveRCPSP_CBS(1, 6, filename, "j30");
-    // solveRCPSP_CBS(18, 9, filename, "j30");
-    // solveRCPSP_TT2(18, 9, filename, "j30");
-    // solveRCPSP_CBS(5, 1, filename, "j30");
 
-    // solveRCPSP_CBS(43, 2, filename, "j30");
-    // solveRCPSP_CBS(44, 2, filename, "j30");
     std::cout <<debug_cardinal_num <<std::endl;
 
 if (allcorrect) {
@@ -1435,6 +1408,8 @@ void solver_group(int startGroup,const std::string& filename) {
 
     }
 }
+
+
 // int main(int argc, char *argv[]) {
 //     // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
 //     int startGroup = std::stoi(argv[1]);

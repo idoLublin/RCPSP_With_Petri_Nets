@@ -368,7 +368,6 @@ template<>
 struct AStarCompareWithF<RCPSPState_CBS> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
-        // std::cout<<"sss";
         if (i1.f != i2.f) return i1.f > i2.f;
         if (i1.g != i2.g) return i1.g < i2.g;
         if (i1.data.best_score != i2.data.best_score)

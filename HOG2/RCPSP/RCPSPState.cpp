@@ -2913,6 +2913,51 @@ short computeWeightedSetCover(
 }
 
 void RCPSPState_CBS::computeRVS() const {
+
+    if (setting.use_first_conflict) {
+        rvs_activities_pool.clear();
+        for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
+            const ResourceInfo& res = resource_info[resIdx];
+
+            std::vector<short> events;
+            events.reserve(res.activity_indices.size());
+            for (short actIdx : res.activity_indices)
+                events.push_back(start_times[actIdx]);
+            std::sort(events.begin(), events.end());
+            events.erase(std::unique(events.begin(), events.end()), events.end());
+
+            for (short t : events) {
+                short total_demand = 0;
+                std::vector<short> current_jobs;
+
+                for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+                    short actIdx = res.activity_indices[j];
+                    short start  = start_times[actIdx];
+                    short finish = start + RCPSPex.activities[actIdx].duration;
+                    if (start <= t && finish > t) {
+                        total_demand += res.demands[j];
+                        current_jobs.push_back(actIdx);
+                    }
+                }
+
+                if (total_demand <= res.capacity) continue;
+
+                // First conflict found — take it immediately
+                rvs_activities_pool = std::move(current_jobs);
+                this->t      = t;
+                resourceType = resIdx;
+                num_activities = (short)rvs_activities_pool.size();
+                found_conflict = true;
+                h_cost = 0;
+                return;
+            }
+        }
+        // No conflict found
+        found_conflict = false;
+        h_cost = 0;
+        return;
+    }
+
     // Compute latest starts fresh each time — no copy bug
     std::array<short, 32> latest_starts = {};
     computeLatestStarts(latest_starts);
@@ -3000,7 +3045,7 @@ void RCPSPState_CBS::computeRVS() const {
                 best_score     = score;
                 found_any     = true;
             }
-            if (setting.use_conflict_prioritization && !setting.use_heuristic) {
+            if (setting.use_conflict_prioritization && setting.use_first_conflict) {
                 if (best_score == 1) goto done; // early exit ok
             }
         }
@@ -3016,8 +3061,11 @@ done:
     found_conflict = found_any;
 
     // Fix bug 1: always set h_cost, even when no cardinals
-if (setting.use_heuristic && setting.use_conflict_prioritization) {
-    // Link conflicts via downstream — merge linked conflicts
+if (setting.heuristic == HeuristicType::NONE) {
+    h_cost = 0;
+}
+else if (setting.heuristic == HeuristicType::CG) {
+    // Link conflicts via downstream
     for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
         for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
             bool linked = false;
@@ -3030,8 +3078,6 @@ if (setting.use_heuristic && setting.use_conflict_prioritization) {
                         std::find(downstream[job_j].begin(),
                                   downstream[job_j].end(),
                                   job_i) != downstream[job_j].end()) {
-                        // Merge conflict j into conflict i
-                        // Keep max min_forced of the two
                         cardinal_conflicts[i].second = std::max(
                             cardinal_conflicts[i].second,
                             cardinal_conflicts[j].second);
@@ -3062,15 +3108,21 @@ if (setting.use_heuristic && setting.use_conflict_prioritization) {
         conflict.assign(conflict_set.begin(), conflict_set.end());
     }
 
-    h_cost = computeWeightedSetCover(cardinal_conflicts);
+    h_cost = cardinal_conflicts.empty() ? 0 : computeWeightedSetCover(cardinal_conflicts);
+}
+else if (setting.heuristic == HeuristicType::DG) {
+    h_cost = 0; // placeholder
+}
+    // h_cost = computeWeightedSetCover(cardinal_conflicts);
     // if (h_cost>0) {
     //     std::cout << h_cost << std::endl;
     // }
+
 }
-    else {
-        h_cost = 0;
-    }    // std::cout <<"hcost: "<<h_cost<<std::endl;
-}
+    // else {
+    //     h_cost = 0;
+    // }    // std::cout <<"hcost: "<<h_cost<<std::endl;
+// }
 // void RCPSPState_CBS::computeRVS() const {
 //     // 1. Clear both pools!
 //     std::vector<Conflict> RVS;
@@ -3455,6 +3507,38 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
     propagate(delayedActivity);
     // propagate_latest(delayedActivity);
 
+    computeRVS();
+
+}
+
+RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, std::vector<short> minimalset, short duration) {
+    // 1. Copy parent
+    start_times = prev.start_times;
+    // start_times = prev.latest_start_times;
+    // sink_id = prev.sink_id;
+for (short delayedActivity : minimalset){
+    // 2. Find latest finish of all other activities in conflict
+    short new_start = 9999;
+
+    // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
+    // 2. Iterate directly over the 'act' values
+    std::span<const short> acts = prev.rvs_activities_pool;
+    for (short j = 0; j < prev.num_activities; j++) {
+        short act = acts[j];
+        if (act == delayedActivity) continue;
+        new_start = std::min(new_start,
+            (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+    }
+
+    start_times[delayedActivity] = new_start;
+
+    // 3. Update delayed activity
+    // start_times[delayedActivity] += mindelay;
+
+    // 4. Propagate forward
+    propagate(delayedActivity);
+    // propagate_latest(delayedActivity);
+    }
     computeRVS();
 
 }

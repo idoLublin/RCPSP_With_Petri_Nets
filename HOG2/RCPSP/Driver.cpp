@@ -10,6 +10,8 @@
 #include "../../HOG2/generic/BAE.h"
 #include "../../HOG2/generic/EPEAStar.h"
 #include <filesystem> // <--- 1. Make sure this is here
+
+#include "../environments/Directional2DEnvironment.h"
 namespace fs = std::filesystem;
 #include "RCPSP.h"
 //****importent i changed GLUtil.h with recVec == operator abit****//
@@ -1310,7 +1312,8 @@ void runBenchmark() {
 
     // Write header
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    setting.use_heuristic               = true;  // set cover h-cost
+    setting.heuristic               = true;  // set cover h-cost
+    setting.use_first_conflict          = false;
     // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
@@ -1318,11 +1321,11 @@ void runBenchmark() {
          << std::endl;
 
 
-    if (!setting.use_conflict_prioritization&& !setting.use_heuristic) {
+    if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 49; i++) {
+    for(int i = 1; i < 5; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)

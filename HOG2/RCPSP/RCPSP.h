@@ -1999,23 +1999,86 @@ inline RCPSP_CBS::RCPSP_CBS() {
 //     neighbors.emplace_back(nodeID, first.activities[j], first.t);
 //   }
 // }
-inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
+// inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
+//   if (nodeID.rvs_activities_pool.empty()) return;
+//   std::span<const short> acts = nodeID.rvs_activities_pool;
+//   for (short j = 0; j < nodeID.num_activities; j++) {
+//     neighbors.emplace_back(nodeID, acts[j], nodeID.t);
+//   }
+// //   std::sort(neighbors.begin(), neighbors.end(),
+// // [](const auto& a, const auto& b) {
+// //     return a.makespan() < b.makespan();
+// // });
+// }
 
+
+inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
   if (nodeID.rvs_activities_pool.empty()) return;
 
-  // const Conflict& first = nodeID.RVS[0];
-
-  // Use the helper to stream activities directly out of the global pool
-  // const Conflict& first = nodeID.rvs_activities_pool;
   std::span<const short> acts = nodeID.rvs_activities_pool;
+
+  // Get resource name and capacity for demand lookup
+  const std::string& resName = RCPSPex.resources[nodeID.resourceType].first;
+  short capacity = resource_info[nodeID.resourceType].capacity;
+
+  // Compute total demand at conflict
+  short total_demand = 0;
+  for (short j = 0; j < nodeID.num_activities; j++)
+    total_demand += RCPSPex.activities[acts[j]].resource_demands.at(resName);
+
+  short excess = total_demand - capacity;
+
+  // Single resolvers — jobs whose demand alone resolves the conflict
   for (short j = 0; j < nodeID.num_activities; j++) {
-    neighbors.emplace_back(nodeID, acts[j], nodeID.t);
+    short actIdx = acts[j];
+    short demand = RCPSPex.activities[actIdx].resource_demands.at(resName);
+    if (demand >= excess)
+      neighbors.emplace_back(nodeID, actIdx, nodeID.t);
   }
-  std::sort(neighbors.begin(), neighbors.end(),
-[](const auto& a, const auto& b) {
-    return a.makespan() < b.makespan();
-});
+
+  // Minimal combinations — subsets where:
+  // 1. Combined demand >= excess
+  // 2. No proper subset also resolves it (minimal)
+  // Generate pairs first (most common case)
+  std::vector<std::vector<short>> minimal_subsets;
+
+  // Generate all subsets using bitmask
+  int n = nodeID.num_activities;
+  for (int mask = 1; mask < (1 << n); mask++) {
+    // Collect jobs in this subset
+    std::vector<short> subset;
+    short subset_demand = 0;
+    for (int i = 0; i < n; i++) {
+      if (mask & (1 << i)) {
+        subset.push_back(acts[i]);
+        subset_demand += RCPSPex.activities[acts[i]].resource_demands.at(resName);
+      }
+    }
+
+    if (subset_demand < excess) continue; // doesn't resolve
+
+    // Check minimality — no proper subset resolves it
+    bool minimal = true;
+    for (int i = 0; i < (int)subset.size(); i++) {
+      short demand_without_i = subset_demand -
+          RCPSPex.activities[subset[i]].resource_demands.at(resName);
+      if (demand_without_i >= excess) {
+        minimal = false; // proper subset also resolves it
+        break;
+      }
+    }
+
+    if (minimal)
+      minimal_subsets.push_back(subset);
+  }
+
+  // Generate children for each minimal subset
+  for (auto& subset : minimal_subsets) {
+    if (subset.size() == 1) continue; // already handled by single resolvers
+    neighbors.emplace_back(nodeID, subset, nodeID.t); // needs constructor for vector
+  }
 }
+
 inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
   return !node.found_conflict;
 

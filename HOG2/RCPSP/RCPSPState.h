@@ -16,6 +16,27 @@ extern short g_num_activities;
 extern short g_sink_id;
 std::string finalstatename;
 std::string initialstatename;
+
+enum class ConflictType : uint8_t {
+    CARDINAL      = 0,  // all branches raise LB — resolve first
+    SEMI_CARDINAL = 1,  // some branches raise LB
+    NON_CARDINAL  = 2   // no branch raises LB — resolve last
+};
+enum class HeuristicType : uint8_t {
+    NONE    = 0,  // h = 0
+    CG      = 1,  // cardinal only set cover (current)
+    DG      = 2,  // dependency graph — includes pseudo-cardinals from semi
+};
+
+struct CBSConfig {
+    bool use_conflict_prioritization = true;
+    bool use_first_conflict          = false;
+    HeuristicType heuristic          = HeuristicType::CG;
+};
+CBSConfig setting;
+long debug_cardinal_num=0;
+
+
 class RCPSPState {
   public:
   RCPSPState();
@@ -276,19 +297,7 @@ struct Conflict {
     // Clean constructor
     Conflict() : t(0), resourceType(0), num_activities(0), activity_start_index(0) {}
 };
-enum class ConflictType : uint8_t {
-    CARDINAL      = 0,  // all branches raise LB — resolve first
-    SEMI_CARDINAL = 1,  // some branches raise LB
-    NON_CARDINAL  = 2   // no branch raises LB — resolve last
-};
-struct CBSConfig {
-    bool use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    bool use_heuristic               = true;  // set cover h-cost
-    bool use_upstream_enrichment     = false;  // only relevant when use_heuristic=true
-    // adds upstream cardinal jobs to conflict sets
-};
-CBSConfig setting;
-long debug_cardinal_num=0;
+
 class RCPSPState_CBS {
 public:
     std::array<short, 32> start_times;
@@ -314,6 +323,7 @@ public:
     void computeLatestStarts(std::array<short, 32>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
+    RCPSPState_CBS(const RCPSPState_CBS& prev, std::vector<short> minimalset , short duration);
     // In RCPSPState.h - replace span function with:
     // const short* get_conflict_start(const Conflict& c) const {
     //     return rvs_activities_pool.data() + c.activity_start_index;

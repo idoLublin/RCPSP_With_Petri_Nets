@@ -2011,10 +2011,10 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<R
   for (short j = 0; j < nodeID.num_activities; j++) {
     neighbors.emplace_back(nodeID, acts[j], nodeID.t);
   }
-  std::sort(neighbors.begin(), neighbors.end(),
-[](const auto& a, const auto& b) {
-    return a.makespan() < b.makespan();
-});
+//   std::sort(neighbors.begin(), neighbors.end(),
+// [](const auto& a, const auto& b) {
+//     return a.makespan() < b.makespan();
+// });
 }
 inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
   return !node.found_conflict;

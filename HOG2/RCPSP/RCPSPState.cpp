@@ -2913,6 +2913,51 @@ short computeWeightedSetCover(
 }
 
 void RCPSPState_CBS::computeRVS() const {
+
+    if (setting.use_first_conflict) {
+        rvs_activities_pool.clear();
+        for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
+            const ResourceInfo& res = resource_info[resIdx];
+
+            std::vector<short> events;
+            events.reserve(res.activity_indices.size());
+            for (short actIdx : res.activity_indices)
+                events.push_back(start_times[actIdx]);
+            std::sort(events.begin(), events.end());
+            events.erase(std::unique(events.begin(), events.end()), events.end());
+
+            for (short t : events) {
+                short total_demand = 0;
+                std::vector<short> current_jobs;
+
+                for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+                    short actIdx = res.activity_indices[j];
+                    short start  = start_times[actIdx];
+                    short finish = start + RCPSPex.activities[actIdx].duration;
+                    if (start <= t && finish > t) {
+                        total_demand += res.demands[j];
+                        current_jobs.push_back(actIdx);
+                    }
+                }
+
+                if (total_demand <= res.capacity) continue;
+
+                // First conflict found — take it immediately
+                rvs_activities_pool = std::move(current_jobs);
+                this->t      = t;
+                resourceType = resIdx;
+                num_activities = (short)rvs_activities_pool.size();
+                found_conflict = true;
+                h_cost = 0;
+                return;
+            }
+        }
+        // No conflict found
+        found_conflict = false;
+        h_cost = 0;
+        return;
+    }
+
     // Compute latest starts fresh each time — no copy bug
     std::array<short, 32> latest_starts = {};
     computeLatestStarts(latest_starts);
@@ -2988,7 +3033,7 @@ void RCPSPState_CBS::computeRVS() const {
 
             if (score == 1.0f){
                 cardinal_conflicts.push_back({current_jobs, min_forced});
-                // debug_cardinal_num++;
+                debug_cardinal_num++;
             }
             bool is_better = !found_any
                 || (score > best_score)  // BUG: should be score > best_score!
@@ -3000,7 +3045,7 @@ void RCPSPState_CBS::computeRVS() const {
                 best_score     = score;
                 found_any     = true;
             }
-            if (setting.use_conflict_prioritization && !setting.use_heuristic) {
+            if (setting.use_conflict_prioritization && setting.use_first_conflict) {
                 if (best_score == 1) goto done; // early exit ok
             }
         }
@@ -3016,8 +3061,11 @@ done:
     found_conflict = found_any;
 
     // Fix bug 1: always set h_cost, even when no cardinals
-if (setting.use_heuristic && setting.use_conflict_prioritization) {
-    // Link conflicts via downstream — merge linked conflicts
+if (setting.heuristic == HeuristicType::NONE) {
+    h_cost = 0;
+}
+else if (setting.heuristic == HeuristicType::CG) {
+    // Link conflicts via downstream
     for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
         for (int j = i+1; j < (int)cardinal_conflicts.size(); j++) {
             bool linked = false;
@@ -3030,8 +3078,6 @@ if (setting.use_heuristic && setting.use_conflict_prioritization) {
                         std::find(downstream[job_j].begin(),
                                   downstream[job_j].end(),
                                   job_i) != downstream[job_j].end()) {
-                        // Merge conflict j into conflict i
-                        // Keep max min_forced of the two
                         cardinal_conflicts[i].second = std::max(
                             cardinal_conflicts[i].second,
                             cardinal_conflicts[j].second);
@@ -3062,254 +3108,13 @@ if (setting.use_heuristic && setting.use_conflict_prioritization) {
         conflict.assign(conflict_set.begin(), conflict_set.end());
     }
 
-    h_cost = computeWeightedSetCover(cardinal_conflicts);
-    // if (h_cost>0) {
-    //     std::cout << h_cost << std::endl;
-    // }
+    h_cost = cardinal_conflicts.empty() ? 0 : computeWeightedSetCover(cardinal_conflicts);
 }
-    else {
-        h_cost = 0;
-    }    // std::cout <<"hcost: "<<h_cost<<std::endl;
+else if (setting.heuristic == HeuristicType::DG) {
+    h_cost = 0; // placeholder
 }
-// void RCPSPState_CBS::computeRVS() const {
-//     // 1. Clear both pools!
-//     std::vector<Conflict> RVS;
-//     RVS.clear();
-//     rvs_activities_pool.clear();
-//
-//     // 2. Reserve to prevent fragmentation (adjust numbers as needed)
-//     RVS.reserve(50);
-//     rvs_activities_pool.reserve(200);
-//
-//     for (int resIdx = 0; resIdx < resource_info.size(); resIdx++) {
-//         const ResourceInfo& res = resource_info[resIdx];
-//
-//         // Collect event points
-//         std::set<short> events;
-//         for (short actIdx : res.activity_indices) {
-//             events.insert(start_times[actIdx]);
-//             events.insert(start_times[actIdx] + RCPSPex.activities[actIdx].duration);
-//         }
-//
-//         // Check each event point
-//         for (short t : events) {
-//             short total_demand = 0;
-//
-//             // 3. Mark our current position in the global pool BEFORE checking activities
-//             int pool_start_index = rvs_activities_pool.size();
-//             short conflict_size = 0;
-//
-//             for (int j = 0; j < res.activity_indices.size(); j++) {
-//                 short actIdx = res.activity_indices[j];
-//                 short start = start_times[actIdx];
-//                 short finish = start + RCPSPex.activities[actIdx].duration;
-//
-//                 if (start <= t && finish > t) {
-//                     total_demand += res.demands[j];
-//
-//                     // Speculatively push directly into the global pool
-//                     rvs_activities_pool.push_back(actIdx);
-//                     conflict_size++;
-//                 }
-//             }
-//
-//             // 4. Was it actually a conflict?
-//             if (total_demand > res.capacity) {
-//                 // Yes! Create the struct and save it.
-//                 Conflict conflict;
-//                 conflict.t = t;
-//                 conflict.resourceType = resIdx;
-//                 conflict.activity_start_index = pool_start_index;
-//                 conflict.num_activities = conflict_size;
-//
-//                 RVS.push_back(conflict);
-//             } else {
-//                 // No conflict! Roll back the global pool to erase the speculative adds.
-//                 // This is instant and costs zero memory allocations.
-//                 rvs_activities_pool.resize(pool_start_index);
-//             }
-//         }
-//     }
-//
-//     // Sort by time
-//     std::sort(RVS.begin(), RVS.end(),
-//         [](const Conflict& a, const Conflict& b) {
-//             return a.t < b.t;
-//         });
-//     std::sort(rvs_activities_pool.begin(), rvs_activities_pool.end(),
-//     [&](short a, short b) {
-//         return start_times[a] < start_times[b];
-//     });
-//     full_RVS_size=RVS.size();
-//
-//
-//     //pick first conflict
-//     t=RVS[0].t;
-//     resourceType=RVS[0].resourceType;
-//     num_activities=RVS[0].num_activities;
-//
-//
-// }
-// void RCPSPState_CBS::computeRVS() const {
-//     RVS.clear();
-//
-//     for (int resIdx = 0; resIdx < resource_info.size(); resIdx++) {
-//         const ResourceInfo& res = resource_info[resIdx];
-//
-//         // Collect event points
-//         std::set<short> events;
-//         for (short actIdx : res.activity_indices) {
-//             events.insert(start_times[actIdx]);
-//             events.insert(start_times[actIdx] + RCPSPex.activities[actIdx].duration);
-//         }
-//
-//         // Check each event point
-//         for (short t : events) {
-//             Conflict conflict;
-//             conflict.t = t;
-//             conflict.resourceType = resIdx;
-//             short total_demand = 0;
-//
-//             for (int j = 0; j < res.activity_indices.size(); j++) {
-//                 short actIdx = res.activity_indices[j];
-//                 short start = start_times[actIdx];
-//                 short finish = start + RCPSPex.activities[actIdx].duration;
-//
-//                 if (start <= t && finish > t) {
-//                     total_demand += res.demands[j];
-//                     conflict.activities[conflict.num_activities++] = actIdx;
-//
-//                 }
-//             }
-//
-//             if (total_demand > res.capacity) {
-//                 RVS.push_back(conflict);
-//             }
-//         }
-//     }
-//
-//     std::sort(RVS.begin(), RVS.end(),
-//         [](const Conflict& a, const Conflict& b) {
-//             return a.t < b.t;
-//         });
-// }
 
-// void RCPSPState_CBS::computeRVS() const {
-//     RVS.clear();
-//
-//     // For each resource
-//     for (int resIdx = 0; resIdx < RCPSPex.resources.size(); resIdx++) {
-//         short capacity = RCPSPex.resources[resIdx].second;
-//         std::string resName = RCPSPex.resources[resIdx].first;
-//
-//         // Collect all event points for this resource
-//         std::set<short> events;
-//         for (int i = 0; i < RCPSPex.activities.size(); i++) {
-//             if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
-//             if (RCPSPex.activities[i].resource_demands.at(resName) == 0) continue;
-//             if (RCPSPex.activities[i].duration == 0) continue;
-//
-//             events.insert(start_times[i]);
-//             events.insert(start_times[i] + RCPSPex.activities[i].duration);
-//         }
-//
-//         // Check each event point
-//         for (short t : events) {
-//             Conflict conflict;
-//             conflict.t = t;
-//             conflict.resourceType = resIdx;
-//             short total_demand = 0;
-//
-//             for (int i = 0; i < RCPSPex.activities.size(); i++) {
-//                 if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;
-//                 short demand = RCPSPex.activities[i].resource_demands.at(resName);
-//                 if (demand == 0) continue;
-//
-//                 short start = start_times[i];
-//                 short finish = start + RCPSPex.activities[i].duration;
-//
-//                 if (start <= t && finish > t) {
-//                     total_demand += demand;
-//                     conflict.activities[conflict.num_activities++] = i; // changed
-//                 }
-//             }
-//
-//             if (total_demand > capacity) {
-//                 RVS.push_back(conflict);
-//             }
-//         }
-//     }
-//
-//     // Sort by time
-//     std::sort(RVS.begin(), RVS.end(),
-//         [](const Conflict& a, const Conflict& b) {
-//             return a.t < b.t;
-//         });
-// }
-
-// void RCPSPState_CBS::propagate(short activityId) {
-//     // 1. Calculate the new finish time of the activity that just moved
-//     short pushed_finish = start_times[activityId];// + RCPSPex.activities[activityId].duration;
-//
-//     // (Assuming your dependencies use 1-based indexing)
-//     short pushed_1based = activityId + 1;
-//
-//     // 2. Find all immediate successors
-//     // (Note: If you have a 'forward_dependencies' list, loop over that instead of all activities!)
-//     for (short i = 0; i < RCPSPex.activities.size(); i++) {
-//
-//         // Check if activity 'i' depends on 'pushed_activity'
-//         bool is_successor = false;
-//         for (short dep : RCPSPex.backword_dependencies[i]) {
-//             if (dep == pushed_1based) {
-//                 is_successor = true;
-//                 break;
-//             }
-//         }
-//
-//         if (is_successor) {
-//             // 3. THE OPTIMIZATION: No need to recalculate from scratch!
-//             // Just compare the new finish time of the pushed predecessor
-//             // directly against the current start time of the successor.
-//             if (pushed_finish > start_times[i]) {
-//
-//                 // Update the start time
-//                 start_times[i] = pushed_finish;
-//
-//                 // Recurse to push this activity's children
-//                 propagate(i);
-//             }
-//         }
-//     }
-//     // std::string actName = RCPSPex.activities[activityId].name;
-//     // for (short dep :RCPSPex.dependencies[activityId]) {
-// // if (start_times[dep - 1]>) {
-// //
-// // }
-//
-//     }
-// void RCPSPState_CBS::propagate(short activityId) {
-//     short pushed_finish = start_times[activityId] + RCPSPex.activities[activityId].duration;
-//     short pushed_1based = activityId + 1;
-//
-//     for (short i = activityId + 1; i < RCPSPex.activities.size(); i++) {
-//         bool is_successor = false;
-//         for (short dep : RCPSPex.backword_dependencies[i]) {
-//             if (dep == pushed_1based) {
-//                 is_successor = true;
-//                 break;
-//             }
-//         }
-//
-//         if (is_successor) {
-//             if (pushed_finish > start_times[i]) {
-//                 start_times[i] = pushed_finish;
-//                 propagate(i);
-//             }
-//         }
-//     }
-// }
-
+}
 
 void RCPSPState_CBS::propagate(short activityId) {
     for (short succ : downstream[activityId]) {

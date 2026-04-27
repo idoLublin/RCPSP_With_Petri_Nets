@@ -1029,7 +1029,7 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     setProblemSize(problemType);  // CONFLICT_SIZE = 30
     // int optMakespan = getOptimalMakespan(group, exam, problemType);
     // std::ifstream test("j30opt.sm");
-
+debug_cardinal_num=0;
 
     // getPetri(petri, group, exam, problemType);
     getRCPSP(RCPSPex, group, exam, problemType);
@@ -1131,7 +1131,9 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
          << path.size() << ","
          << peakMemKB << ","
          << setting.use_conflict_prioritization << ","
-         << setting.use_heuristic << "\n";
+         << (int)setting.heuristic << ","
+         << debug_cardinal_num/max(1,astar.GetNodesTouched()) << "\n";
+
     return 0;
 }
 
@@ -1246,42 +1248,6 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
     return newFilename;
 }
 
-// --- DELETE the entire parallel/sequential loop from your main() ---
-// --- Replace main() with this simplified structure ---
-
-// int main(int argc, char *argv[]) {
-//     // Expects one argument: The starting Group ID for this batch (e.g., 1, 3, 5, etc.)
-//     if (argc != 3) {
-//         std::cerr << "Usage: ./Driver <START_GROUP_ID>" << std::endl;
-//         return 1;
-//     }
-//
-//     int startGroup = std::stoi(argv[1]);
-//     std::string outputFolder = argv[2]; // Get folder from script
-//     // This single execution will process TWO groups sequentially: G, G+1.
-//     // G = startGroup (e.g., 1, 3, 5...)
-//     // G+1 = next group (e.g., 2, 4, 6...)
-//
-//     // FIX: Use the Group ID directly in the filename
-//     // This guarantees Job 14 writes to "..._14.csv" and Job 15 writes to "..._15.csv"
-//     std::string filename = "results/batch_group_" + std::to_string(startGroup) + ".csv";
-//
-//     std::ofstream file(filename);
-//     if (!file.is_open()) {
-//         std::cerr << "❌ Error opening file: " << filename << std::endl;
-//         return 1;
-//     }
-//     // Process Group 'G'
-//     for (int j = 1; j < 11; j++) {
-//         solveRCPSP(startGroup, j, filename, "j30");
-//
-//         // Same for TT
-//         solveRCPSP_TT(startGroup, j, filename, "j30");    }
-//
-//     // Process Group 'G+1'
-//
-//     return 0;
-// }
 
  int main() {
      runBenchmark();
@@ -1310,19 +1276,22 @@ void runBenchmark() {
 
     // Write header
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    setting.use_heuristic               = true;  // set cover h-cost
-    // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    // Wherever you initialize CBSConfig:
+    // setting.heuristic = HeuristicType::NONE;   // no heuristic
+    setting.heuristic = HeuristicType::CG;     // cardinal set cover
+    // setting.heuristic = HeuristicType::DG;     // dependency graph
+ // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useConflictPrioritization,useHeuristic"
+         << "useConflictPrioritization,useHeuristic,cardianlity ratio"
          << std::endl;
 
 
-    if (!setting.use_conflict_prioritization&& !setting.use_heuristic) {
+    if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 49; i++) {
+    for(int i = 1; i < 5; i++) {
         for(int j = 1; j < 11; j++) {
 
             // 1. CLEAN THE SLATE (Crucial for thread_local variables)

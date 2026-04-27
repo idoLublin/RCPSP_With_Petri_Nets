@@ -124,16 +124,16 @@ inline size_t getcomper2(const RCPSPState_BAP& state, double g) {
 inline size_t getcomper3(const RCPSPState_BAP& state, double g) {
 	return state.rvs_activities_pool.size();
 }
-// --- 5. RCPSPState_CBS ---
-inline size_t getcomper1(const RCPSPState_CBS& state, double g) {
-    return state.start_times[g_sink_id];
-}
-inline size_t getcomper2(const RCPSPState_CBS& state, double g) {
-    return state.start_times[g_sink_id];
-}
-inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
-    return state.full_RVS_size;
-}
+// // In RCPSPState_CBS file — full control here
+// inline size_t getcomper1(const RCPSPState_CBS& state, double g) {
+// 	return state.start_times[g_sink_id];  // g — prefer higher makespan... wait lower
+// }
+// inline size_t getcomper2(const RCPSPState_CBS& state, double g) {
+// 	return (size_t)(state.best_score * 100);  // cardinal score * 100 for integer comparison
+// }
+// inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
+// 	return state.depth;  // prefer deeper — but comparator uses < so higher depth wins
+// }
 // // --- 1. Standard RCPSPState ---
 // inline size_t getcomper1(const RCPSPState& state) {
 // 	size_t count = 0;
@@ -190,6 +190,7 @@ inline size_t getcomper3(const RCPSPState_CBS& state, double g) {
 //}
 std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
 //ido lublin 28.4 A*
+
 
 template <class state>
 

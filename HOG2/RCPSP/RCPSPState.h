@@ -257,16 +257,7 @@ public:
 };
 inline size_t CONFLICT_SIZE = 32; // set this before creating any object
 
-// struct Conflict {
-//     short t;
-//     short resourceType;
-//     short num_activities = 0;
-//     std::vector<short> activities;
-//
-//     Conflict() : t(0), resourceType(0), num_activities(0) {
-//         activities.resize(CONFLICT_SIZE);
-//     }
-// };
+
 struct Conflict {
     short t;
     short resourceType;
@@ -281,11 +272,16 @@ enum class ConflictType : uint8_t {
     SEMI_CARDINAL = 1,  // some branches raise LB
     NON_CARDINAL  = 2   // no branch raises LB — resolve last
 };
+enum class HeuristicType : uint8_t {
+    NONE    = 0,  // h = 0
+    CG      = 1,  // cardinal only set cover (current)
+    DG      = 2,  // dependency graph — includes pseudo-cardinals from semi
+};
+
 struct CBSConfig {
-    bool use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    bool use_heuristic               = true;  // set cover h-cost
-    bool use_upstream_enrichment     = false;  // only relevant when use_heuristic=true
-    // adds upstream cardinal jobs to conflict sets
+    bool use_conflict_prioritization = true;
+    bool use_first_conflict          = false;
+    HeuristicType heuristic          = HeuristicType::CG;
 };
 CBSConfig setting;
 long debug_cardinal_num=0;
@@ -299,7 +295,8 @@ public:
     mutable size_t full_RVS_size=0;
     mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
     mutable bool  found_conflict      = false;
-
+    short best_score=0;
+    short depth=0;
     // mutable ConflictType conflict_type = ConflictType::NON_CARDINAL;
     // mutable short        num_costly_branches = 0;
     mutable short h_cost = 0;
@@ -365,7 +362,20 @@ public:
     }
 
 };
+#include "../../HOG2/generic/TemplateAStar.h"
 
+template<>
+struct AStarCompareWithF<RCPSPState_CBS> {
+    bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
+                    const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
+        // std::cout<<"sss";
+        if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;
+        if (i1.data.best_score != i2.data.best_score)
+            return i1.data.best_score < i2.data.best_score;
+        return i1.data.depth < i2.data.depth;
+    }
+};
 // IN YOUR HEADER FILE (.h)
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,

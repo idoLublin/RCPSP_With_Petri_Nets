@@ -1280,7 +1280,7 @@ void runBenchmark() {
     setting.use_ancestor_branching          = false;
     setting.use_dominance          = false;
     setting.use_pair_decomposition         = false;
-    setting.use_greed_conflic_resultion_asstimation=false;
+    setting.use_greed_conflic_resultion_asstimation=true;
 
 
 
@@ -1310,7 +1310,28 @@ void runBenchmark() {
     //     }
     // }
 
-    solveRCPSP_CBS(37, 9, filename, "j30");
+    for (int j = 1; j < 11; j++) {
+        // solveRCPSP(startGroup, j, filename, setType);
+        solveRCPSP_CBS(1, j, filename, "j30");
+        solveRCPSP_CBS(1, j, filename, "j60");
+        solveRCPSP_CBS(1, j, filename, "j90");
+    }
+    for (int j = 1; j < 11; j++) {
+        // solveRCPSP(startGroup, j, filename, setType);
+        solveRCPSP_CBS(17, j, filename, "j30");
+        solveRCPSP_CBS(17, j, filename, "j60");
+        solveRCPSP_CBS(17, j, filename, "j90");
+    }
+    for (int j = 1; j < 11; j++) {
+        // solveRCPSP(startGroup, j, filename, setType);
+        solveRCPSP_CBS(33, j, filename, "j30");
+        solveRCPSP_CBS(33, j, filename, "j60");
+        solveRCPSP_CBS(33, j, filename, "j90");
+    }
+
+
+
+    // solveRCPSP_CBS(37, 9, filename, "j30");
 
     std::cout <<debug_cardinal_num <<std::endl;
 

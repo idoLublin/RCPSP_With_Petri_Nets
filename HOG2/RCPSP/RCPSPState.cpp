@@ -3126,6 +3126,7 @@ void RCPSPState_CBS::computeRVS() const {
             std::array<short, 32> individual_cost = {};
             short costly    = 0;
             short min_forced = std::numeric_limits<short>::max();
+            short non_cardinal_demand = 0;
 
             for (short job : current_jobs) {
                 // Change from max to min in computeRVS classification
@@ -3144,6 +3145,11 @@ void RCPSPState_CBS::computeRVS() const {
                     costly++;
 
                 }
+                else {
+                    non_cardinal_demand += RCPSPex.activities[job].resource_demands[res.resource_nume];
+                }
+
+
             }
 
             // ConflictType type;
@@ -3162,10 +3168,14 @@ void RCPSPState_CBS::computeRVS() const {
                 best_score     = score;
                 found_any     = true;
             }
-            if (score == 1.0f){//cardinal
+
+
+            bool non_cardinal_cant_resolve = (total_demand - non_cardinal_demand) > res.capacity;
+
+            if (score == 1.0f || (score > 0.0f && non_cardinal_cant_resolve)) {
 
                 if (setting.use_greed_conflic_resultion_asstimation) {
-
+                    short temp =min_forced;
                     min_forced = std::numeric_limits<short>::max();
 
                     short excess=total_demand-res.capacity;
@@ -3184,6 +3194,17 @@ void RCPSPState_CBS::computeRVS() const {
                             break;
                         }
                     }
+                    // if (temp<min_forced) {
+                    //     std::cout << "improve"<<std::endl;
+                    // }
+                    // else if (temp==min_forced) {
+                    //     std::cout << "same"<<std::endl;
+                    //
+                    // }
+                    // else {
+                    //     std::cout << "hert"<<std::endl;
+                    //
+                    // }
                 }
 
 

@@ -32,11 +32,16 @@ enum class HeuristicType : uint8_t {
     NONE = 0,
     CG   = 1,
     DG   = 2,
+    HCBS = 3,
 };
 
 struct CBSConfig {
     bool use_conflict_prioritization = true;
     bool use_first_conflict          = false;
+    bool use_ancestor_branching          = true;
+    bool use_dominance          = true;
+    bool use_pair_decomposition         = true;
+
     HeuristicType heuristic          = HeuristicType::CG;
 };
 

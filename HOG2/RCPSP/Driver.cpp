@@ -1138,6 +1138,9 @@ debug_cardinal_num=0;
          << peakMemKB << ","
          << setting.use_conflict_prioritization << ","
          << (int)setting.heuristic << ","
+        << setting.use_first_conflict << ","
+        << setting.use_dominance << ","
+
          << debug_cardinal_num/max(1,astar.GetNodesTouched()) << "\n";
 
     return 0;
@@ -1267,15 +1270,22 @@ void runBenchmark() {
     }
 
     setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    setting.use_first_conflict = false;  // cardinal > semi > non cardinal
     // setting.heuristic = HeuristicType::NONE;   // no heuristic
-    setting.heuristic = HeuristicType::CG;   // cardinal hitting set
+    // setting.heuristic = HeuristicType::CG;   // cardinal hitting set
+    setting.heuristic = HeuristicType::HCBS;   // cardinal hitting set
     // setting.heuristic = HeuristicType::DG;     // dependency graph
+
+    setting.use_first_conflict = false;  // cardinal > semi > non cardinal
+    setting.use_ancestor_branching          = false;
+    setting.use_dominance          = false;
+    setting.use_pair_decomposition         = false;
+
+
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useConflictPrioritization,useHeuristic,cardianlity ratio"
+         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,cardianlity ratio"
          << std::endl;
 
 

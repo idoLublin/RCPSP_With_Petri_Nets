@@ -95,6 +95,14 @@ struct AStarCompareWithF<RCPSPState_CBS> {
                     const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;//less
         if (i1.g != i2.g) return i1.g < i2.g;//more
+
+
+        if (setting.use_first_conflict) {
+            // Bell & Park: prefer highest RVST
+            if (i1.data.t != i2.data.t)
+                return i1.data.t < i2.data.t;          // higher t = better
+        }
+
         // if (i1.data.best_score != i2.data.best_score)
         //     return i1.data.best_score > i2.data.best_score;
         // return i1.data.depth < i2.data.depth;

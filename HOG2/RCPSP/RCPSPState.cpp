@@ -3087,6 +3087,7 @@ void RCPSPState_CBS::computeRVS() const {
     std::vector<short> best_jobs;
     bool         found_any     = false;
     std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
+    std::vector<std::pair<short,short>> cardinal_pairs;
 
     // static short max_conflict_seen = 0;
 
@@ -3149,10 +3150,6 @@ void RCPSPState_CBS::computeRVS() const {
             // else                                           type = ConflictType::NON_CARDINAL;
             float score = (float)costly / (float)current_jobs.size();
             conflict_number++;
-            if (score == 1.0f){
-                cardinal_conflicts.push_back({current_jobs, min_forced});
-                debug_cardinal_num++;
-            }
             bool is_better = !found_any
                 || (score > best_score)  // BUG: should be score > best_score!
                 || (score == best_score && t < best_t);
@@ -3163,6 +3160,17 @@ void RCPSPState_CBS::computeRVS() const {
                 best_score     = score;
                 found_any     = true;
             }
+            if (score == 1.0f){//cardinal
+                cardinal_conflicts.push_back({current_jobs, min_forced});
+                debug_cardinal_num++;
+            }
+            else if (score == 0) {//none cardinal
+
+            }
+            else {//semi
+
+            }
+
             if (setting.use_conflict_prioritization && setting.use_first_conflict) {
                 if (best_score == 1) goto done; // early exit ok
             }
@@ -3177,10 +3185,67 @@ done:
     resourceType   = best_resource;
     found_conflict = found_any;
 
+if (found_conflict && setting.use_ancestor_branching) {
+        // Impact Mask -> Best Ancestor index
+        // uint32_t is perfect for J30 (up to 32 activities)
+        std::unordered_map<uint32_t, short> mask_to_ancestor;
+
+        for (int i = 0; i < (int)rvs_activities_pool.size(); ++i) {
+            short jobIdx = rvs_activities_pool[i];
+
+            // Iterate through precomputed ancestors for this job
+            for (short P : upstream[jobIdx]) {
+                uint32_t impact_mask = 0;
+                bool reaches_all = true;
+
+                // Calculate the impact mask for ancestor P across the conflict pool
+                for (int j = 0; j < (int)rvs_activities_pool.size(); ++j) {
+                    short targetJob = rvs_activities_pool[j];
+
+                    // Since upstream[targetJob] is sorted, binary_search is O(log N)
+                    bool reaches = (targetJob == P) ||
+                                   std::binary_search(upstream[targetJob].begin(),
+                                                      upstream[targetJob].end(), P);
+
+                    if (reaches) {
+                        impact_mask |= (1u << j);
+                    } else {
+                        reaches_all = false;
+                    }
+                }
+
+                // Rule 1: Skip if it pushes everyone (doesn't resolve the conflict)
+                if (reaches_all) continue;
+
+                // Rule 3 (Unique Mask) + Rule 2 (Most Downstream/Highest Start Time)
+                auto it = mask_to_ancestor.find(impact_mask);
+                if (it == mask_to_ancestor.end()) {
+                    mask_to_ancestor[impact_mask] = P;
+                } else {
+                    // Tie-breaker: Keep the lever physically closest to the conflict
+                    if (start_times[P] > start_times[it->second]) {
+                        it->second = P;
+                    }
+                }
+            }
+        }
+
+        // Add the unique strategic levers to the pool
+        for (auto const& [mask, ancestorIdx] : mask_to_ancestor) {
+            rvs_activities_pool.push_back(ancestorIdx);
+        }
+    }
+
+
     // Fix bug 1: always set h_cost, even when no cardinals
 if (setting.heuristic == HeuristicType::NONE) {
     h_cost = 0;
 }
+if (setting.heuristic == HeuristicType::HCBS) {
+    for (const auto& c : cardinal_conflicts) {
+        h_cost = 0;
+        h_cost = std::max(h_cost, c.second);
+    }}
 else if (setting.heuristic == HeuristicType::CG) {
     // Link conflicts via downstream
     // for (int i = 0; i < (int)cardinal_conflicts.size(); i++) {
@@ -3506,6 +3571,76 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
 
     start_times[delayedActivity] = new_start;
 
+
+    // start_times = prev.start_times;
+    // // depth=prev.depth+1;
+    // // start_times = prev.latest_start_times;
+    // // sink_id = prev.sink_id;
+    // if (conflict_t>prev.start_times[delayedActivity] + RCPSPex.activities[delayedActivity].duration) {
+    //     // --- ANCESTOR LOGIC ---
+    //     short target_finish = 9999;
+    //     short descendant_start = 9999;
+    //
+    //     std::span<const short> acts = prev.rvs_activities_pool;
+    //
+    //     for (short j = 0; j < acts.size(); j++) {
+    //         short act = acts[j];
+    //
+    //         // 1. Check if 'act' is related to the ancestor
+    //         // Since your precomputeUpstream sorts descending, we pass std::greater<short>()
+    //         bool is_descendant = std::binary_search(upstream[act].begin(), upstream[act].end(),
+    //                                                 delayedActivity, std::greater<short>());
+    //
+    //         if (is_descendant) {
+    //             // Track the start time of the descendant we are trying to push.
+    //             // If it pushes multiple, we take the earliest one to be safe.
+    //             descendant_start = std::min(descendant_start, prev.start_times[act]);
+    //         }
+    //         else {
+    //             // 2. Not related. This job stays put. Find its finish time to get our target.
+    //             // (Identical logic to your 'else' block)
+    //             if (conflict_t > prev.start_times[act] + RCPSPex.activities[act].duration) continue;
+    //             target_finish = std::min(target_finish,
+    //                 (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+    //         }
+    //     }
+    //
+    //     // 3. What delay is needed? (Target Finish - Current Descendant Start)
+    //     short delay = target_finish - descendant_start;
+    //
+    //     // 4. Save new start of ancestor: Current Start + Delay
+    //     start_times[delayedActivity] = prev.start_times[delayedActivity] + delay;
+    //
+    //
+    //
+    //
+    // }
+    // else{
+    // // 2. Find latest finish of all other activities in conflict
+    // short new_start = 9999;
+    //
+    // // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
+    // // 2. Iterate directly over the 'act' values
+    // std::span<const short> acts = prev.rvs_activities_pool;
+    // for (short j = 0; j < prev.rvs_activities_pool.size(); j++) {
+    //     short act = acts[j];
+    //     if (act == delayedActivity) continue;
+    //     if (conflict_t>prev.start_times[act] + RCPSPex.activities[act].duration) continue;
+    //     new_start = std::min(new_start,
+    //         (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+    // }
+    //
+    // start_times[delayedActivity] = new_start;
+    // }
+
+
+
+
+
+
+
+
+
     // 3. Update delayed activity
     // start_times[delayedActivity] += mindelay;
 
@@ -3513,8 +3648,30 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
     propagate(delayedActivity);
     // propagate_latest(delayedActivity);
 
-    computeRVS();
 
+}
+bool RCPSPState_CBS::isLeftShiftable() const {
+    for (int i = 0; i < RCPSPex.activities.size(); i++) {
+        // Compute earliest possible start given predecessors
+        short earliest = 0;
+        for (short pred : RCPSPex.backword_dependencies[i]) {
+            short predIdx = pred - 1;
+            earliest = std::max(earliest,
+                (short)(start_times[predIdx] +
+                        RCPSPex.activities[predIdx].duration));
+        }
+        // If activity starts later than necessary — left shiftable
+        if (start_times[i] > earliest)
+            return true;
+    }
+    return false;
+}
+
+bool RCPSPState_CBS::dominates(const RCPSPState_CBS& other) const {
+    for (int i = 0; i < RCPSPex.activities.size(); i++)
+        if (start_times[i] > other.start_times[i])
+            return false;
+    return true;
 }
 
 void RCPSPState_BAP::computeFirstRVS() const {

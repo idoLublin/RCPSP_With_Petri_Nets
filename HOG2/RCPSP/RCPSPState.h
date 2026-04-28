@@ -278,11 +278,11 @@ public:
     void computeLatestStarts(std::array<short, 32>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
-
+    bool isLeftShiftable() const;
+    bool dominates(const RCPSPState_CBS& other) const;
     std::span<const short> get_conflict_activities(const Conflict& c) const {
         return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);
     }
-
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_CBS& other) const {
 

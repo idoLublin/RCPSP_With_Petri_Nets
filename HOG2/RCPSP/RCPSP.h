@@ -1902,29 +1902,87 @@ inline RCPSP_CBS::RCPSP_CBS() {
 //     neighbors.emplace_back(nodeID, first.activities[j], first.t);
 //   }
 // }
-inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
+// inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
+//
+//   if (nodeID.rvs_activities_pool.empty()) return;
+//
+//   // const Conflict& first = nodeID.RVS[0];
+//
+//   // Use the helper to stream activities directly out of the global pool
+//   // const Conflict& first = nodeID.rvs_activities_pool;
+//   std::span<const short> acts = nodeID.rvs_activities_pool;
+//   for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
+//     RCPSPState_CBS child(nodeID, acts[j], nodeID.t);
+//     if (child.isLeftShiftable())
+//       continue;  // prune this child
+//     neighbors.emplace_back(child);
+//   }
+// //   std::sort(neighbors.begin(), neighbors.end(),
+// // [](const auto& a, const auto& b) {
+// //     return a.makespan() < b.makespan();
+// // });
+// }
 
-  if (nodeID.rvs_activities_pool.empty()) return;
 
-  // const Conflict& first = nodeID.RVS[0];
+inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID,
+                                      std::vector<RCPSPState_CBS> &neighbors) const {
+    if (nodeID.rvs_activities_pool.empty()) return;
 
-  // Use the helper to stream activities directly out of the global pool
-  // const Conflict& first = nodeID.rvs_activities_pool;
-  std::span<const short> acts = nodeID.rvs_activities_pool;
-  for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
-    neighbors.emplace_back(nodeID, acts[j], nodeID.t);
+    std::span<const short> acts = nodeID.rvs_activities_pool;
+
+    // Generate children
+    for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
+        short actIdx = acts[j];
+        neighbors.emplace_back(nodeID, actIdx, nodeID.t);
+    }
+
+if (setting.use_dominance){
+    // Dominance pruning
+    auto dominates = [](const RCPSPState_CBS& a, const RCPSPState_CBS& b) {
+        // a dominates b if all start times of a <= b
+        if (setting.use_first_conflict) {
+            // Bell & Park: only compare unscheduled activities
+            // scheduled = finish before RVST
+            if (a.t != b.t) return false;
+            for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
+                short finish = a.start_times[i] + RCPSPex.activities[i].duration;
+                if (finish <= a.t) continue; // scheduled — skip
+                if (a.start_times[i] > b.start_times[i]) return false;
+            }
+        } else {
+            // General: compare all start times
+            for (int i = 0; i < (int)RCPSPex.activities.size(); i++)
+                if (a.start_times[i] > b.start_times[i]) return false;
+        }
+        return true;
+    };
+
+    // Remove dominated neighbors
+    for (int i = 0; i < (int)neighbors.size(); i++) {
+        bool dominated = false;
+        for (int j = 0; j < (int)neighbors.size(); j++) {
+            if (i == j) continue;
+            if (dominates(neighbors[j], neighbors[i])) {
+                dominated = true;
+                break;
+            }
+        }
+        if (dominated) {
+            neighbors.erase(neighbors.begin() + i);
+            i--;
+        }
+    }
   }
-//   std::sort(neighbors.begin(), neighbors.end(),
-// [](const auto& a, const auto& b) {
-//     return a.makespan() < b.makespan();
-// });
 }
+
 inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
   return !node.found_conflict;
 
 }
 
 inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+  state1.computeRVS();
+
   return state1.h_cost;
 }
   inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {

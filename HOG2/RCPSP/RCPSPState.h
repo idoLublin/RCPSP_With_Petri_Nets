@@ -255,10 +255,10 @@ public:
 inline size_t CONFLICT_SIZE = 32; // set this before creating any object
 
 
-
+template<short N>
 class RCPSPState_CBS {
 public:
-    std::array<short, 32> start_times;
+    std::array<short, N> start_times;
     mutable short t;
     mutable short resourceType;
     // mutable short num_activities;
@@ -275,7 +275,7 @@ public:
 
     void propagate(short activityId);
     // void propagate_latest(short delayedActivity);
-    void computeLatestStarts(std::array<short, 32>& latest) const;
+    void computeLatestStarts(std::array<short, N>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
     bool isLeftShiftable() const;
@@ -294,6 +294,9 @@ public:
     }
 
 };
+using RCPSPState_CBS_30 = RCPSPState_CBS<32>;
+using RCPSPState_CBS_60 = RCPSPState_CBS<62>;
+using RCPSPState_CBS_90 = RCPSPState_CBS<92>;
 class RCPSPState_BAP {
 public:
     std::array<short, 122> start_times; // 244 bytes

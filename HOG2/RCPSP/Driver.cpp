@@ -1031,59 +1031,164 @@ void setProblemSize(const std::string& problemType) {
     // extracts the number from "j30", "j60", "j120" etc.
     CONFLICT_SIZE = std::stoul(problemType.substr(1))+2;
 }
-int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
-    std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
-    setProblemSize(problemType);  // CONFLICT_SIZE = 30
-    // int optMakespan = getOptimalMakespan(group, exam, problemType);
-    // std::ifstream test("j30opt.sm");
-debug_cardinal_num=0;
+// int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
+//     std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
+//     setProblemSize(problemType);  // CONFLICT_SIZE = 30
+//     // int optMakespan = getOptimalMakespan(group, exam, problemType);
+//     // std::ifstream test("j30opt.sm");
+// debug_cardinal_num=0;
+//
+//     // getPetri(petri, group, exam, problemType);
+//     getRCPSP(RCPSPex, group, exam, problemType);
+//     RCPSP_CBS<32> as1;
+//     resource_info.clear();
+//     downstream.clear();
+//     upstream.clear();
+//     precomputeDownstream(); // call once after loading
+//     precomputeUpstream(); // call once after loading
+//     precomputeResourceInfo();
+//     RCPSPState_CBS<CONFLICT_SIZE> first;
+//     // first.computeRVS();
+//     RCPSPState_CBS<CONFLICT_SIZE> last = first;
+//     // last.num_activities=0;
+//     last.resourceType=-1;
+//     last.rvs_activities_pool.clear();
+//
+//
+//
+//     TemplateAStar<RCPSPState_CBS<CONFLICT_SIZE>, int, RCPSP_CBS<CONFLICT_SIZE>> astar;
+//     std::vector<RCPSPState_CBS<CONFLICT_SIZE>> path;
+//
+//     std::chrono::duration<double> elapsed;
+//     auto start = std::chrono::high_resolution_clock::now();
+//
+//     astar.GetPath(&as1, first, last, path);
+//
+//     auto end = std::chrono::high_resolution_clock::now();
+//     elapsed = end - start;
+//     long peakMemKB = getPeakMemoryKB();
+//
+//     int makespan = 0;
+//
+//
+//     if (!path.empty() || first.rvs_activities_pool.empty()) {
+//
+//         // Get final state - either from path or initial state if already feasible
+//         RCPSPState_CBS& finalState = path.empty() ? first : path.back();
+//
+//         makespan = finalState.start_times[RCPSPex.activities.size()-1] +
+//                    RCPSPex.activities[RCPSPex.activities.size()-1].duration;
+//
+//         std::cout << "{'scheduling': {";
+//         bool firstActivity = true;
+//         for (int i = 0; i < RCPSPex.activities.size(); i++) {
+//             if (!firstActivity) std::cout << ", ";
+//             std::cout << "'" << i+1 << "': " << finalState.start_times[i];
+//             firstActivity = false;
+//         }
+//         std::cout << "}, ";
+//         std::cout << "'makespan': " << makespan << ", ";
+//         std::cout << "'solved': True, ";
+//         std::cout << "}" << std::endl;
+//         std::cout << "\nFinal makespan: " << makespan << std::endl;
+//     }
+//     else {
+//         std::cout << "Path not found or timeout occurred.\n";
+//     }
+//
+//     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+//     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+//
+//
+//
+//
+//
+//     std::ofstream file(filename, std::ios::app);
+//
+//     // Verify optimality
+//     InstanceParams p = getParams(group);
+//
+//     file << group << ","
+//          << exam << ","
+//          << elapsed.count() << ","
+//          << makespan << ",";
+//
+//     if (problemType == "j30") {
+//         int opt = getOptimalMakespan(group, exam, problemType);
+//         file << (makespan == opt ? "True" : "False") << ","
+//              << problemType << ","
+//              << "CBS" << ","
+//              << opt << ",-1,";
+//         if (makespan != opt) {
+//             allcorrect = false;
+//         }
+//     } else {
+//         Bounds b = getBounds(group, exam, problemType);
+//         file << (b.optimal_known ? (makespan == b.lb ? "True" : "False") : "Unknown") << ","
+//              << problemType << ","
+//              << "CBS" << ","
+//              << b.lb << "," << b.ub << ",";
+//     }
+//
+//     file << p.NC << "," << p.RF << "," << p.RS << ","
+//          << ((!path.empty() || first.rvs_activities_pool.empty()) ? "True" : "False") << ","
+//          << astar.GetNodesExpanded() << ","
+//          << astar.GetNodesTouched() << ","
+//          << path.size() << ","
+//          << peakMemKB << ","
+//          << setting.use_conflict_prioritization << ","
+//          << (int)setting.heuristic << ","
+//         << setting.use_first_conflict << ","
+//         << setting.use_dominance << ","
+//         << setting.use_greed_conflic_resultion_asstimation << ","
+//
+//          << debug_cardinal_num/max(1,astar.GetNodesTouched()) << "\n";
+//
+//     return 0;
+// }
 
-    // getPetri(petri, group, exam, problemType);
+template<int N>
+int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const std::string& problemType) {
+    debug_cardinal_num = 0;
+
     getRCPSP(RCPSPex, group, exam, problemType);
-    RCPSP_CBS as1;
     resource_info.clear();
     downstream.clear();
     upstream.clear();
-    precomputeDownstream(); // call once after loading
-    precomputeUpstream(); // call once after loading
+    precomputeDownstream();
+    precomputeUpstream();
     precomputeResourceInfo();
-    RCPSPState_CBS first;
-    // first.computeRVS();
-    RCPSPState_CBS last = first;
-    // last.num_activities=0;
-    last.resourceType=-1;
+
+    RCPSP_CBS<N> as1;
+
+    RCPSPState_CBS<N> first;
+    RCPSPState_CBS<N> last = first;
+    last.resourceType = -1;
     last.rvs_activities_pool.clear();
 
-
-
-    TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
-    std::vector<RCPSPState_CBS> path;
+    TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> astar;
+    std::vector<RCPSPState_CBS<N>> path;
 
     std::chrono::duration<double> elapsed;
     auto start = std::chrono::high_resolution_clock::now();
-
     astar.GetPath(&as1, first, last, path);
-
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
     long peakMemKB = getPeakMemoryKB();
 
     int makespan = 0;
 
-
     if (!path.empty() || first.rvs_activities_pool.empty()) {
+        RCPSPState_CBS<N>& finalState = path.empty() ? first : path.back();
 
-        // Get final state - either from path or initial state if already feasible
-        RCPSPState_CBS& finalState = path.empty() ? first : path.back();
-
-        makespan = finalState.start_times[RCPSPex.activities.size()-1] +
-                   RCPSPex.activities[RCPSPex.activities.size()-1].duration;
+        makespan = finalState.start_times[RCPSPex.activities.size() - 1] +
+                   RCPSPex.activities[RCPSPex.activities.size() - 1].duration;
 
         std::cout << "{'scheduling': {";
         bool firstActivity = true;
-        for (int i = 0; i < RCPSPex.activities.size(); i++) {
+        for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
             if (!firstActivity) std::cout << ", ";
-            std::cout << "'" << i+1 << "': " << finalState.start_times[i];
+            std::cout << "'" << i + 1 << "': " << finalState.start_times[i];
             firstActivity = false;
         }
         std::cout << "}, ";
@@ -1091,21 +1196,14 @@ debug_cardinal_num=0;
         std::cout << "'solved': True, ";
         std::cout << "}" << std::endl;
         std::cout << "\nFinal makespan: " << makespan << std::endl;
-    }
-    else {
+    } else {
         std::cout << "Path not found or timeout occurred.\n";
     }
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
-
-
-
-
     std::ofstream file(filename, std::ios::app);
-
-    // Verify optimality
     InstanceParams p = getParams(group);
 
     file << group << ","
@@ -1119,9 +1217,8 @@ debug_cardinal_num=0;
              << problemType << ","
              << "CBS" << ","
              << opt << ",-1,";
-        if (makespan != opt) {
+        if (makespan != opt)
             allcorrect = false;
-        }
     } else {
         Bounds b = getBounds(group, exam, problemType);
         file << (b.optimal_known ? (makespan == b.lb ? "True" : "False") : "Unknown") << ","
@@ -1138,101 +1235,110 @@ debug_cardinal_num=0;
          << peakMemKB << ","
          << setting.use_conflict_prioritization << ","
          << (int)setting.heuristic << ","
-        << setting.use_first_conflict << ","
-        << setting.use_dominance << ","
-        << setting.use_greed_conflic_resultion_asstimation << ","
-
-         << debug_cardinal_num/max(1,astar.GetNodesTouched()) << "\n";
+         << setting.use_first_conflict << ","
+         << setting.use_dominance << ","
+         << setting.use_greed_conflic_resultion_asstimation << ","
+         << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
 
     return 0;
 }
 
-
-int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
-    std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
+int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving CBS: " << group << ":" << exam << std::endl;
     setProblemSize(problemType);
-    getRCPSP(RCPSPex, group, exam, problemType);
-    RCPSP_CBS as1;
-    resource_info.clear();
-    downstream.clear();
-    precomputeDownstream();
-    precomputeResourceInfo();
-    RCPSPState_CBS first;
-    RCPSPState_CBS last = first;
-    last.t=0;
-    last.resourceType=-1;
 
-
-    TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
-    std::vector<RCPSPState_CBS> path;
-
-    std::chrono::duration<double> elapsed;
-    auto start = std::chrono::high_resolution_clock::now();
-
-    astar.GetPath(&as1, first, last, path);
-
-    auto end = std::chrono::high_resolution_clock::now();
-    elapsed = end - start;
-    long peakMemKB = getPeakMemoryKB();
-
-    int makespan = 0;
-
-
-    if (!path.empty() || first.rvs_activities_pool.empty()) {
-
-        // Get final state - either from path or initial state if already feasible
-        RCPSPState_CBS& finalState = path.empty() ? first : path.back();
-
-        makespan = finalState.start_times[RCPSPex.activities.size()-1] +
-                   RCPSPex.activities[RCPSPex.activities.size()-1].duration;
-
-        std::cout << "{'scheduling': {";
-        bool firstActivity = true;
-        for (int i = 0; i < RCPSPex.activities.size(); i++) {
-            if (!firstActivity) std::cout << ", ";
-            std::cout << "'" << i+1 << "': " << finalState.start_times[i];
-            firstActivity = false;
-        }
-        std::cout << "}, ";
-        std::cout << "'makespan': " << makespan << ", ";
-        std::cout << "'solved': True, ";
-        std::cout << "}" << std::endl;
-        std::cout << "\nFinal makespan: " << makespan << std::endl;
-    }
-    else {
-        std::cout << "Path not found or timeout occurred.\n";
-    }
-
-    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
-    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
-    std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << elapsed.count() << ","
-         << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
-         << makespan << ","
-         << astar.GetNodesExpanded() << ","
-         << astar.GetNodesTouched() << ","
-         << path.size() << ","
-         << "BAP" << ","
-         << problemType << ","
-         << peakMemKB << ",";
-    // Verify optimality
-    int optMakespan = getOptimalMakespan(group, exam, "j30opt.sm");
-    if (optMakespan != -1) {
-        bool correct = (makespan == optMakespan);
-        std::cout << "Optimal makespan: " << optMakespan << std::endl;
-        std::cout << "Our makespan: " << makespan << std::endl;
-        std::cout << "Correct: " << (correct ? "YES" : "NO") << std::endl;
-
-        // Also write to file
-        file << (correct ? "True" : "False") << ","
-             << optMakespan << ",";
-        if (!correct) {
-            allcorrect = false;
-        }
-    }
-    file << "\n";
-    return 0;
+    if (problemType == "j30")
+        return solveRCPSP_CBS_impl<32>(group, exam, filename, problemType);
+    else if (problemType == "j60")
+        return solveRCPSP_CBS_impl<62>(group, exam, filename, problemType);
+    else
+        return solveRCPSP_CBS_impl<92>(group, exam, filename, problemType);
 }
+// int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
+//     std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
+//     setProblemSize(problemType);
+//     getRCPSP(RCPSPex, group, exam, problemType);
+//     RCPSP_CBS as1;
+//     resource_info.clear();
+//     downstream.clear();
+//     precomputeDownstream();
+//     precomputeResourceInfo();
+//     RCPSPState_CBS first;
+//     RCPSPState_CBS last = first;
+//     last.t=0;
+//     last.resourceType=-1;
+//
+//
+//     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
+//     std::vector<RCPSPState_CBS> path;
+//
+//     std::chrono::duration<double> elapsed;
+//     auto start = std::chrono::high_resolution_clock::now();
+//
+//     astar.GetPath(&as1, first, last, path);
+//
+//     auto end = std::chrono::high_resolution_clock::now();
+//     elapsed = end - start;
+//     long peakMemKB = getPeakMemoryKB();
+//
+//     int makespan = 0;
+//
+//
+//     if (!path.empty() || first.rvs_activities_pool.empty()) {
+//
+//         // Get final state - either from path or initial state if already feasible
+//         RCPSPState_CBS& finalState = path.empty() ? first : path.back();
+//
+//         makespan = finalState.start_times[RCPSPex.activities.size()-1] +
+//                    RCPSPex.activities[RCPSPex.activities.size()-1].duration;
+//
+//         std::cout << "{'scheduling': {";
+//         bool firstActivity = true;
+//         for (int i = 0; i < RCPSPex.activities.size(); i++) {
+//             if (!firstActivity) std::cout << ", ";
+//             std::cout << "'" << i+1 << "': " << finalState.start_times[i];
+//             firstActivity = false;
+//         }
+//         std::cout << "}, ";
+//         std::cout << "'makespan': " << makespan << ", ";
+//         std::cout << "'solved': True, ";
+//         std::cout << "}" << std::endl;
+//         std::cout << "\nFinal makespan: " << makespan << std::endl;
+//     }
+//     else {
+//         std::cout << "Path not found or timeout occurred.\n";
+//     }
+//
+//     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+//     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+//     std::ofstream file(filename, std::ios::app);
+//     file << group << "," << exam << "," << elapsed.count() << ","
+//          << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
+//          << makespan << ","
+//          << astar.GetNodesExpanded() << ","
+//          << astar.GetNodesTouched() << ","
+//          << path.size() << ","
+//          << "BAP" << ","
+//          << problemType << ","
+//          << peakMemKB << ",";
+//     // Verify optimality
+//     int optMakespan = getOptimalMakespan(group, exam, "j30opt.sm");
+//     if (optMakespan != -1) {
+//         bool correct = (makespan == optMakespan);
+//         std::cout << "Optimal makespan: " << optMakespan << std::endl;
+//         std::cout << "Our makespan: " << makespan << std::endl;
+//         std::cout << "Correct: " << (correct ? "YES" : "NO") << std::endl;
+//
+//         // Also write to file
+//         file << (correct ? "True" : "False") << ","
+//              << optMakespan << ",";
+//         if (!correct) {
+//             allcorrect = false;
+//         }
+//     }
+//     file << "\n";
+//     return 0;
+// }
 
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
@@ -1278,7 +1384,7 @@ void runBenchmark() {
 
     setting.use_first_conflict = false;  // cardinal > semi > non cardinal
     setting.use_ancestor_branching          = false;
-    setting.use_dominance          = false;
+    setting.use_dominance          = true;
     setting.use_pair_decomposition         = false;
     setting.use_greed_conflic_resultion_asstimation=true;
 
@@ -1295,39 +1401,39 @@ void runBenchmark() {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    // for(int i = 1; i < 5; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         solveRCPSP_CBS(i, j, filename, "j30");
-    //         // solveRCPSP_CBS(i, j, filename, "j60");
-    //          // solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //          // solveRCPSP_Bi(i, j, filename, "j30");
-    //     }
-    // }
+    for(int i = 1; i < 49; i++) {
+        for(int j = 1; j < 11; j++) {
+            petri.reset();
+            RCPSPex.reset();
 
-    for (int j = 1; j < 11; j++) {
-        // solveRCPSP(startGroup, j, filename, setType);
-        solveRCPSP_CBS(1, j, filename, "j30");
-        solveRCPSP_CBS(1, j, filename, "j60");
-        solveRCPSP_CBS(1, j, filename, "j90");
+            // 2. SOLVE
+            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            solveRCPSP_CBS(i, j, filename, "j60");
+            // solveRCPSP_CBS(i, j, filename, "j60");
+             // solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
+             // solveRCPSP_Bi(i, j, filename, "j30");
+        }
     }
-    for (int j = 1; j < 11; j++) {
-        // solveRCPSP(startGroup, j, filename, setType);
-        solveRCPSP_CBS(17, j, filename, "j30");
-        solveRCPSP_CBS(17, j, filename, "j60");
-        solveRCPSP_CBS(17, j, filename, "j90");
-    }
-    for (int j = 1; j < 11; j++) {
-        // solveRCPSP(startGroup, j, filename, setType);
-        solveRCPSP_CBS(33, j, filename, "j30");
-        solveRCPSP_CBS(33, j, filename, "j60");
-        solveRCPSP_CBS(33, j, filename, "j90");
-    }
+
+    // for (int j = 1; j < 11; j++) {
+    //     // solveRCPSP(startGroup, j, filename, setType);
+    //     solveRCPSP_CBS(1, j, filename, "j30");
+    //     solveRCPSP_CBS(1, j, filename, "j60");
+    //     // solveRCPSP_CBS(1, j, filename, "j90");
+    // }
+    // for (int j = 1; j < 11; j++) {
+    //     // solveRCPSP(startGroup, j, filename, setType);
+    //     // solveRCPSP_CBS(17, j, filename, "j30");
+    //     solveRCPSP_CBS(17, j, filename, "j60");
+    //     // solveRCPSP_CBS(17, j, filename, "j90");
+    // }
+    // for (int j = 1; j < 11; j++) {
+    //     // solveRCPSP(startGroup, j, filename, setType);
+    //     // solveRCPSP_CBS(33, j, filename, "j30");
+    //     solveRCPSP_CBS(33, j, filename, "j60");
+    //     // solveRCPSP_CBS(33, j, filename, "j90");
+    // }
 
 
 

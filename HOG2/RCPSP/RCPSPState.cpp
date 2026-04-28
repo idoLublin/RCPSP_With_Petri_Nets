@@ -2723,7 +2723,8 @@ short computeMVC(std::vector<std::pair<short,short>>& edges) {
     bnb(edges, 0);
     return best;
 }
-void RCPSPState_CBS::computeLatestStarts(std::array<short, 32>& latest) const {
+template<short N>
+void RCPSPState_CBS<N>::computeLatestStarts(std::array<short, N>& latest) const {
     short makespan = start_times[g_sink_id];
 
     // Initialize all to makespan
@@ -3029,8 +3030,8 @@ short computeWeightedSetCover(
 //     bnb(0, {}, 0);
 //     return best;
 // }
-
-void RCPSPState_CBS::computeRVS() const {
+template<short N>
+void RCPSPState_CBS<N>::computeRVS() const {
 
     if (!setting.use_conflict_prioritization &&setting.use_first_conflict) {
         rvs_activities_pool.clear();
@@ -3076,7 +3077,7 @@ void RCPSPState_CBS::computeRVS() const {
     }
 
     // Compute latest starts fresh each time — no copy bug
-    std::array<short, 32> latest_starts = {};
+    std::array<short, N> latest_starts = {};
     computeLatestStarts(latest_starts);
     rvs_activities_pool.clear();
 
@@ -3123,7 +3124,7 @@ void RCPSPState_CBS::computeRVS() const {
             //     max_conflict_seen = current_jobs.size();
             //     std::cout << "New max conflict size: " << max_conflict_seen << "\n";
             // }
-            std::array<short, 32> individual_cost = {};
+            std::array<short, N> individual_cost = {};
             short costly    = 0;
             short min_forced = std::numeric_limits<short>::max();
             short non_cardinal_demand = 0;
@@ -3393,7 +3394,8 @@ else if (setting.heuristic == HeuristicType::DG) {
     // std::cout << h_cost<< std::endl;
 
 }
-void RCPSPState_CBS::propagate(short activityId) {
+template<short N>
+void RCPSPState_CBS<N>::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
         short new_start = 0;
         for (short dep : RCPSPex.backword_dependencies[succ]) {
@@ -3542,7 +3544,8 @@ void precomputeUpstream() {
     std::sort(upstream[i].begin(), upstream[i].end(), std::greater<short>());
   }
 }
-RCPSPState_CBS::RCPSPState_CBS() {
+template<short N>
+RCPSPState_CBS<N>::RCPSPState_CBS() {
     // ── Forward pass: earliest start times ──────────────────────────────
     std::map<int, int> earlyStartMap;
     for (int i = 1; i <= RCPSPex.activities.size(); i++) {
@@ -3597,8 +3600,8 @@ RCPSPState_CBS::RCPSPState_CBS() {
     // std::cout << "------------------------------------------\n";
     computeRVS();
 }
-
-RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity, short conflict_t) {
+template<short N>
+RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity, short conflict_t) {
     // 1. Copy parent
     start_times = prev.start_times;
     // depth=prev.depth+1;
@@ -3699,7 +3702,8 @@ RCPSPState_CBS::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity
 
 
 }
-bool RCPSPState_CBS::isLeftShiftable() const {
+template<short N>
+bool RCPSPState_CBS<N>::isLeftShiftable() const {
     for (int i = 0; i < RCPSPex.activities.size(); i++) {
         // Compute earliest possible start given predecessors
         short earliest = 0;
@@ -3715,8 +3719,8 @@ bool RCPSPState_CBS::isLeftShiftable() const {
     }
     return false;
 }
-
-bool RCPSPState_CBS::dominates(const RCPSPState_CBS& other) const {
+template<short N>
+bool RCPSPState_CBS<N>::dominates(const RCPSPState_CBS& other) const {
     for (int i = 0; i < RCPSPex.activities.size(); i++)
         if (start_times[i] > other.start_times[i])
             return false;

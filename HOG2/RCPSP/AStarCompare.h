@@ -89,10 +89,10 @@ struct AStarCompareWithF<RCPSPState_BAP> {
 };
 
 // ── RCPSPState_CBS ────────────────────────────────────────────────
-template<>
-struct AStarCompareWithF<RCPSPState_CBS> {
-    bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS>& i1,
-                    const AStarOpenClosedDataWithF<RCPSPState_CBS>& i2) const {
+template<short N>
+struct AStarCompareWithF<RCPSPState_CBS<N>> {
+    bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS<N>>& i1,
+                    const AStarOpenClosedDataWithF<RCPSPState_CBS<N>>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;//less
         if (i1.g != i2.g) return i1.g < i2.g;//more
 

@@ -1867,30 +1867,30 @@ inline double RCPSP_TT2_Backward::GCost(const RCPSPState_TT2 &node, const int &a
   return node.g;
 }
 
-
-class RCPSP_CBS : public SearchEnvironment<RCPSPState_CBS,int>{
+template<short N>
+class RCPSP_CBS : public SearchEnvironment<RCPSPState_CBS<N>,int>{
 public:
   RCPSP_CBS();
-  void GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const override;
-  bool GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const override;
-  double HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const override;
-  double GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const override;
+  void GetSuccessors(const RCPSPState_CBS<N> &nodeID, std::vector<RCPSPState_CBS<N>> &neighbors) const override;
+  bool GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const override;
+  double HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const override;
+  double GCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const override;
 
-  int GetAction(const RCPSPState_CBS &nodeID, const RCPSPState_CBS &nodeID2) const override;
-  int GetNumSuccessors(const RCPSPState_CBS &stateID) const;
-  void GetActions(const RCPSPState_CBS &nodeID, std::vector<int> &actions) const override;
-  void ApplyAction(RCPSPState_CBS &s, int a) const override;
+  int GetAction(const RCPSPState_CBS<N> &nodeID, const RCPSPState_CBS<N> &nodeID2) const override;
+  int GetNumSuccessors(const RCPSPState_CBS<N> &stateID) const;
+  void GetActions(const RCPSPState_CBS<N> &nodeID, std::vector<int> &actions) const override;
+  void ApplyAction(RCPSPState_CBS<N> &s, int a) const override;
   uint64_t GetActionHash(int act) const;
-  uint64_t GetStateHash(const RCPSPState_CBS &node) const;
+  uint64_t GetStateHash(const RCPSPState_CBS<N> &node) const;
   bool InvertAction(int &a) const;
-  std::vector<RCPSPState_CBS> GetSuccessors(const RCPSPState_CBS &nodeID) const;
-  double GCost(const RCPSPState_CBS &node, const int &act) const override;
+  std::vector<RCPSPState_CBS<N>> GetSuccessors(const RCPSPState_CBS<N> &nodeID) const;
+  double GCost(const RCPSPState_CBS<N> &node, const int &act) const override;
 
 };
 
 
-
-inline RCPSP_CBS::RCPSP_CBS() {
+template<short N>
+inline RCPSP_CBS<N>::RCPSP_CBS() {
 }
 
 // inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID, std::vector<RCPSPState_CBS> &neighbors) const {
@@ -1923,9 +1923,9 @@ inline RCPSP_CBS::RCPSP_CBS() {
 // // });
 // }
 
-
-inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID,
-                                      std::vector<RCPSPState_CBS> &neighbors) const {
+template<short N>
+inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
+                                      std::vector<RCPSPState_CBS<N>> &neighbors) const {
     if (nodeID.rvs_activities_pool.empty()) return;
 
     std::span<const short> acts = nodeID.rvs_activities_pool;
@@ -1938,7 +1938,7 @@ inline void RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID,
 
 if (setting.use_dominance){
     // Dominance pruning
-    auto dominates = [](const RCPSPState_CBS& a, const RCPSPState_CBS& b) {
+    auto dominates = [](const RCPSPState_CBS<N>& a, const RCPSPState_CBS<N>& b) {
         // a dominates b if all start times of a <= b
         if (setting.use_first_conflict) {
             // Bell & Park: only compare unscheduled activities
@@ -1974,21 +1974,23 @@ if (setting.use_dominance){
     }
   }
 }
-
-inline bool RCPSP_CBS::GoalTest(const RCPSPState_CBS &node, const RCPSPState_CBS &goal) const {
+template<short N>
+inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const {
   return !node.found_conflict;
 
 }
-
-inline double RCPSP_CBS::HCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+template<short N>
+inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   state1.computeRVS();
 
   return state1.h_cost;
 }
-  inline double RCPSP_CBS::GCost(const RCPSPState_CBS &state1, const RCPSPState_CBS &state2) const {
+template<short N>
+  inline double RCPSP_CBS<N>::GCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
     return state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
   }
-inline uint64_t RCPSP_CBS::GetStateHash(const RCPSPState_CBS &node) const {
+template<short N>
+inline uint64_t RCPSP_CBS<N>::GetStateHash(const RCPSPState_CBS<N> &node) const {
   std::size_t seed = 0;
   for (const auto& st : node.start_times) {
     seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
@@ -1997,41 +1999,41 @@ inline uint64_t RCPSP_CBS::GetStateHash(const RCPSPState_CBS &node) const {
 }
 
 
-
-inline int RCPSP_CBS::GetAction(const RCPSPState_CBS &nodeID, const RCPSPState_CBS &nodeID2) const {
-  return SearchEnvironment<RCPSPState_CBS, int>::GetAction(nodeID, nodeID2);
+template<short N>
+inline int RCPSP_CBS<N>::GetAction(const RCPSPState_CBS<N> &nodeID, const RCPSPState_CBS<N> &nodeID2) const {
+  return SearchEnvironment<RCPSPState_CBS<N>, int>::GetAction(nodeID, nodeID2);
 }
-
-inline int RCPSP_CBS::GetNumSuccessors(const RCPSPState_CBS &stateID) const {
-  return SearchEnvironment<RCPSPState_CBS, int>::GetNumSuccessors(stateID);
+template<short N>
+inline int RCPSP_CBS<N>::GetNumSuccessors(const RCPSPState_CBS<N> &stateID) const {
+  return SearchEnvironment<RCPSPState_CBS<N>, int>::GetNumSuccessors(stateID);
 }
-
-inline void RCPSP_CBS::GetActions(const RCPSPState_CBS &nodeID, std::vector<int> &actions) const {
+template<short N>
+inline void RCPSP_CBS<N>::GetActions(const RCPSPState_CBS<N> &nodeID, std::vector<int> &actions) const {
   return;
 }
-
-inline void RCPSP_CBS::ApplyAction(RCPSPState_CBS &s, int a) const {
+template<short N>
+inline void RCPSP_CBS<N>::ApplyAction(RCPSPState_CBS<N> &s, int a) const {
 return;
 }
-
-inline uint64_t RCPSP_CBS::GetActionHash(int act) const {
+template<short N>
+inline uint64_t RCPSP_CBS<N>::GetActionHash(int act) const {
   return 0;
 }
 
 
-
-inline bool RCPSP_CBS::InvertAction(int &a) const {
+template<short N>
+inline bool RCPSP_CBS<N>::InvertAction(int &a) const {
   return true;
 
 }
-
-inline std::vector<RCPSPState_CBS> RCPSP_CBS::GetSuccessors(const RCPSPState_CBS &nodeID) const {
-  std::vector<RCPSPState_CBS> neighbors;
+template<short N>
+inline std::vector<RCPSPState_CBS<N>> RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID) const {
+  std::vector<RCPSPState_CBS<N>> neighbors;
   return neighbors;
 
 }
-
-inline double RCPSP_CBS::GCost(const RCPSPState_CBS &node, const int &act) const {
+template<short N>
+inline double RCPSP_CBS<N>::GCost(const RCPSPState_CBS<N> &node, const int &act) const {
   return 0;;
 }
 

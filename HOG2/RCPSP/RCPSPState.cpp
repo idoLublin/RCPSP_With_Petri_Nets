@@ -3123,7 +3123,7 @@ void RCPSPState_CBS::computeRVS() const {
             //     max_conflict_seen = current_jobs.size();
             //     std::cout << "New max conflict size: " << max_conflict_seen << "\n";
             // }
-
+            std::array<short, 32> individual_cost = {};
             short costly    = 0;
             short min_forced = std::numeric_limits<short>::max();
 
@@ -3138,9 +3138,11 @@ void RCPSPState_CBS::computeRVS() const {
                 }
 
                 if (new_start > latest_starts[job]) {
+                    // short forced = new_start - latest_starts[job];
+                    individual_cost[job] = new_start - latest_starts[job];
+                    min_forced = std::min(min_forced, individual_cost[job]);
                     costly++;
-                    short forced = new_start - latest_starts[job];
-                    min_forced = std::min(min_forced, forced);
+
                 }
             }
 
@@ -3161,15 +3163,39 @@ void RCPSPState_CBS::computeRVS() const {
                 found_any     = true;
             }
             if (score == 1.0f){//cardinal
+
+                if (setting.use_greed_conflic_resultion_asstimation) {
+
+                    min_forced = std::numeric_limits<short>::max();
+
+                    short excess=total_demand-res.capacity;
+                    // No single activity covered excess, try greedy subset
+                    std::vector<short> sorted_jobs = current_jobs;
+                    std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b){
+                        return individual_cost[a] < individual_cost[b];
+                    });
+
+                    short combined_demand = 0;
+                    for (short j : sorted_jobs) {
+                        combined_demand += RCPSPex.activities[j].resource_demands[res.resource_nume];
+                        short subset_cost = individual_cost[j]; // max since sorted ascending
+                        if (combined_demand >= excess) {
+                            min_forced = std::min(min_forced, subset_cost);
+                            break;
+                        }
+                    }
+                }
+
+
                 cardinal_conflicts.push_back({current_jobs, min_forced});
                 debug_cardinal_num++;
             }
-            else if (score == 0) {//none cardinal
-
-            }
-            else {//semi
-
-            }
+            // else if (score == 0) {//none cardinal
+            //
+            // }
+            // else {//semi
+            //
+            // }
 
             if (setting.use_conflict_prioritization && setting.use_first_conflict) {
                 if (best_score == 1) goto done; // early exit ok
@@ -3242,8 +3268,9 @@ if (setting.heuristic == HeuristicType::NONE) {
     h_cost = 0;
 }
 if (setting.heuristic == HeuristicType::HCBS) {
+    h_cost = 0;
+
     for (const auto& c : cardinal_conflicts) {
-        h_cost = 0;
         h_cost = std::max(h_cost, c.second);
     }}
 else if (setting.heuristic == HeuristicType::CG) {
@@ -3342,9 +3369,9 @@ else if (setting.heuristic == HeuristicType::CG) {
 else if (setting.heuristic == HeuristicType::DG) {
     h_cost = 0; // placeholder
 }
+    // std::cout << h_cost<< std::endl;
 
 }
-
 void RCPSPState_CBS::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
         short new_start = 0;
@@ -3412,6 +3439,7 @@ void precomputeResourceInfo() {
   for (int resIdx = 0; resIdx < RCPSPex.resources.size(); resIdx++) {
     resource_info[resIdx].capacity = RCPSPex.resources[resIdx].second;
     std::string resName = RCPSPex.resources[resIdx].first;
+    resource_info[resIdx].resource_nume= resName;//0-3 index
 
     for (int i = 0; i < RCPSPex.activities.size(); i++) {
       if (RCPSPex.activities[i].resource_demands.count(resName) == 0) continue;

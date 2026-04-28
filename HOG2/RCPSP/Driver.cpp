@@ -1140,6 +1140,7 @@ debug_cardinal_num=0;
          << (int)setting.heuristic << ","
         << setting.use_first_conflict << ","
         << setting.use_dominance << ","
+        << setting.use_greed_conflic_resultion_asstimation << ","
 
          << debug_cardinal_num/max(1,astar.GetNodesTouched()) << "\n";
 
@@ -1279,13 +1280,14 @@ void runBenchmark() {
     setting.use_ancestor_branching          = false;
     setting.use_dominance          = false;
     setting.use_pair_decomposition         = false;
+    setting.use_greed_conflic_resultion_asstimation=false;
 
 
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,cardianlity ratio"
+         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
          << std::endl;
 
 
@@ -1293,22 +1295,22 @@ void runBenchmark() {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 5; i++) {
-        for(int j = 1; j < 11; j++) {
-            petri.reset();
-            RCPSPex.reset();
+    // for(int i = 1; i < 5; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         solveRCPSP_CBS(i, j, filename, "j30");
+    //         // solveRCPSP_CBS(i, j, filename, "j60");
+    //          // solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
+    // }
 
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_CBS(i, j, filename, "j30");
-            // solveRCPSP_CBS(i, j, filename, "j60");
-             // solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
-
-    // solveRCPSP_CBS(6, 7, filename, "j30");
+    solveRCPSP_CBS(37, 9, filename, "j30");
 
     std::cout <<debug_cardinal_num <<std::endl;
 

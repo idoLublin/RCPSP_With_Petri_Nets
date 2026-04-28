@@ -10,6 +10,7 @@ using namespace P_RCPSP;
 
 // ── Structs and Enums ─────────────────────────────────────────────
 struct ResourceInfo {
+    std::string resource_nume;
     short capacity;
     std::vector<short> activity_indices;
     std::vector<short> demands;
@@ -41,7 +42,7 @@ struct CBSConfig {
     bool use_ancestor_branching          = true;
     bool use_dominance          = true;
     bool use_pair_decomposition         = true;
-
+    bool use_greed_conflic_resultion_asstimation=true;
     HeuristicType heuristic          = HeuristicType::CG;
 };
 

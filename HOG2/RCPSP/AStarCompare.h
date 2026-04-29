@@ -67,7 +67,7 @@ struct AStarCompareWithF<RCPSPState_TT2> {
             return i1.data.finishedActivitiys.count() < i2.data.finishedActivitiys.count();
 
         // prefer fewer active transitions
-        return i1.data.activeTransitionIndices.size() > i2.data.activeTransitionIndices.size();
+        return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
     }
 };
 

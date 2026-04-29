@@ -525,6 +525,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
  int solveRCPSP_TT2(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving TT2: " << group<<":"<<exam << std::endl;
     count=0;
+    LB=0;
     getPetri(petri, group, exam,problemType);
     getRCPSP(RCPSPex, group, exam,problemType);
 
@@ -642,6 +643,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         << "TT2"<< ","
         << problemType<< ","
         << peakMemKB << ","  // ADD THIS
+        << LB << ","  // ADD THIS
 
          << (useCS ? "True" : "False")<< ","
          << "\n";
@@ -1408,9 +1410,9 @@ void runBenchmark() {
 
             // 2. SOLVE
             // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            solveRCPSP_CBS(i, j, filename, "j60");
             // solveRCPSP_CBS(i, j, filename, "j60");
-             // solveRCPSP_TT2(i, j, filename, "j30");
+            // solveRCPSP_CBS(i, j, filename, "j60");
+             solveRCPSP_TT2(i, j, filename, "j30");
             //solveRCPSP_TT(i, j, filename, "j30");
              // solveRCPSP_Bi(i, j, filename, "j30");
         }
@@ -1437,7 +1439,8 @@ void runBenchmark() {
 
 
 
-    // solveRCPSP_CBS(37, 9, filename, "j30");
+    // solveRCPSP_TT2(1, 4, filename, "j30");
+    // solveRCPSP_CBS(17, 9, filename, "j30");
 
     std::cout <<debug_cardinal_num <<std::endl;
 

@@ -7,7 +7,7 @@
 #include "petriclasses.h"
 
 using namespace P_RCPSP;
-
+short LB=0;
 // ── Structs and Enums ─────────────────────────────────────────────
 struct ResourceInfo {
     std::string resource_nume;

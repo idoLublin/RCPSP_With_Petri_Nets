@@ -1443,7 +1443,6 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
   }
 
   state1.h = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));  // ← ADD THIS
-
   return state1.h;
 }
 inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {

@@ -597,7 +597,12 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 	edgeCosts.resize(0);
 	neighborID.resize(0);
 	neighborLoc.resize(0);
-	
+
+
+	//*****
+	LB=max(LB,openClosedList.Lookup(nodeid).f);
+	//****
+
 	//std::cout << "Expanding: " << env->GetStateHash(openClosedList.Lookup(nodeid).data) << " with f:";
 	//std::cout << openClosedList.Lookup(nodeid).g+openClosedList.Lookup(nodeid).h << std::endl;
 	

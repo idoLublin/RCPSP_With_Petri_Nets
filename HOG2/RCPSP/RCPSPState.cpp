@@ -211,7 +211,54 @@ double getForwardHcost(std::set<short>unstartedTransitions, std::vector<std::pai
 
 }
 
+double getForwardHcost0Based(std::vector<short> unstartedTransitions,
+                      std::vector<std::pair<short, short>> activeTransitionIndices) {
 
+    //auto startS3 = std::chrono::high_resolution_clock::now();
+
+    std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
+    //std::map<int, int> visitmap; // Map to store activity IDs and their early finish times
+    double h;
+    std::set<int> processedDependencies;
+    // Iterate over unstarted activitiesint lastElementEarlyFinish = 0;
+    //int lastElementEarlyFinish = 0;
+    for (int activityId: unstartedTransitions) {
+        int maxFinishTime = 0;
+        std::set<int> processedDependencies;
+
+        for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed to int
+            int depId = dep - 1;  // No more std::stoi
+
+            if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
+                short duration = getTransitionDuration2(activeTransitionIndices, dep);  // Pass dep directly (no std::stoi)
+                if (duration !=-1) {
+                    maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + duration);
+                }
+                else {
+                    maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
+                }
+            }
+            else {
+                maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
+            }
+        }
+        earlyfinishMap2[activityId] = maxFinishTime;
+
+    }
+    if (earlyfinishMap2.size()==0) {
+        h = 0;
+    }
+    else {
+        h = earlyfinishMap2.rbegin()->second;;
+
+    }
+
+    // auto endS3 = std::chrono::high_resolution_clock::now();
+    // HTIME += endS3 - startS3;
+
+    return h;
+
+}
 
 double getForwardHcost(std::vector<short>unstartedTransitions,
                       std::vector<std::pair<short, short>>activeTransitionIndices
@@ -1495,6 +1542,57 @@ RCPSPState::RCPSPState(const RCPSPState& predecesor, const P_RCPSP::Transition& 
     }
     // Backward logic omitted for brevity (mirror the changes above if needed)
 }
+
+
+template<short N>
+std::vector<short> getAvailableActivities(const oldRCPSPState<N>& state) {
+    std::vector<short> available;
+
+    // Calculate current resource usage from active transitions
+    std::map<std::string, short> currentUsage;
+    for (auto& [actIdx, remaining] : state.activeTransitionIndices) {
+        for (auto& [resource, demand] : RCPSPex.activities[actIdx].resource_demands) {
+            currentUsage[resource] += demand;
+        }
+    }
+
+    // Check each activity
+    for (short i = 0; i < RCPSPex.activity_len; i++) {
+        // Skip if already started
+        if (state.startedActivitiys[i] != -1) continue;
+        // Check all predecessors are finished
+        bool predecessorsDone = true;
+        for (short pred : RCPSPex.backword_dependencies[i]) {
+            if (state.finishedActivitiys[pred-1]==-1) {
+                // std::cout << "Activity " << i << " skipped: pred " << pred << " not finished\n";
+
+                predecessorsDone = false;
+                break;
+            }
+        }
+        if (!predecessorsDone) continue;
+
+        // Check resources
+        bool resourcesAvailable = true;
+        for (auto& [resource, capacity] : RCPSPex.resources) {
+            short demand = 0;
+            if (RCPSPex.activities[i].resource_demands.count(resource)) {
+                demand = RCPSPex.activities[i].resource_demands.at(resource);
+            }
+            if (currentUsage[resource] + demand > capacity) {
+                // std::cout << "Activity " << i << " skipped: resource " << resource << " insufficient\n";
+
+                resourcesAvailable = false;
+                break;
+            }
+        }
+        if (!resourcesAvailable) continue;
+
+        available.push_back(i);
+    }
+    return available;
+}
+
 
 // In your header/cpp file, outside of any class
 static std::vector<std::pair<short, short>> consumeResourceList(
@@ -2936,6 +3034,83 @@ short computeWeightedSetCover(
 
     bnb(0, 0);
     return best;
+}
+
+template<short N>
+oldRCPSPState<N>::oldRCPSPState() {
+    g = 0;
+    startedActivitiys.fill(-1);
+    finishedActivitiys.fill(-1);
+    startedActivitiys[0]=0;
+    finishedActivitiys[0]=0;
+    activeTransitionIndices.clear();
+}
+
+template<short N>
+oldRCPSPState<N>::oldRCPSPState(const oldRCPSPState<N>& predecessor,
+                              const std::vector<short>& subset,
+                              uint64_t& count) {
+    // 1. COPY
+    startedActivitiys = predecessor.startedActivitiys;
+    finishedActivitiys = predecessor.finishedActivitiys;
+    activeTransitionIndices = predecessor.activeTransitionIndices;
+    g = predecessor.g;
+
+    // 2. START ALL ACTIVITIES IN SUBSET
+    for (short actIdx : subset) {
+        activeTransitionIndices.push_back({actIdx, RCPSPex.activities[actIdx].duration});
+        startedActivitiys[actIdx] = g;
+    }
+
+    // 3. FIND MINIMUM REMAINING DURATION (time advance)
+    if (activeTransitionIndices.empty()) return; // nothing active, nothing to advance
+
+    short minRemain = activeTransitionIndices[0].second;
+    for (const auto& [id, remain] : activeTransitionIndices) {
+        if (remain < minRemain) minRemain = remain;
+    }
+
+    // 4. ADVANCE TIME
+    g += minRemain;
+
+    // 5. UPDATE ALL REMAINING DURATIONS
+    for (auto& [id, remain] : activeTransitionIndices) {
+        remain -= minRemain;
+    }
+
+    // 6. COLLECT FINISHED
+    std::vector<short> finishedNow;
+    for (const auto& [id, remain] : activeTransitionIndices) {
+        if (remain == 0) {
+            finishedNow.push_back(id);
+        }
+    }
+
+    // 7. PROCESS FINISHED
+    for (short id : finishedNow) {
+        // if (finishedActivitiys[id] == -1) {
+            finishedActivitiys[id] = g;
+        // }
+    }
+
+    // 8. REMOVE FINISHED FROM ACTIVE
+    activeTransitionIndices.erase(
+        std::remove_if(
+            activeTransitionIndices.begin(),
+            activeTransitionIndices.end(),
+            [](const std::pair<int, int>& p) { return p.second == 0; }
+        ),
+        activeTransitionIndices.end()
+    );
+}
+
+template<short N>
+bool oldRCPSPState<N>::operator==(const oldRCPSPState &other) const {
+    if (finishedActivitiys != other.finishedActivitiys) return false;
+    if (startedActivitiys != other.startedActivitiys) return false;
+    if (activeTransitionIndices != other.activeTransitionIndices) return false;
+    return true;
+
 }
 
 // short computeWeightedSetCover(

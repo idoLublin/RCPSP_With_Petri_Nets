@@ -14,10 +14,6 @@ namespace P_RCPSP {
 class Activity {
 public:
     short duration;
-    // int early_finish;
-    // int early_start;
-    // int late_finish;
-    // int late_start;
     std::string name;
     std::map<std::string, short> resource_demands; // For resources like 'R1': 3
     Activity(): duration(0)//, early_finish(0), early_start(0), late_finish(0), late_start(0)

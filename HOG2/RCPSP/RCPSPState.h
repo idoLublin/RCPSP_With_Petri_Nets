@@ -11,7 +11,26 @@
 #define RCPSPSTATE_H
 using namespace P_RCPSP;
 
+template<short N>
+class oldRCPSPState {
+public:
+    oldRCPSPState();
+    oldRCPSPState(const oldRCPSPState& predecessor, const std::vector<short>& subset, uint64_t& count);
+    // std::vector<short> marking;
+    std::vector<std::pair<short, short>> activeTransitionIndices;  // can possibly be calculated on the fly
 
+    std::array<short, N> startedActivitiys;   // Was vector
+    std::array<short, N> finishedActivitiys;  // Was vector
+
+    // bool status;
+    short g=0;
+    // mutable short h;
+
+    bool operator==(const oldRCPSPState& other) const;
+};
+using RCPSPState_old_30 = oldRCPSPState<32>;
+using RCPSPState_old_60 = oldRCPSPState<62>;
+using RCPSPState_old_90 = oldRCPSPState<92>;
 
 class RCPSPState {
   public:
@@ -387,4 +406,7 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
                       );
 double getforwardResource(std::vector<short>unstartedTransitions,std::vector<std::pair<short, short>>activeTransitionIndices);
+double getForwardHcost0Based(std::vector<short> unstartedTransitions,
+                      std::vector<std::pair<short, short>> activeTransitionIndices);
+
 #endif // RCPSPSTATE_H

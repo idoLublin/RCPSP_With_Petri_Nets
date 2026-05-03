@@ -152,11 +152,62 @@ inline RCPSP::RCPSP() {
 inline void RCPSP::GetSuccessors(const RCPSPState &nodeID, std::vector<RCPSPState> &neighbors) const {
   //auto startS1 = std::chrono::high_resolution_clock::now();
 
+
+
+
+
+
   // --- OPTIMIZATION FIX ---
   // 1. Calculate locally (Stack allocation).
   // This replaces the memory-heavy class member.
   std::vector<int> avilableTransitionIndices = getAvilableTransitionIndices(nodeID.marking);
   // ------------------------
+
+  // if (USE_OLD_MODEL) {
+  //   int n = availableTransitionIndices.size();
+  //
+  //   for (int mask = 0; mask < (1 << n); mask++) {
+  //     std::vector<int> resourceUsage(petri.Resources.size(), 0);
+  //     bool valid = true;
+  //     std::vector<int> subset;
+  //
+  //     // add resource usage from currently active transitions
+  //     for (auto& active : nodeID.activeTransitionIndices) {
+  //       const Transition& t = petri.Transitions[active.first - 1];
+  //       for (int r = 0; r < petri.Resources.size(); r++) {
+  //         resourceUsage[r] += t.resourceUsage[r];
+  //       }
+  //     }
+  //
+  //     // add each transition in subset
+  //     for (int i = 0; i < n; i++) {
+  //       if (mask & (1 << i)) {
+  //         int transitionIdx = availableTransitionIndices[i];
+  //         const Transition& t = petri.Transitions[transitionIdx - 1];
+  //         subset.push_back(transitionIdx);
+  //         for (int r = 0; r < petri.Resources.size(); r++) {
+  //           resourceUsage[r] += t.resourceUsage[r];
+  //         }
+  //       }
+  //     }
+  //
+  //     // check validity after building subset
+  //     for (int r = 0; r < petri.Resources.size(); r++) {
+  //       if (resourceUsage[r] > petri.Resources[r].capacity) {
+  //         valid = false;
+  //         break;
+  //       }
+  //     }
+  //
+  //     if (valid) {
+  //       count++;
+  //       neighbors.emplace_back(RCPSPState(nodeID, subset, count));
+  //     }
+  //   }
+  // }
+
+
+
 
   // Handle active transitions (Finishing a task)
   if (!nodeID.activeTransitionIndices.empty()) {
@@ -322,7 +373,12 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
     // NOTE: You must update the definition of getForwardHcost
     // to accept 'const std::vector<int>&' instead of 'std::map...'
     //state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices, state1.finishedActivitiys);
-    state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+
+    state1.h =std::max(
+    getForwardHcost(tempUnstarted, state1.activeTransitionIndices),
+    getforwardResource(tempUnstarted, state1.activeTransitionIndices)
+);
+    // state1.h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
     return state1.h;
   }
   //return state1.h;
@@ -2131,6 +2187,205 @@ inline std::vector<RCPSPState_BAP> RCPSP_BAP::GetSuccessors(const RCPSPState_BAP
 inline double RCPSP_BAP::GCost(const RCPSPState_BAP &node, const int &act) const {
   return 0;;
 }
+
+
+template<short N>
+class oldRCPSP : public SearchEnvironment<oldRCPSPState<N>,int>{
+public:
+  oldRCPSP();
+  void GetSuccessors(const oldRCPSPState<N> &nodeID, std::vector<oldRCPSPState<N>> &neighbors) const override;
+  bool GoalTest(const oldRCPSPState<N> &node, const oldRCPSPState<N> &goal) const override;
+  double HCost(const oldRCPSPState<N> &state1, const oldRCPSPState<N> &state2) const override;
+  double GCost(const oldRCPSPState<N> &state1, const oldRCPSPState<N> &state2) const override;
+
+  int GetAction(const oldRCPSPState<N> &nodeID, const oldRCPSPState<N> &nodeID2) const override;
+  int GetNumSuccessors(const oldRCPSPState<N> &stateID) const;
+  void GetActions(const oldRCPSPState<N> &nodeID, std::vector<int> &actions) const override;
+  void ApplyAction(oldRCPSPState<N> &s, int a) const override;
+  uint64_t GetActionHash(int act) const;
+  uint64_t GetStateHash(const oldRCPSPState<N> &node) const;
+  bool InvertAction(int &a) const;
+  std::vector<oldRCPSPState<N>> GetSuccessors(const oldRCPSPState<N> &nodeID) const;
+  double GCost(const oldRCPSPState<N> &node, const int &act) const override;
+};
+
+template<short N>
+oldRCPSP<N>::oldRCPSP() {
+}
+
+template<short N>
+inline void oldRCPSP<N>::GetSuccessors(const oldRCPSPState<N> &nodeID,
+std::vector<oldRCPSPState<N>> &neighbors) const {
+  std::vector<short> available = getAvailableActivities(nodeID);
+  int n = available.size();
+
+  // Calculate current resource usage from active transitions
+  std::map<std::string, short> baseUsage;
+  for (auto& [actIdx, remaining] : nodeID.activeTransitionIndices) {
+    for (auto& [resource, demand] : RCPSPex.activities[actIdx].resource_demands) {
+      baseUsage[resource] += demand;
+    }
+  }
+
+  // Iterate over all subsets including empty set
+  for (int mask = 0; mask < (1 << n); mask++) {
+    std::map<std::string, short> subsetUsage = baseUsage;
+    std::vector<short> subset;
+    bool valid = true;
+
+    for (int i = 0; i < n; i++) {
+      if (mask & (1 << i)) {
+        short actIdx = available[i];
+        // Add this activity's resource demand
+        for (auto& [resource, demand] :
+             RCPSPex.activities[actIdx].resource_demands) {
+          subsetUsage[resource] += demand;
+             }
+        // Check validity
+        for (auto& [resource, capacity] : RCPSPex.resources) {
+          if (subsetUsage[resource] > capacity) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid) break;
+        subset.push_back(actIdx);
+      }
+    }
+
+    if (valid) {
+      // Create successor state with this subset
+      neighbors.emplace_back(oldRCPSPState<N>(nodeID, subset, count));
+    }
+
+  }
+}
+template<short N>
+inline bool oldRCPSP<N>::GoalTest(const oldRCPSPState<N> &node, const oldRCPSPState<N> &goal) const {
+  // Goal is reached when the dummy finish activity has been completed
+  short finalID = RCPSPex.activity_len - 1;
+  return node.finishedActivitiys[finalID] != -1;
+}
+template<short N>
+inline double oldRCPSP<N>::HCost(const oldRCPSPState<N> &state1, const oldRCPSPState<N> &state2) const {
+  std::vector<short> tempUnstarted;
+
+  // Optimization: Reserve max possible size to prevent re-allocations
+  // (Using the size logic from your original code)
+  tempUnstarted.reserve(RCPSPex.activities.size());
+
+  // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
+  // for (int i = 0; i <state1.finishedActivitiys.size(); i++) {
+  //   short taskID = i+1; // Preserving your 1-based logic
+  //
+  //   // THE FIX: Direct vector access (O(1) speed)
+  //   // Check if value is -1 (meaning "not finished")
+  //   if (state1.finishedActivitiys[taskID] == -1) {
+  //     tempUnstarted.push_back(taskID);
+  //   }
+  // }
+  for (int i = 0; i < RCPSPex.activities.size(); i++) {
+    if (state1.finishedActivitiys[i] == -1) {
+      tempUnstarted.push_back(i+1); // 0-based
+    }
+  }
+  // NOTE: You must update the definition of getForwardHcost
+  // to accept 'const std::vector<int>&' instead of 'std::map...'
+  // short h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices, state1.finishedActivitiys);
+  // // short h = getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+  // return h;
+  //   std::vector<short> tempUnfinished;
+
+
+//   tempUnfinished.reserve(RCPSPex.activities.size());
+//   tempUnfinished
+return getForwardHcost0Based(tempUnstarted, state1.activeTransitionIndices);
+// return getForwardHcost(tempUnstarted, state1.activeTransitionIndices);
+   return std::max(
+       getForwardHcost(tempUnstarted, state1.activeTransitionIndices),
+       getforwardResource(tempUnstarted, state1.activeTransitionIndices)
+   );
+}
+
+template<short N>
+  inline double oldRCPSP<N>::GCost(const oldRCPSPState<N> &state1, const oldRCPSPState<N> &state2) const {
+    return state2.g - state1.g;
+  }
+template<short N>
+inline uint64_t oldRCPSP<N>::GetStateHash(const oldRCPSPState<N> &node) const {
+  std::size_t seed = 0;
+  for (const auto& entry : node.activeTransitionIndices) {
+    // Hash the ID
+    seed ^= std::hash<short>{}(entry.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // Hash the Start Time
+    seed ^= std::hash<short>{}(entry.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  }
+
+  for (int id = 0; id < node.startedActivitiys.size(); ++id) {
+    int time = node.startedActivitiys[id];
+
+    // Only hash if the activity exists
+    // if (time != -1) {
+      // Hash the ID (formerly pair.first)
+      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      // Hash the Time (formerly pair.second)
+      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // }
+  }
+  for (int id = 0; id < node.finishedActivitiys.size(); ++id) {
+    int time = node.finishedActivitiys[id];
+
+    // Only hash if the activity exists
+    // if (time != -1) {
+      // Hash the ID (formerly pair.first)
+      seed ^= std::hash<int>{}(id) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+      // Hash the Time (formerly pair.second)
+      seed ^= std::hash<int>{}(time) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    // }
+  }
+  return seed;
+}
+
+
+template<short N>
+inline int oldRCPSP<N>::GetAction(const oldRCPSPState<N> &nodeID, const oldRCPSPState<N> &nodeID2) const {
+  return SearchEnvironment<oldRCPSPState<N>, int>::GetAction(nodeID, nodeID2);
+}
+template<short N>
+inline int oldRCPSP<N>::GetNumSuccessors(const oldRCPSPState<N> &stateID) const {
+  return SearchEnvironment<oldRCPSPState<N>, int>::GetNumSuccessors(stateID);
+}
+template<short N>
+inline void oldRCPSP<N>::GetActions(const oldRCPSPState<N> &nodeID, std::vector<int> &actions) const {
+  return;
+}
+template<short N>
+inline void oldRCPSP<N>::ApplyAction(oldRCPSPState<N> &s, int a) const {
+return;
+}
+template<short N>
+inline uint64_t oldRCPSP<N>::GetActionHash(int act) const {
+  return 0;
+}
+
+
+template<short N>
+inline bool oldRCPSP<N>::InvertAction(int &a) const {
+  return true;
+
+}
+template<short N>
+inline std::vector<oldRCPSPState<N>> oldRCPSP<N>::GetSuccessors(const oldRCPSPState<N> &nodeID) const {
+  std::vector<oldRCPSPState<N>> neighbors;
+  return neighbors;
+
+}
+template<short N>
+inline double oldRCPSP<N>::GCost(const oldRCPSPState<N> &node, const int &act) const {
+  return 0;;
+}
+
+
 
 #endif //RCPSP_H
 //

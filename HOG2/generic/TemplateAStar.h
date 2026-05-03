@@ -601,6 +601,7 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 
 	//*****
 	LB=max(LB,openClosedList.Lookup(nodeid).f);
+	// std::cout << openClosedList.Lookup(nodeid).f<<std::endl;
 	//****
 
 	//std::cout << "Expanding: " << env->GetStateHash(openClosedList.Lookup(nodeid).data) << " with f:";

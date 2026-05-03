@@ -645,7 +645,7 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         << peakMemKB << ","  // ADD THIS
         << LB << ","  // ADD THIS
 
-         << (useCS ? "True" : "False")<< ","
+         // << (useCS ? "True" : "False")<< ","
          << "\n";
 
     return 0;
@@ -1028,7 +1028,40 @@ InstanceParams getParams(int group) {
 
     return {NC_vals[nc_idx], RF_vals[rf_idx], RS_vals[rs_idx]};
 }
+int extractBounds(const std::string& filename, const std::string& problemType) {
+    std::ofstream file(filename, std::ios::app);
 
+    // Write header
+    file << "group,exam,problem_type,lb,ub,optimal\n";
+
+    int numGroups = 48;
+    int numExams = 10;
+
+    for (int group = 1; group <= numGroups; group++) {
+        for (int exam = 1; exam <= numExams; exam++) {
+            if (problemType == "j30") {
+                int opt = getOptimalMakespan(group, exam, problemType);
+                file << group << ","
+                     << exam << ","
+                     << problemType << ","
+                     << opt << ","
+                     << opt << ","
+                     << "True\n";
+            } else {
+                Bounds b = getBounds(group, exam, problemType);
+                file << group << ","
+                     << exam << ","
+                     << problemType << ","
+                     << b.lb << ","
+                     << b.ub << ","
+                     << (b.optimal_known ? "True" : "False") << "\n";
+            }
+        }
+    }
+
+    file.close();
+    return 0;
+}
 void setProblemSize(const std::string& problemType) {
     // extracts the number from "j30", "j60", "j120" etc.
     CONFLICT_SIZE = std::stoul(problemType.substr(1))+2;
@@ -1342,6 +1375,111 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
 //     return 0;
 // }
 
+template<int N>
+int solveRCPSP_old_impl(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
+    // std::cout << "started solving: " << group<<":"<<exam << std::endl;
+
+    getPetri(petri, group, exam,problemType);
+    getRCPSP(RCPSPex, group, exam,problemType);
+    RCPSPex.activity_len=RCPSPex.activities.size();
+    // RCPSPex.computeAndStoreDeepDependencies();
+
+    oldRCPSPState<N> first;
+    oldRCPSPState<N> last = first;
+    last.finishedActivitiys.fill(1);
+
+    // int finalID = petri.place_name_to_id.at(finalstatename);
+
+    oldRCPSP<N> as1;
+    TemplateAStar<oldRCPSPState<N>, int, oldRCPSP<N>> astar;
+    std::vector<oldRCPSPState<N>> path;
+
+
+    bool finished = false;
+    bool timeout_occurred = false;
+    std::chrono::duration<double> elapsed;
+
+
+    clock_t setupend = clock();
+
+
+
+
+
+    auto start = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&as1, first, last, path);
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+
+    int makespan = 0;
+
+    if (!path.empty()) {
+        std::cout << "Path found!" << std::endl;
+        for (const auto& state : path) {
+            std::cout << "g: " << state.g << std::endl;
+
+            std::cout << "active: ";
+            for (const auto& [transIdx, duration] : state.activeTransitionIndices)
+                std::cout << " " << transIdx;
+            std::cout << std::endl;
+
+            // std::cout << "available: ";
+            // for (int transIdx : state.avilableTransitionIndices)
+            //     std::cout << " " << transIdx;
+            // std::cout << std::endl << std::endl;
+
+            makespan = state.g;
+        }
+    } else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+             << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+         << "TP"<< ","
+         << problemType<< ","
+         << (useCS ? "True" : "False")<< ","
+       //  << "\n";
+        //  << 100 * generateTIME.count() / elapsed.count() << ","
+        //  << generateTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * avelableTIME.count() / elapsed.count() << ","
+        //  << avelableTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * hashTIME.count() / elapsed.count() << ","
+        //  << hashTIME.count() / astar.GetNodesTouched() << ","
+        //  << 100 * HTIME.count() / elapsed.count() << ","
+        //  << HTIME.count() / count<< ","
+        // << 100 * comperTime.count() / elapsed.count() << ","
+        //  << comperTime.count() / astar.GetNodesTouched() << ","
+        //  << 100 * secssesorTIME.count() / elapsed.count() << ","
+        //  << secssesorTIME.count() / count<< ","
+         << "\n";
+
+
+
+
+
+    return 0;
+}
+int solveoldRCPSP(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving old: " << group << ":" << exam << std::endl;
+    setProblemSize(problemType);
+
+    if (problemType == "j30")
+        return solveRCPSP_old_impl<32>(group, exam, filename, problemType);
+    else if (problemType == "j60")
+        return solveRCPSP_old_impl<62>(group, exam, filename, problemType);
+    else
+        return solveRCPSP_old_impl<92>(group, exam, filename, problemType);
+}
+
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
     if (!fs::exists(folder)) {
@@ -1392,36 +1530,37 @@ void runBenchmark() {
 
 
 
- // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,Use CS,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
-    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
-         << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
-         << std::endl;
+ file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    // file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+    //      << "finished,expandNumber,generatedNumber,depth,maxMem,"
+    //      << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
+    //      << std::endl;
 
 
     if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 49; i++) {
-        for(int j = 1; j < 11; j++) {
-            petri.reset();
-            RCPSPex.reset();
+    // for(int i = 1; i < 49; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         // solveRCPSP_CBS(i, j, filename, "j60");
+    //         // solveRCPSP_CBS(i, j, filename, "j60");
+    //          solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
+    // }
 
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            // solveRCPSP_CBS(i, j, filename, "j60");
-            // solveRCPSP_CBS(i, j, filename, "j60");
-             solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
-
-    // for (int j = 1; j < 11; j++) {
-    //     // solveRCPSP(startGroup, j, filename, setType);
-    //     solveRCPSP_CBS(1, j, filename, "j30");
-    //     solveRCPSP_CBS(1, j, filename, "j60");
+    // for (int j = 3; j < 11; j++) {
+    //     // solveRCPSP(16, j, filename, "j30");
+    //     // solveRCPSP_TT2(16, j, filename, "j30");
+    //     // solveoldRCPSP(16, j, filename, "j30");
+    //     // solveRCPSP_CBS(1, j, filename, "j60");
     //     // solveRCPSP_CBS(1, j, filename, "j90");
     // }
     // for (int j = 1; j < 11; j++) {
@@ -1436,11 +1575,11 @@ void runBenchmark() {
     //     solveRCPSP_CBS(33, j, filename, "j60");
     //     // solveRCPSP_CBS(33, j, filename, "j90");
     // }
+    // extractBounds(filename,"j90");
 
 
-
-    // solveRCPSP_TT2(1, 4, filename, "j30");
-    // solveRCPSP_CBS(17, 9, filename, "j30");
+    // solveRCPSP_TT2(16, 9, filename, "j30");
+    //  solveRCPSP_CBS(17, 9, filename, "j30");
 
     std::cout <<debug_cardinal_num <<std::endl;
 

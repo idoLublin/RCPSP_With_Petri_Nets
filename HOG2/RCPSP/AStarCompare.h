@@ -10,6 +10,7 @@ struct AStarCompareWithF<RCPSPState> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;//more
 
         // prefer more started activities
         size_t s1 = 0, s2 = 0;
@@ -31,6 +32,7 @@ struct AStarCompareWithF<RCPSPState_TT> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_TT>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_TT>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;//more
 
         // prefer more finished activities
         size_t f1 = 0, f2 = 0;
@@ -46,6 +48,7 @@ struct AStarCompareWithF<RCPSPState_Bi> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_Bi>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_Bi>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;//more
 
         // prefer more finished activities
         size_t f1 = 0, f2 = 0;
@@ -61,6 +64,7 @@ struct AStarCompareWithF<RCPSPState_TT2> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_TT2>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_TT2>& i2) const {
         if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;//more
 
         // prefer more finished activities
         if (i1.data.finishedActivitiys.count() != i2.data.finishedActivitiys.count())
@@ -111,4 +115,24 @@ struct AStarCompareWithF<RCPSPState_CBS<N>> {
     }
 };
 
+template<short N>
+struct AStarCompareWithF<oldRCPSPState<N>> {
+    bool operator()(const AStarOpenClosedDataWithF<oldRCPSPState<N>>& i1,
+                    const AStarOpenClosedDataWithF<oldRCPSPState<N>>& i2) const {
+        if (i1.f != i2.f) return i1.f > i2.f;
+        if (i1.g != i2.g) return i1.g < i2.g;//more
+
+        // prefer more started activities
+        size_t s1 = 0, s2 = 0;
+        for (int t : i1.data.startedActivitiys) if (t != -1) s1++;
+        for (int t : i2.data.startedActivitiys) if (t != -1) s2++;
+        if (s1 != s2) return s1 < s2;
+
+        // prefer more finished activities
+        size_t f1 = 0, f2 = 0;
+        for (int t : i1.data.finishedActivitiys) if (t != -1) f1++;
+        for (int t : i2.data.finishedActivitiys) if (t != -1) f2++;
+        return f1 < f2;
+    }
+};
 #endif // ASTARCOMPARE_H

@@ -3201,7 +3201,7 @@ bool oldRCPSPState<N>::operator==(const oldRCPSPState &other) const {
 //             selected.erase(job);
 //         }
 //     };
-//
+
 //     bnb(0, {}, 0);
 //     return best;
 // }

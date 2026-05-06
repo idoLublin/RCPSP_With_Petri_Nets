@@ -1286,8 +1286,10 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
         return solveRCPSP_CBS_impl<32>(group, exam, filename, problemType);
     else if (problemType == "j60")
         return solveRCPSP_CBS_impl<62>(group, exam, filename, problemType);
-    else
+    else if (problemType == "j90")
         return solveRCPSP_CBS_impl<92>(group, exam, filename, problemType);
+    else if (problemType == "j120")
+        return solveRCPSP_CBS_impl<122>(group, exam, filename, problemType);
 }
 // int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
 //     std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
@@ -1556,13 +1558,13 @@ void runBenchmark() {
     //     }
     // }
 
-    // for (int j = 3; j < 11; j++) {
-    //     // solveRCPSP(16, j, filename, "j30");
-    //     // solveRCPSP_TT2(16, j, filename, "j30");
-    //     // solveoldRCPSP(16, j, filename, "j30");
-    //     // solveRCPSP_CBS(1, j, filename, "j60");
-    //     // solveRCPSP_CBS(1, j, filename, "j90");
-    // }
+    for (int j = 3; j < 11; j++) {
+        // solveRCPSP(16, j, filename, "j30");
+        // solveRCPSP_TT2(16, j, filename, "j30");
+        // solveoldRCPSP(16, j, filename, "j30");
+        solveRCPSP_CBS(4, j, filename, "j120");
+        // solveRCPSP_CBS(1, j, filename, "j90");
+    }
     // for (int j = 1; j < 11; j++) {
     //     // solveRCPSP(startGroup, j, filename, setType);
     //     // solveRCPSP_CBS(17, j, filename, "j30");

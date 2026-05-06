@@ -3265,7 +3265,7 @@ void RCPSPState_CBS<N>::computeRVS() const {
     std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
     std::vector<std::pair<short,short>> cardinal_pairs;
 
-    // static short max_conflict_seen = 0;
+    // conflict searching
 
     for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
         const ResourceInfo& res = resource_info[resIdx];
@@ -3277,7 +3277,7 @@ void RCPSPState_CBS<N>::computeRVS() const {
         std::sort(events.begin(), events.end());
         events.erase(std::unique(events.begin(), events.end()), events.end());
 
-        for (short t : events) {
+            for (short t : events) {
 
             std::vector<short> current_jobs;
             short total_demand = 0;
@@ -3293,7 +3293,7 @@ void RCPSPState_CBS<N>::computeRVS() const {
                 }
             }
 
-            if (total_demand <= res.capacity) continue;
+            if (total_demand <= res.capacity) continue;//conflict found
 
             // if ((short)current_jobs.size() > max_conflict_seen) {
             //     max_conflict_seen = current_jobs.size();

@@ -316,6 +316,7 @@ public:
 using RCPSPState_CBS_30 = RCPSPState_CBS<32>;
 using RCPSPState_CBS_60 = RCPSPState_CBS<62>;
 using RCPSPState_CBS_90 = RCPSPState_CBS<92>;
+using RCPSPState_CBS_120 = RCPSPState_CBS<122>;
 class RCPSPState_BAP {
 public:
     std::array<short, 122> start_times; // 244 bytes

@@ -3309,8 +3309,18 @@ void RCPSPState_CBS<N>::enumerate_sets(
 
         do {
             bool skip = false;
-            for (int idx : combo) {
-                if (min_size[idx] < size) { skip = true; break; }
+            for (const auto& existing : sets) {
+                if (existing.size() >= size) continue; // can't be proper subset
+                // check if existing is subset of current combo
+                bool is_subset = true;
+                for (short act : existing) {
+                    bool found = false;
+                    for (int idx : combo) {
+                        if (current_jobs[idx] == act) { found = true; break; }
+                    }
+                    if (!found) { is_subset = false; break; }
+                }
+                if (is_subset) { skip = true; break; }
             }
             if (skip) continue;
 
@@ -3322,11 +3332,30 @@ void RCPSPState_CBS<N>::enumerate_sets(
             mda_set.reserve(size);
             for (int idx : combo) {
                 mda_set.push_back(current_jobs[idx]);
-                min_size[idx] = std::min(min_size[idx], (short)size);
+                // min_size[idx] = std::min(min_size[idx], (short)size);
             }
             sets.push_back(std::move(mda_set));
 
         } while (advance_combo());
+    }
+}
+
+template<short N>
+void RCPSPState_CBS<N>::enumerate_sets_bnb(const std::vector<short> &sorted_jobs, const std::vector<short> &demands,
+    short excess_demand, int start_idx, short current_demand, std::vector<short> &current_set,
+    std::vector<std::vector<short>> &sets) const{
+    for (int i = start_idx; i < (int)sorted_jobs.size(); i++) {
+        short new_demand = current_demand + demands[i];
+        current_set.push_back(sorted_jobs[i]);
+
+        if (new_demand >= excess_demand) {
+            sets.push_back(current_set);
+        } else {
+            enumerate_sets_bnb(sorted_jobs, demands, excess_demand,
+                i + 1, new_demand, current_set, sets);
+        }
+
+        current_set.pop_back();
     }
 }
 
@@ -3338,18 +3367,51 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
     int res_idx,
     ConflictKey<N>& key) const
 {
-
-    // ConflictKey key = make_conflict_key(current_jobs, (short)res_idx);
+    // ConflictKey<N> key = make_conflict_key<N>(current_jobs, (short)res_idx);
     std::vector<std::vector<short>> local_sets;
     const std::vector<std::vector<short>>* sets_ptr = nullptr;
 
-    // if (setting.use_MDA_cache) {
-    //     auto it = g_mda_cache.find(key);
-    //     if (it == g_mda_cache.end()) {
-    //         enumerate_sets(current_jobs, excess_demand, res_idx, local_sets);
-    //         g_mda_cache[key] = std::move(local_sets);
-    //         it = g_mda_cache.find(key);
-    //     }
+    if (setting.use_MDA_BAB) {
+        if (setting.use_MDA_cache) {
+            auto& cache = get_mda_cache<N>();
+            auto it = cache.find(key);
+            if (it == cache.end()) {
+                // cache miss — run BAB
+                std::vector<short> sorted_jobs = current_jobs;
+                std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b) {
+                    return resource_info[res_idx].demand_lookup.at(a) >
+                           resource_info[res_idx].demand_lookup.at(b);
+                });
+                std::vector<short> demands_sorted(sorted_jobs.size());
+                for (int i = 0; i < (int)sorted_jobs.size(); i++)
+                    demands_sorted[i] = resource_info[res_idx].demand_lookup.at(sorted_jobs[i]);
+
+                std::vector<short> current_set;
+                current_set.reserve(sorted_jobs.size());
+                enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, local_sets);
+                cache[key] = std::move(local_sets);
+                it = cache.find(key);
+            }
+            sets_ptr = &it->second;
+        }
+        else {
+            // no cache — always run BAB
+            std::vector<short> sorted_jobs = current_jobs;
+            std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b) {
+                return resource_info[res_idx].demand_lookup.at(a) >
+                       resource_info[res_idx].demand_lookup.at(b);
+            });
+            std::vector<short> demands_sorted(sorted_jobs.size());
+            for (int i = 0; i < (int)sorted_jobs.size(); i++)
+                demands_sorted[i] = resource_info[res_idx].demand_lookup.at(sorted_jobs[i]);
+
+            std::vector<short> current_set;
+            current_set.reserve(sorted_jobs.size());
+            enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, local_sets);
+            sets_ptr = &local_sets;
+        }
+    }
+    else {
         if (setting.use_MDA_cache) {
             auto& cache = get_mda_cache<N>();
             auto it = cache.find(key);
@@ -3359,11 +3421,11 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
                 it = cache.find(key);
             }
             sets_ptr = &it->second;
-        // sets_ptr = &it->second;
-    }
-    else {
-        enumerate_sets(current_jobs, excess_demand, res_idx, local_sets);
-        sets_ptr = &local_sets;
+        }
+        else {
+            enumerate_sets(current_jobs, excess_demand, res_idx, local_sets);
+            sets_ptr = &local_sets;
+        }
     }
 
     const std::vector<std::vector<short>>& sets = *sets_ptr;
@@ -3378,7 +3440,6 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
     }
     return mdas;
 }
-
 template<short N>
 short RCPSPState_CBS<N>::compute_mda_cost(
     const std::vector<short>& mda_set,
@@ -3498,9 +3559,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
             if (total_demand <= res.capacity) continue;//conflict found
 
             if (setting.use_MDA_sets) {
-                std::cout << "making key" << std::endl;
                 ConflictKey<N> key = make_conflict_key<N>(current_jobs, (short)resIdx);
-                std::cout << "key made" << std::endl;
                 short excess = total_demand - res.capacity;
                 std::vector<MDA> mdas = compute_mdas(
                     current_jobs, excess, latest_starts, resIdx,key);
@@ -3649,10 +3708,13 @@ done:
     t              = best_t;
     resourceType   = best_resource;
     found_conflict = found_any;
+    is_size2_conflict = (best_jobs.size() == 2);
 
  if (setting.use_MDA_sets) {
+
      if (setting.use_MDA_cache) {
          conflict_key = best_key;
+
      }
      else {
          conflict_solutions = std::move(best_mdas);
@@ -3832,6 +3894,50 @@ else if (setting.heuristic == HeuristicType::DG) {
     // std::cout << h_cost<< std::endl;
 return 0;
 }
+
+template<short N>
+void RCPSPState_CBS<N>::propagate_with_strong_form_0() {
+    std::array<bool, N> visited = {};
+    // for (const auto& [f, t] : added_precedences) {
+    //     std::cout << "added: " << f << " -> " << t  << std::endl;
+    // }
+    // std::cout << "sink: " << g_sink_id << std::endl;
+   compute_start_recursive(g_sink_id, visited);
+
+}
+
+template<short N>
+short RCPSPState_CBS<N>::compute_start_recursive(short act, std::array<bool, N>& visited) {
+    if (visited[act]) return start_times[act];
+    // if (in_stack[act]) return start_times[act]; // cycle detected — break
+
+    // in_stack[act] = true;.
+
+    short new_start = 0;
+
+    for (short dep : RCPSPex.backword_dependencies[act]) {
+        int depIdx = dep - 1;
+        compute_start_recursive(depIdx, visited);
+        new_start = std::max((int)new_start,
+            (int)start_times[depIdx] + RCPSPex.activities[depIdx].duration);
+    }
+
+    for (const auto& [f, t] : added_precedences) {
+        if (t == act) {
+            short fIdx = f; // if f is 1-based
+            compute_start_recursive(fIdx, visited);
+            new_start = std::max((int)new_start,
+                (int)start_times[fIdx] + RCPSPex.activities[fIdx].duration);
+        }
+    }
+
+    // take max with existing to preserve parent delays
+    start_times[act] = std::max(new_start, start_times[act]);
+    visited[act] = true;
+    return start_times[act];
+}
+
+
 template<short N>
 void RCPSPState_CBS<N>::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
@@ -4169,9 +4275,36 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
         start_times[delayed] = new_start;
     }
 
-    // 4. Propagate from root
-    propagate(0);
+    if (setting.use_strong_constraints) {
+        added_precedences = prev.added_precedences;
+        is_size2_conflict = false;
+        propagate_with_strong_form_0(); // full pass with strong constraints
+
+    } else {
+        propagate(0); // fast path — no strong constraints
+
+    }
 }
+
+template<short N>
+RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short to, short conflict_t) {
+    // 1. Copy parent
+    start_times = prev.start_times;
+    is_size2_conflict = false;
+    added_precedences = prev.added_precedences;
+    added_precedences.push_back({from, to});
+    // explicitly enforce new constraint
+    start_times[to] = start_times[from] + RCPSPex.activities[from].duration;
+    propagate_with_strong_form_0(); // full pass with all strong constraints
+
+    // // propagate downstream effects
+    // if (added_precedences.size() == 1) {
+    //     propagate(to); // fast path — only one strong constraint, use original propagate
+    // } else {
+    //     propagate_with_strong_form_0(); // full pass with all strong constraints
+    // }
+}
+
 template<short N>
 bool RCPSPState_CBS<N>::isLeftShiftable() const {
     for (int i = 0; i < RCPSPex.activities.size(); i++) {

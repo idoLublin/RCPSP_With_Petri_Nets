@@ -282,12 +282,18 @@ public:
     mutable short resourceType;
     mutable bool  found_conflict      = false;
     mutable short conflict_number=0;
+
     mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
 
     mutable std::vector<MDA> conflict_solutions;//need to enable-- if we use MDA cache it stay empty
     mutable ConflictKey<N> conflict_key;  // empty if not using both MDA sets and cache
 
+    mutable std::vector<std::pair<short,short>> added_precedences={}; // accumulated from root
+    mutable bool is_size2_conflict = false;
+
     short compute_h_and_RVS() const;
+    void propagate_with_strong_form_0();
+    short compute_start_recursive(short act, std::array<bool, N>& visited);
 
     void propagate(short activityId);
     // void propagate_latest(short delayedActivity);
@@ -295,6 +301,8 @@ public:
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
     RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<short>& mda_activities, short conflict_t);
+    RCPSPState_CBS(const RCPSPState_CBS& prev, short from, short to, short conflict_t);
+
     bool isLeftShiftable() const;
     bool dominates(const RCPSPState_CBS& other) const;
     std::span<const short> get_conflict_activities(const Conflict& c) const {
@@ -302,7 +310,7 @@ public:
     }
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_CBS& other) const {
-
+        if (added_precedences != other.added_precedences) return false;
         if (start_times != other.start_times) return false;
         return true;
     }
@@ -325,6 +333,14 @@ public:
     const std::vector<short>& current_jobs,
     short excess_demand,
     int res_idx,
+    std::vector<std::vector<short>>& sets) const;
+    void enumerate_sets_bnb(
+    const std::vector<short>& sorted_jobs,
+    const std::vector<short>& demands,
+    short excess_demand,
+    int start_idx,
+    short current_demand,
+    std::vector<short>& current_set,
     std::vector<std::vector<short>>& sets) const;
 };
 using RCPSPState_CBS_30 = RCPSPState_CBS<32>;

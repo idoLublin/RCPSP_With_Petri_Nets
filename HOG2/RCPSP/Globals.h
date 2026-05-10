@@ -149,6 +149,8 @@ struct CBSConfig {
     bool use_greed_conflic_resultion_asstimation=false;
     bool use_MDA_sets=true;
     bool use_MDA_cache=true;
+    bool use_strong_constraints=true;
+    bool use_MDA_BAB=true;
     HeuristicType heuristic          = HeuristicType::HCBS;
 };
 

@@ -280,18 +280,14 @@ public:
     std::array<short, N> start_times;
     mutable short t;
     mutable short resourceType;
-    // mutable short num_activities;
-    mutable std::vector<short> rvs_activities_pool; // THE GLOBAL POOL
     mutable bool  found_conflict      = false;
-    // mutable float best_score=0;
-    // short depth=0;
-    mutable short h_cost = 0;
     mutable short conflict_number=0;
-    mutable std::vector<MDA> conflict_solutions;
+    mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
 
-    // short computeWeightedSetCover(const std::vector<std::pair<std::vector<short>, short>> & pairs) const;
+    mutable std::vector<MDA> conflict_solutions;//need to enable-- if we use MDA cache it stay empty
+    mutable ConflictKey<N> conflict_key;  // empty if not using both MDA sets and cache
 
-    void computeRVS() const;
+    short compute_h_and_RVS() const;
 
     void propagate(short activityId);
     // void propagate_latest(short delayedActivity);
@@ -320,10 +316,16 @@ public:
         int res_idx) const;
 
     std::vector<MDA> compute_mdas(
-        const std::vector<short>& current_jobs,
-        short excess_demand,
-        const std::array<short, N>& latest_starts,
-        int res_idx) const;
+    const std::vector<short>& current_jobs,
+    short excess_demand,
+    const std::array<short, N>& latest_starts,
+    int res_idx,
+    ConflictKey<N>& key) const;
+    void enumerate_sets(
+    const std::vector<short>& current_jobs,
+    short excess_demand,
+    int res_idx,
+    std::vector<std::vector<short>>& sets) const;
 };
 using RCPSPState_CBS_30 = RCPSPState_CBS<32>;
 using RCPSPState_CBS_60 = RCPSPState_CBS<62>;

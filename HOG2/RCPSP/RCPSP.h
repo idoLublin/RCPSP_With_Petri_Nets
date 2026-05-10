@@ -1981,13 +1981,24 @@ inline RCPSP_CBS<N>::RCPSP_CBS() {
 template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
-    if (nodeID.rvs_activities_pool.empty()) return;
-if (setting.use_MDA_sets) {
-  for (const MDA& mda : nodeID.conflict_solutions) {
-    neighbors.emplace_back(nodeID, mda.activities, nodeID.t);
+  if (setting.use_MDA_sets) {
+    if (setting.use_MDA_cache) {
+      const auto& sets = get_mda_cache<N>().at(nodeID.conflict_key);      // std::array<short, N> latest_starts = {};
+      // nodeID.computeLatestStarts(latest_starts);
+      // need current_jobs for cost — reconstruct from key? or store separately?
+      for (const auto& set : sets) {
+        neighbors.emplace_back(nodeID, set, nodeID.t);
+      }
+    }
+    else {
+      for (const MDA& mda : nodeID.conflict_solutions) {
+        neighbors.emplace_back(nodeID, mda.activities, nodeID.t);
+      }
+    }
   }
-}
   else {
+    if (nodeID.rvs_activities_pool.empty()) return;
+
     std::span<const short> acts = nodeID.rvs_activities_pool;
 
     // Generate children
@@ -2041,9 +2052,9 @@ inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPSta
 }
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
-  state1.computeRVS();
+  return state1.compute_h_and_RVS();//return h_cost
 
-  return state1.h_cost;
+  // return state1.h_cost;
 }
 template<short N>
   inline double RCPSP_CBS<N>::GCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {

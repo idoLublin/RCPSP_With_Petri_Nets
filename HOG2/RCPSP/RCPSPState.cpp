@@ -3671,17 +3671,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
                                 break;
                             }
                         }
-                        // if (temp<min_forced) {
-                        //     std::cout << "improve"<<std::endl;
-                        // }
-                        // else if (temp==min_forced) {
-                        //     std::cout << "same"<<std::endl;
-                        //
-                        // }
-                        // else {
-                        //     std::cout << "hert"<<std::endl;
-                        //
-                        // }
+
                     }
 
 

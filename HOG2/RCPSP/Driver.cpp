@@ -81,6 +81,21 @@ int solveRCPSP_Bi();
 #include <thread>
 #include <atomic>
 
+// #include <windows.h>
+// #include <psapi.h>
+// long getPeakMemoryKB() {
+//     PROCESS_MEMORY_COUNTERS pmc;
+//     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
+//     return pmc.PeakWorkingSetSize / 1024;
+// }
+// // #include <sys/resource.h>
+// //
+// // long getPeakMemoryKB() {
+// //     struct rusage usage;
+// //     getrusage(RUSAGE_SELF, &usage);
+// //     return usage.ru_maxrss;
+// // }
+#ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
 long getPeakMemoryKB() {
@@ -88,14 +103,14 @@ long getPeakMemoryKB() {
     GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc));
     return pmc.PeakWorkingSetSize / 1024;
 }
-// #include <sys/resource.h>
-//
-// long getPeakMemoryKB() {
-//     struct rusage usage;
-//     getrusage(RUSAGE_SELF, &usage);
-//     return usage.ru_maxrss;
-// }
-
+#else
+#include <sys/resource.h>
+long getPeakMemoryKB() {
+    struct rusage usage;
+    getrusage(RUSAGE_SELF, &usage);
+    return usage.ru_maxrss;
+}
+#endif
 struct Bounds {
     int lb = -1;
     int ub = -1;
@@ -1530,7 +1545,7 @@ void runBenchmark() {
     setting.use_pair_decomposition         = false;
     setting.use_greed_conflic_resultion_asstimation=true;
     setting.use_MDA_sets=true;
-
+    setting.use_MDA_cache=true;
 
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
@@ -1544,28 +1559,28 @@ void runBenchmark() {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    // for(int i = 1; i < 49; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         // solveRCPSP_CBS(i, j, filename, "j60");
-    //         // solveRCPSP_CBS(i, j, filename, "j60");
-    //          solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //          // solveRCPSP_Bi(i, j, filename, "j30");
-    //     }
-    // }
+    for(int i = 1; i < 5; i++) {
+        for(int j = 1; j < 11; j++) {
+            petri.reset();
+            RCPSPex.reset();
 
-    for (int j = 3; j < 11; j++) {
-        // solveRCPSP(16, j, filename, "j30");
-        // solveRCPSP_TT2(16, j, filename, "j30");
-        // solveoldRCPSP(16, j, filename, "j30");
-        solveRCPSP_CBS(1, j, filename, "j30");
-        // solveRCPSP_CBS(1, j, filename, "j90");
+            // 2. SOLVE
+            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+            // solveRCPSP_CBS(i, j, filename, "j60");
+            solveRCPSP_CBS(i, j, filename, "j30");
+             // solveRCPSP_TT2(i, j, filename, "j30");
+            //solveRCPSP_TT(i, j, filename, "j30");
+             // solveRCPSP_Bi(i, j, filename, "j30");
+        }
     }
+
+    // for (int j = 3; j < 11; j++) {
+    //     // solveRCPSP(16, j, filename, "j30");
+    //     // solveRCPSP_TT2(16, j, filename, "j30");
+    //     // solveoldRCPSP(16, j, filename, "j30");
+    //     solveRCPSP_CBS(1, j, filename, "j30");
+    //     // solveRCPSP_CBS(1, j, filename, "j90");
+    // }
     // for (int j = 1; j < 11; j++) {
     //     // solveRCPSP(startGroup, j, filename, setType);
     //     // solveRCPSP_CBS(17, j, filename, "j30");

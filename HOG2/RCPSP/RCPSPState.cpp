@@ -3204,6 +3204,100 @@ bool oldRCPSPState<N>::operator==(const oldRCPSPState &other) const {
 //     bnb(0, {}, 0);
 //     return best;
 // }
+
+
+
+// Compute cost of a single MDA set given current_jobs and their start/duration info
+template<short N>
+short RCPSPState_CBS<N>::compute_mda_cost(
+    const std::vector<short>& mda_set,
+    const std::vector<short>& current_jobs,
+    const std::array<short, N>& latest_starts,
+    int res_idx) const
+{
+    short cost = 0;
+    for (short job : mda_set) {
+        short new_start = std::numeric_limits<short>::max();
+        for (short other : current_jobs) {
+            if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
+            short finish = start_times[other] + RCPSPex.activities[other].duration;
+            new_start = std::min(new_start, finish);
+        }
+        if (new_start == std::numeric_limits<short>::max()) continue;
+        short delta = (new_start > latest_starts[job])
+                      ? new_start - latest_starts[job]
+                      : 0;
+        cost = std::max(cost, delta);
+    }
+    return cost;
+}
+
+template<short N>
+std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
+    const std::vector<short>& current_jobs,
+    short excess_demand,
+    const std::array<short, N>& latest_starts,
+    int res_idx) const
+{
+    int n = current_jobs.size();
+    std::vector<MDA> mdas;
+    std::vector<short> min_size(n, std::numeric_limits<short>::max());
+
+    const ResourceInfo& res = resource_info[res_idx];
+    auto get_demand = [&](short job) -> short {
+        for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+            if (res.activity_indices[j] == job)
+                return res.demands[j];
+        }
+        return 0;
+    };
+
+    for (int size = 1; size <= n; size++) {
+        bool any_eligible = false;
+        for (int i = 0; i < n; i++) {
+            if (min_size[i] >= size) { any_eligible = true; break; }
+        }
+        if (!any_eligible) break;
+
+        std::vector<int> combo(size);
+        std::iota(combo.begin(), combo.end(), 0);
+
+        auto advance_combo = [&]() -> bool {
+            int i = size - 1;
+            while (i >= 0 && combo[i] == n - size + i) i--;
+            if (i < 0) return false;
+            combo[i]++;
+            for (int j = i + 1; j < size; j++) combo[j] = combo[j-1] + 1;
+            return true;
+        };
+
+        do {
+            bool skip = false;
+            for (int idx : combo) {
+                if (min_size[idx] < size) { skip = true; break; }
+            }
+            if (skip) continue;
+
+            short demand = 0;
+            for (int idx : combo) {
+                demand += get_demand(current_jobs[idx]);
+            }
+            if (demand < excess_demand) continue;
+
+            MDA mda;
+            for (int idx : combo) {
+                mda.activities.push_back(current_jobs[idx]);
+                min_size[idx] = std::min(min_size[idx], (short)size);
+            }
+            mda.cost = compute_mda_cost(
+                mda.activities, current_jobs,
+                latest_starts, res_idx);
+            mdas.push_back(mda);
+
+        } while (advance_combo());
+    }
+    return mdas;
+}
 template<short N>
 void RCPSPState_CBS<N>::computeRVS() const {
 
@@ -3263,6 +3357,7 @@ void RCPSPState_CBS<N>::computeRVS() const {
     bool         found_any     = false;
     std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
     std::vector<std::pair<short,short>> cardinal_pairs;
+    std::vector<MDA> best_mdas;
 
     // conflict searching
 
@@ -3276,7 +3371,7 @@ void RCPSPState_CBS<N>::computeRVS() const {
         std::sort(events.begin(), events.end());
         events.erase(std::unique(events.begin(), events.end()), events.end());
 
-            for (short t : events) {
+        for (short t : events) {
 
             std::vector<short> current_jobs;
             short total_demand = 0;
@@ -3294,111 +3389,145 @@ void RCPSPState_CBS<N>::computeRVS() const {
 
             if (total_demand <= res.capacity) continue;//conflict found
 
-            // if ((short)current_jobs.size() > max_conflict_seen) {
-            //     max_conflict_seen = current_jobs.size();
-            //     std::cout << "New max conflict size: " << max_conflict_seen << "\n";
-            // }
-            std::array<short, N> individual_cost = {};
-            short costly    = 0;
-            short min_forced = std::numeric_limits<short>::max();
-            short non_cardinal_demand = 0;
+            if (setting.use_MDA_sets) {
 
-            for (short job : current_jobs) {
-                // Change from max to min in computeRVS classification
-                short new_start = std::numeric_limits<short>::max();
-                for (short other : current_jobs) {
-                    if (other == job) continue;
-                    new_start = std::min(new_start,
-                        (short)(start_times[other] +
-                                RCPSPex.activities[other].duration));
-                }
+                short excess = total_demand - res.capacity;
+                std::vector<MDA> mdas = compute_mdas(
+                    current_jobs, excess, latest_starts, resIdx);
 
-                if (new_start > latest_starts[job]) {
-                    // short forced = new_start - latest_starts[job];
-                    individual_cost[job] = new_start - latest_starts[job];
-                    min_forced = std::min(min_forced, individual_cost[job]);
-                    costly++;
-
-                }
-                else {
-                    non_cardinal_demand += RCPSPex.activities[job].resource_demands[res.resource_nume];
-                }
-
-
-            }
-
-            // ConflictType type;
-            // if      (costly == (short)current_jobs.size()) type = ConflictType::CARDINAL;
-            // else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
-            // else                                           type = ConflictType::NON_CARDINAL;
-            float score = (float)costly / (float)current_jobs.size();
-            conflict_number++;
-            bool is_better = !found_any
-                || (score > best_score)  // BUG: should be score > best_score!
-                || (score == best_score && t < best_t);
-            if (is_better) {
-                best_jobs     = current_jobs;
-                best_t        = t;
-                best_resource = resIdx;
-                best_score     = score;
-                found_any     = true;
-            }
-
-
-            bool non_cardinal_cant_resolve = (total_demand - non_cardinal_demand) > res.capacity;
-
-            if (score == 1.0f || (score > 0.0f && non_cardinal_cant_resolve)) {
-
-                if (setting.use_greed_conflic_resultion_asstimation) {
-                    short temp =min_forced;
-                    min_forced = std::numeric_limits<short>::max();
-
-                    short excess=total_demand-res.capacity;
-                    // No single activity covered excess, try greedy subset
-                    std::vector<short> sorted_jobs = current_jobs;
-                    std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b){
-                        return individual_cost[a] < individual_cost[b];
-                    });
-
-                    short combined_demand = 0;
-                    for (short j : sorted_jobs) {
-                        combined_demand += RCPSPex.activities[j].resource_demands[res.resource_nume];
-                        short subset_cost = individual_cost[j]; // max since sorted ascending
-                        if (combined_demand >= excess) {
-                            min_forced = std::min(min_forced, subset_cost);
-                            break;
-                        }
+                int cardinal_count = 0;
+                short min_cardinal_cost = std::numeric_limits<short>::max();
+                for (auto& mda : mdas) {
+                    if (mda.cost > 0) {
+                        cardinal_count++;
+                        min_cardinal_cost = std::min(min_cardinal_cost, mda.cost);
                     }
-                    // if (temp<min_forced) {
-                    //     std::cout << "improve"<<std::endl;
-                    // }
-                    // else if (temp==min_forced) {
-                    //     std::cout << "same"<<std::endl;
-                    //
-                    // }
-                    // else {
-                    //     std::cout << "hert"<<std::endl;
-                    //
-                    // }
+                }
+                float score = mdas.empty() ? 0.0f : (float)cardinal_count / (float)mdas.size();
+
+                bool is_better = !found_any
+                    || (score > best_score)
+                    || (score == best_score && t < best_t);
+
+                if (is_better) {
+                    best_jobs     = current_jobs;
+                    best_t        = t;
+                    best_resource = resIdx;
+                    best_score    = score;
+                    best_mdas     = mdas;
+                    // h_cost = (score == 1.0f) ? min_cardinal_cost : 0;
+                    found_any     = true;
+                }
+                if (score == 1.0f) {
+                    cardinal_conflicts.push_back({current_jobs, min_cardinal_cost});
+                }
+            }
+            else {
+                // if ((short)current_jobs.size() > max_conflict_seen) {
+                //     max_conflict_seen = current_jobs.size();
+                //     std::cout << "New max conflict size: " << max_conflict_seen << "\n";
+                // }
+                std::array<short, N> individual_cost = {};
+                short costly    = 0;
+                short min_forced = std::numeric_limits<short>::max();
+                short non_cardinal_demand = 0;
+
+                for (short job : current_jobs) {
+                    // Change from max to min in computeRVS classification
+                    short new_start = std::numeric_limits<short>::max();
+                    for (short other : current_jobs) {
+                        if (other == job) continue;
+                        new_start = std::min(new_start,
+                            (short)(start_times[other] +
+                                    RCPSPex.activities[other].duration));
+                    }
+
+                    if (new_start > latest_starts[job]) {
+                        // short forced = new_start - latest_starts[job];
+                        individual_cost[job] = new_start - latest_starts[job];
+                        min_forced = std::min(min_forced, individual_cost[job]);
+                        costly++;
+
+                    }
+                    else {
+                        non_cardinal_demand += RCPSPex.activities[job].resource_demands[res.resource_nume];
+                    }
+
+
                 }
 
+                // ConflictType type;
+                // if      (costly == (short)current_jobs.size()) type = ConflictType::CARDINAL;
+                // else if (costly > 0)                           type = ConflictType::SEMI_CARDINAL;
+                // else                                           type = ConflictType::NON_CARDINAL;
+                float score = (float)costly / (float)current_jobs.size();
+                conflict_number++;
+                bool is_better = !found_any
+                    || (score > best_score)  // BUG: should be score > best_score!
+                    || (score == best_score && t < best_t);
+                if (is_better) {
+                    best_jobs     = current_jobs;
+                    best_t        = t;
+                    best_resource = resIdx;
+                    best_score     = score;
+                    found_any     = true;
+                }
 
-                cardinal_conflicts.push_back({current_jobs, min_forced});
-                debug_cardinal_num++;
-            }
-            // else if (score == 0) {//none cardinal
-            //
-            // }
-            // else {//semi
-            //
-            // }
+                bool non_cardinal_cant_resolve = (total_demand - non_cardinal_demand) > res.capacity;
 
-            if (setting.use_conflict_prioritization && setting.use_first_conflict) {
-                if (best_score == 1) goto done; // early exit ok
+                if (score == 1.0f || (score > 0.0f && non_cardinal_cant_resolve)) {
+
+                    if (setting.use_greed_conflic_resultion_asstimation) {
+                        short temp =min_forced;
+                        min_forced = std::numeric_limits<short>::max();
+
+                        short excess=total_demand-res.capacity;
+                        // No single activity covered excess, try greedy subset
+                        std::vector<short> sorted_jobs = current_jobs;
+                        std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b){
+                            return individual_cost[a] < individual_cost[b];
+                        });
+
+                        short combined_demand = 0;
+                        for (short j : sorted_jobs) {
+                            combined_demand += RCPSPex.activities[j].resource_demands[res.resource_nume];
+                            short subset_cost = individual_cost[j]; // max since sorted ascending
+                            if (combined_demand >= excess) {
+                                min_forced = std::min(min_forced, subset_cost);
+                                break;
+                            }
+                        }
+                        // if (temp<min_forced) {
+                        //     std::cout << "improve"<<std::endl;
+                        // }
+                        // else if (temp==min_forced) {
+                        //     std::cout << "same"<<std::endl;
+                        //
+                        // }
+                        // else {
+                        //     std::cout << "hert"<<std::endl;
+                        //
+                        // }
+                    }
+
+
+                    cardinal_conflicts.push_back({current_jobs, min_forced});
+                    debug_cardinal_num++;
+                }
+
+                // else if (score == 0) {//none cardinal
+                //
+                // }
+                // else {//semi
+                //
+                // }
+
+                if (setting.use_conflict_prioritization && setting.use_first_conflict) {
+                    if (best_score == 1) goto done; // early exit ok
+                }
             }
         }
     }
-
 
 done:
     // Write winning conflict
@@ -3406,6 +3535,7 @@ done:
     t              = best_t;
     resourceType   = best_resource;
     found_conflict = found_any;
+    conflict_solutions=best_mdas;
 
 if (found_conflict && setting.use_ancestor_branching) {
         // Impact Mask -> Best Ancestor index
@@ -3796,6 +3926,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     }
 
     start_times[delayedActivity] = new_start;
+    propagate(delayedActivity);
 
 
     // start_times = prev.start_times;
@@ -3871,10 +4002,32 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     // start_times[delayedActivity] += mindelay;
 
     // 4. Propagate forward
-    propagate(delayedActivity);
     // propagate_latest(delayedActivity);
 
 
+}
+
+template<short N>
+RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<short>& mda_activities, short conflict_t) {
+    // 1. Copy parent
+    start_times = prev.start_times;
+
+    // 2. For each activity in the MDA, compute new_start from non-MDA conflict members
+    std::span<const short> acts = prev.rvs_activities_pool;
+
+    for (short delayed : mda_activities) {
+        short new_start = 9999;
+        for (short act : acts) {
+            // skip if act is in the MDA set
+            if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
+            new_start = std::min(new_start,
+                (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+        }
+        start_times[delayed] = std::max(start_times[delayed], new_start);
+    }
+
+    // 3. Propagate from root
+    propagate(0);
 }
 template<short N>
 bool RCPSPState_CBS<N>::isLeftShiftable() const {

@@ -35,7 +35,10 @@ enum class HeuristicType : uint8_t {
     DG   = 2,
     HCBS = 3,
 };
-
+struct MDA {
+    std::vector<short> activities;
+    short cost; // max delta over members, with new_start computed from non-set members
+};
 struct CBSConfig {
     bool use_conflict_prioritization = true;
     bool use_first_conflict          = false;
@@ -43,6 +46,7 @@ struct CBSConfig {
     bool use_dominance          = true;
     bool use_pair_decomposition         = true;
     bool use_greed_conflic_resultion_asstimation=true;
+    bool use_MDA_sets=true;
     HeuristicType heuristic          = HeuristicType::CG;
 };
 

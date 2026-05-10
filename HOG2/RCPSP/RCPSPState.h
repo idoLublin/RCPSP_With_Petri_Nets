@@ -287,6 +287,7 @@ public:
     // short depth=0;
     mutable short h_cost = 0;
     mutable short conflict_number=0;
+    mutable std::vector<MDA> conflict_solutions;
 
     // short computeWeightedSetCover(const std::vector<std::pair<std::vector<short>, short>> & pairs) const;
 
@@ -297,6 +298,7 @@ public:
     void computeLatestStarts(std::array<short, N>& latest) const;
     RCPSPState_CBS();
     RCPSPState_CBS(const RCPSPState_CBS& prev, short delayedActivity, short duration);
+    RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<short>& mda_activities, short conflict_t);
     bool isLeftShiftable() const;
     bool dominates(const RCPSPState_CBS& other) const;
     std::span<const short> get_conflict_activities(const Conflict& c) const {
@@ -311,7 +313,17 @@ public:
     short makespan() const {
         return start_times[g_sink_id];
     }
+    short compute_mda_cost(
+        const std::vector<short>& mda_set,
+        const std::vector<short>& current_jobs,
+        const std::array<short, N>& latest_starts,
+        int res_idx) const;
 
+    std::vector<MDA> compute_mdas(
+        const std::vector<short>& current_jobs,
+        short excess_demand,
+        const std::array<short, N>& latest_starts,
+        int res_idx) const;
 };
 using RCPSPState_CBS_30 = RCPSPState_CBS<32>;
 using RCPSPState_CBS_60 = RCPSPState_CBS<62>;

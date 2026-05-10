@@ -1982,15 +1982,20 @@ template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
     if (nodeID.rvs_activities_pool.empty()) return;
-
+if (setting.use_MDA_sets) {
+  for (const MDA& mda : nodeID.conflict_solutions) {
+    neighbors.emplace_back(nodeID, mda.activities, nodeID.t);
+  }
+}
+  else {
     std::span<const short> acts = nodeID.rvs_activities_pool;
 
     // Generate children
     for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
-        short actIdx = acts[j];
-        neighbors.emplace_back(nodeID, actIdx, nodeID.t);
+      short actIdx = acts[j];
+      neighbors.emplace_back(nodeID, actIdx, nodeID.t);
     }
-
+  }
 if (setting.use_dominance){
     // Dominance pruning
     auto dominates = [](const RCPSPState_CBS<N>& a, const RCPSPState_CBS<N>& b) {

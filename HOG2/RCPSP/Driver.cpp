@@ -1529,14 +1529,15 @@ void runBenchmark() {
     setting.use_dominance          = true;
     setting.use_pair_decomposition         = false;
     setting.use_greed_conflic_resultion_asstimation=true;
+    setting.use_MDA_sets=true;
 
 
 
- file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
-    // file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
-    //      << "finished,expandNumber,generatedNumber,depth,maxMem,"
-    //      << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
-    //      << std::endl;
+ // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+         << "finished,expandNumber,generatedNumber,depth,maxMem,"
+         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
+         << std::endl;
 
 
     if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
@@ -1562,7 +1563,7 @@ void runBenchmark() {
         // solveRCPSP(16, j, filename, "j30");
         // solveRCPSP_TT2(16, j, filename, "j30");
         // solveoldRCPSP(16, j, filename, "j30");
-        solveRCPSP_CBS(4, j, filename, "j120");
+        solveRCPSP_CBS(1, j, filename, "j30");
         // solveRCPSP_CBS(1, j, filename, "j90");
     }
     // for (int j = 1; j < 11; j++) {

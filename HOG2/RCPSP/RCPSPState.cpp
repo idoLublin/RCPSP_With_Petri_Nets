@@ -3498,8 +3498,9 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
             if (total_demand <= res.capacity) continue;//conflict found
 
             if (setting.use_MDA_sets) {
-                ConflictKey<N> key = make_conflict_key<N>(current_jobs, resIdx);
-
+                std::cout << "making key" << std::endl;
+                ConflictKey<N> key = make_conflict_key<N>(current_jobs, (short)resIdx);
+                std::cout << "key made" << std::endl;
                 short excess = total_demand - res.capacity;
                 std::vector<MDA> mdas = compute_mdas(
                     current_jobs, excess, latest_starts, resIdx,key);

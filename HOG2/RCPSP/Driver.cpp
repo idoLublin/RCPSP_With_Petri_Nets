@@ -1559,28 +1559,30 @@ void runBenchmark() {
         std::cout <<"Error: invalid setting"<< std::endl;
         exit(0);
     }
-    for(int i = 1; i < 5; i++) {
-        for(int j = 1; j < 11; j++) {
-            petri.reset();
-            RCPSPex.reset();
-
-            // 2. SOLVE
-            // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-            // solveRCPSP_CBS(i, j, filename, "j60");
-            solveRCPSP_CBS(i, j, filename, "j30");
-             // solveRCPSP_TT2(i, j, filename, "j30");
-            //solveRCPSP_TT(i, j, filename, "j30");
-             // solveRCPSP_Bi(i, j, filename, "j30");
-        }
-    }
-
-    // for (int j = 3; j < 11; j++) {
-    //     // solveRCPSP(16, j, filename, "j30");
-    //     // solveRCPSP_TT2(16, j, filename, "j30");
-    //     // solveoldRCPSP(16, j, filename, "j30");
-    //     solveRCPSP_CBS(1, j, filename, "j30");
-    //     // solveRCPSP_CBS(1, j, filename, "j90");
+    // for(int i = 1; i < 5; i++) {
+    //     for(int j = 1; j < 11; j++) {
+    //         petri.reset();
+    //         RCPSPex.reset();
+    //
+    //         // 2. SOLVE
+    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
+    //         // solveRCPSP_CBS(i, j, filename, "j60");
+    //         solveRCPSP_CBS(i, j, filename, "j30");
+    //          // solveRCPSP_TT2(i, j, filename, "j30");
+    //         //solveRCPSP_TT(i, j, filename, "j30");
+    //          // solveRCPSP_Bi(i, j, filename, "j30");
+    //     }
     // }
+
+    for (int j = 1; j < 11; j++) {
+        // solveRCPSP(16, j, filename, "j30");
+        // solveRCPSP_TT2(16, j, filename, "j30");
+        // solveoldRCPSP(16, j, filename, "j30");
+        solveRCPSP_CBS(24, j, filename, "j30");
+        solveRCPSP_CBS(24, j, filename, "j60");
+        solveRCPSP_CBS(24, j, filename, "j90");
+        // solveRCPSP_CBS(1, j, filename, "j90");
+    }
     // for (int j = 1; j < 11; j++) {
     //     // solveRCPSP(startGroup, j, filename, setType);
     //     // solveRCPSP_CBS(17, j, filename, "j30");

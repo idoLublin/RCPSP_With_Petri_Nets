@@ -1987,22 +1987,26 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       // nodeID.computeLatestStarts(latest_starts);
       // need current_jobs for cost — reconstruct from key? or store separately?
       if (setting.use_strong_constraints && nodeID.is_size2_conflict) {
-        short A = sets[0][0];
-        short B = sets[0][1];
-        // check A->B not contradicted by existing constraints
-        bool ab_contradicts = false;
-        bool ba_contradicts = false;
-        for (const auto& [f, t] : nodeID.added_precedences) {
-          if (f == B && t == A) ab_contradicts = true; // B->A exists, can't add A->B
-          if (f == A && t == B) ba_contradicts = true; // A->B exists, can't add B->A
-        }
-
-        if (!ab_contradicts)
-          neighbors.emplace_back(nodeID, A, B, nodeID.t);
-        if (!ba_contradicts)
+        short A = nodeID.rvs_activities_pool[0];
+        short B = nodeID.rvs_activities_pool[1];
+        neighbors.emplace_back(nodeID, A, B, nodeID.t);
         neighbors.emplace_back(nodeID, B, A, nodeID.t);
-        // neighbors.emplace_back(nodeID, A, B, nodeID.t);
+        // short A = sets[0][0];
+        // short B = sets[0][1];
+        // // check A->B not contradicted by existing constraints
+        // // bool ab_contradicts = false;
+        // // bool ba_contradicts = false;
+        // // for (const auto& [f, t] : nodeID.added_precedences) {
+        // //   if (f == B && t == A) ab_contradicts = true; // B->A exists, can't add A->B
+        // //   if (f == A && t == B) ba_contradicts = true; // A->B exists, can't add B->A
+        // // }
+        //
+        // // if (!ab_contradicts)
+        //   neighbors.emplace_back(nodeID, A, B, nodeID.t);
+        // // if (!ba_contradicts)
         // neighbors.emplace_back(nodeID, B, A, nodeID.t);
+        // // neighbors.emplace_back(nodeID, A, B, nodeID.t);
+        // // neighbors.emplace_back(nodeID, B, A, nodeID.t);
       }
 // if (sets.size() !=nodeID.conflict_solutions.size() ) {
 //   std::cout << "cache " << sets.size() << "local " << nodeID.conflict_solutions.size() <<std::endl;

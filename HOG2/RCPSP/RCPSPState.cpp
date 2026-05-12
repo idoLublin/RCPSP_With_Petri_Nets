@@ -3530,6 +3530,10 @@ short RCPSPState_CBS<N>::compute_mda_cost(
     return cost;
 }
 template<short N>
+void reset_mda_cache() {
+    get_mda_cache<N>().clear();
+}
+template<short N>
 short RCPSPState_CBS<N>::compute_h_and_RVS() const {
 
     if (!setting.use_conflict_prioritization &&setting.use_first_conflict) {
@@ -3978,28 +3982,56 @@ void RCPSPState_CBS<N>::propagate_with_strong_form_0() {
 
 template<short N>
 short RCPSPState_CBS<N>::compute_start_recursive(short act, std::array<bool, N>& visited) {
+    // for (short succ : downstream[0]) {
+    //     short new_start = start_times[succ];
+    //
+    //     // original backward dependencies
+    //     for (short dep : RCPSPex.backword_dependencies[succ]) {
+    //         int depIdx = dep - 1;
+    //         new_start = std::max((int)new_start,
+    //             start_times[depIdx] + RCPSPex.activities[depIdx].duration);
+    //     }
+    //
+    //     // added strong constraints
+    //     for (const auto& [f, t] : added_precedences) {
+    //         if (t == succ) {
+    //             new_start = std::max((int)new_start,
+    //                 (int)start_times[f] + RCPSPex.activities[f].duration);
+    //         }
+    //     }
+    //
+    //     start_times[succ] = new_start;
+    // }
+
     if (visited[act]) return start_times[act];
     // if (in_stack[act]) return start_times[act]; // cycle detected — break
 
     // in_stack[act] = true;.
 
     short new_start = 0;
+    // std::cout <<"new"<<std::endl;
 
     for (short dep : RCPSPex.backword_dependencies[act]) {
+        // if (dep<act) {
+        //     std::cout <<"good"<<std::endl;
+        // }
+        // else {
+        //     std::cout <<"bad"<<std::endl;
+        // }
         int depIdx = dep - 1;
         compute_start_recursive(depIdx, visited);
         new_start = std::max((int)new_start,
             (int)start_times[depIdx] + RCPSPex.activities[depIdx].duration);
     }
 
-    for (const auto& [f, t] : added_precedences) {
-        if (t == act) {
-            short fIdx = f; // if f is 1-based
-            compute_start_recursive(fIdx, visited);
-            new_start = std::max((int)new_start,
-                (int)start_times[fIdx] + RCPSPex.activities[fIdx].duration);
-        }
-    }
+    // for (const auto& [f, t] : added_precedences) {
+    //     if (t == act) {
+    //         short fIdx = f; // if f is 1-based
+    //         compute_start_recursive(fIdx, visited);
+    //         new_start = std::max((int)new_start,
+    //             (int)start_times[fIdx] + RCPSPex.activities[fIdx].duration);
+    //     }
+    // }
 
     // take max with existing to preserve parent delays
     start_times[act] = std::max(new_start, start_times[act]);
@@ -4360,11 +4392,11 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
         start_times[delayed] = new_start;
     }
 
-    // if (added_precedences.empty()) {
+    if (added_precedences.empty()) {
         propagate(0);
-    // } else {
-    //     propagate_with_strong_form_0();
-    // }
+    } else {
+        propagate_with_strong_form_0();
+    }
 }
     // 2. Reconstruct current_jobs from resource and conflict time
     // short new_start = 9999;
@@ -4421,14 +4453,14 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short 
     added_precedences.push_back({from, to});
     // explicitly enforce new constraint
     start_times[to] = start_times[from] + RCPSPex.activities[from].duration;
-    propagate_with_strong_form_0(); // full pass with all strong constraints
-
+    // propagate_with_strong_form_0(); // full pass with all strong constraints
+// propagate(0);
     // // propagate downstream effects
-    // if (added_precedences.size() == 1) {
-    //     propagate(to); // fast path — only one strong constraint, use original propagate
-    // } else {
-    //     propagate_with_strong_form_0(); // full pass with all strong constraints
-    // }
+    if (added_precedences.size() == 1) {
+        propagate(to); // fast path — only one strong constraint, use original propagate
+    } else {
+        propagate_with_strong_form_0(); // full pass with all strong constraints
+    }
 }
 
 template<short N>

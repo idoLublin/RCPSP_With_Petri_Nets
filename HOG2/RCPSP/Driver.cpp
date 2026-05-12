@@ -1298,11 +1298,13 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << astar.GetNodesTouched() << ","
          << path.size() << ","
          << peakMemKB << ","
+         << setting.use_first_conflict << ","
          << setting.use_conflict_prioritization << ","
          << (int)setting.heuristic << ","
-         << setting.use_first_conflict << ","
-         << setting.use_dominance << ","
-         << setting.use_greed_conflic_resultion_asstimation << ","
+         << setting.use_MDA_sets << ","
+         << setting.use_MDA_cache << ","
+         << setting.use_strong_constraints << ","
+         << setting.use_MDA_BAB << ","
          << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
@@ -1571,11 +1573,14 @@ void runBenchmark() {
 
 
  // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
+    // file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+    //      << "finished,expandNumber,generatedNumber,depth,maxMem,"
+    //      << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
+    //      << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
          << std::endl;
-
 
     if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
         std::cout <<"Error: invalid setting"<< std::endl;

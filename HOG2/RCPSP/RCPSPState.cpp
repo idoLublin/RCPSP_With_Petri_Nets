@@ -3386,6 +3386,19 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
                 for (int i = 0; i < (int)sorted_jobs.size(); i++)
                     demands_sorted[i] = resource_info[res_idx].demand_lookup.at(sorted_jobs[i]);
 
+
+                // std::cout << "conflict jobs and demands:" << std::endl;
+                // for (short job : current_jobs) {
+                //     std::cout << "job=" << job
+                //               << " demand=" << resource_info[res_idx].demand_lookup.at(job)
+                //               << " start=" << start_times[job]
+                //               << " finish=" << start_times[job] + RCPSPex.activities[job].duration
+                //               << " duration=" << RCPSPex.activities[job].duration
+                //               << std::endl;
+                // }
+                // std::cout << "excess=" << excess_demand << " capacity=" << resource_info[res_idx].capacity << std::endl;
+
+
                 std::vector<short> current_set;
                 current_set.reserve(sorted_jobs.size());
                 enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, local_sets);
@@ -3427,7 +3440,57 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
             sets_ptr = &local_sets;
         }
     }
-
+ // // run the other method to compare
+ //    std::vector<std::vector<short>> other_sets;
+ //
+ //    if (setting.use_MDA_BAB) {
+ //        // we used BAB, now run enumerate to compare
+ //        enumerate_sets(current_jobs, excess_demand, res_idx, other_sets);
+ //    } else {
+ //        // we used enumerate, now run BAB to compare
+ //        std::vector<short> sorted_jobs = current_jobs;
+ //        std::sort(sorted_jobs.begin(), sorted_jobs.end(), [&](short a, short b) {
+ //            return resource_info[res_idx].demand_lookup.at(a) >
+ //                   resource_info[res_idx].demand_lookup.at(b);
+ //        });
+ //        std::vector<short> demands_sorted(sorted_jobs.size());
+ //        for (int i = 0; i < (int)sorted_jobs.size(); i++)
+ //            demands_sorted[i] = resource_info[res_idx].demand_lookup.at(sorted_jobs[i]);
+ //        std::vector<short> current_set;
+ //        enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, other_sets);
+ //    }
+ //
+ //    // normalize both for comparison — sort each set, then sort list of sets
+ //    auto normalize = [](std::vector<std::vector<short>> s) {
+ //        for (auto& set : s) std::sort(set.begin(), set.end());
+ //        std::sort(s.begin(), s.end());
+ //        return s;
+ //    };
+ //
+ //    auto norm_sets = normalize(*sets_ptr);
+ //    auto norm_other = normalize(other_sets);
+ //
+ //    if (norm_sets != norm_other) {
+ //        std::cout << "=== MDA MISMATCH ===" << std::endl;
+ //        std::cout << "conflict jobs: ";
+ //        for (short j : current_jobs) std::cout << j << " ";
+ //        std::cout << "\nexcess: " << excess_demand << std::endl;
+ //
+ //        std::cout << (setting.use_MDA_BAB ? "BAB" : "ENU") << " sets:" << std::endl;
+ //        for (const auto& set : norm_sets) {
+ //            std::cout << "{ ";
+ //            for (short a : set) std::cout << a << " ";
+ //            std::cout << "}" << std::endl;
+ //        }
+ //
+ //        std::cout << (setting.use_MDA_BAB ? "ENU" : "BAB") << " sets:" << std::endl;
+ //        for (const auto& set : norm_other) {
+ //            std::cout << "{ ";
+ //            for (short a : set) std::cout << a << " ";
+ //            std::cout << "}" << std::endl;
+ //        }
+ //        std::cout << "===================" << std::endl;
+ //    }
     const std::vector<std::vector<short>>& sets = *sets_ptr;
 
     std::vector<MDA> mdas;
@@ -3557,12 +3620,29 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
             }
 
             if (total_demand <= res.capacity) continue;//conflict found
-
+            // std::cout << resIdx <<":"<<t<< std::endl;
+            //
+            // for (short job: current_jobs){
+            //     std::cout << job << " ";
+            //     }
+            // std::cout << std::endl;
             if (setting.use_MDA_sets) {
                 ConflictKey<N> key = make_conflict_key<N>(current_jobs, (short)resIdx);
                 short excess = total_demand - res.capacity;
                 std::vector<MDA> mdas = compute_mdas(
                     current_jobs, excess, latest_starts, resIdx,key);
+
+                // std::cout << "MDA:\n";
+                // for (a : mdas)
+                //     print(a, start[a], end[a]);
+                //
+                // std::cout << "Non-MDA conflict acts:\n";
+                // for (a : rvs)
+                //     if (!in_mda(a))
+                //         print(a, start[a], end[a]);
+                //
+                // std::cout << "Computed new_start = " << new_start << "\n";
+                //
 
                 int cardinal_count = 0;
                 short min_cardinal_cost = std::numeric_limits<short>::max();
@@ -3592,9 +3672,9 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
                     // h_cost = (score == 1.0f) ? min_cardinal_cost : 0;
                     found_any     = true;
                 }
-                if (setting.use_conflict_prioritization && setting.use_first_conflict) {
-                    if (best_score == 1) goto done;
-                }
+                // if (setting.use_conflict_prioritization && setting.use_first_conflict) {
+                //     if (best_score == 1) goto done;
+                // }
             }
             else {
                 // if ((short)current_jobs.size() > max_conflict_seen) {
@@ -3699,6 +3779,8 @@ done:
     resourceType   = best_resource;
     found_conflict = found_any;
     is_size2_conflict = (best_jobs.size() == 2);
+    rvs_activities_pool = std::move(best_jobs);
+    conflict_solutions = std::move(best_mdas);
 
  if (setting.use_MDA_sets) {
 
@@ -3707,12 +3789,10 @@ done:
 
      }
      else {
-         conflict_solutions = std::move(best_mdas);
 
      }
  }
 else {
-    rvs_activities_pool = std::move(best_jobs);
 
 }
 
@@ -3931,16 +4011,17 @@ short RCPSPState_CBS<N>::compute_start_recursive(short act, std::array<bool, N>&
 template<short N>
 void RCPSPState_CBS<N>::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
-        short new_start = 0;
+        // std::cout << succ <<std::endl;
+        short new_start = start_times[succ];
         for (short dep : RCPSPex.backword_dependencies[succ]) {
             int depIdx = dep - 1;
             new_start = std::max((int)new_start,
                 start_times[depIdx] + RCPSPex.activities[depIdx].duration);
         }
         // Only update if pushing FORWARD - never allow going backwards
-        if (new_start > start_times[succ]) {
+        // if (new_start > start_times[succ]) {
             start_times[succ] = new_start;
-        }
+        // }
     }
 }
 //
@@ -4244,37 +4325,92 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<short>& mda_activities, short conflict_t) {
     // 1. Copy parent
+    // start_times = prev.start_times;
+//     std::cout << "new state"<<std::endl;
+//
+// std::cout<<mda_activities.size()<<std::endl;
     start_times = prev.start_times;
+    added_precedences = prev.added_precedences;
 
-    // 2. Reconstruct current_jobs from resource and conflict time
     short new_start = 9999;
-    const ResourceInfo& res = resource_info[prev.resourceType];
-    for (int j = 0; j < (int)res.activity_indices.size(); j++) {
-        short actIdx = res.activity_indices[j];
-        short start  = prev.start_times[actIdx];
-        short finish = start + RCPSPex.activities[actIdx].duration;
-        if (start <= prev.t && finish > prev.t) {
-            // skip if in MDA set
-            if (std::find(mda_activities.begin(), mda_activities.end(), actIdx) != mda_activities.end()) continue;
-            new_start = std::min(new_start, finish);
+
+    if (!prev.rvs_activities_pool.empty()) {
+        // pool available — use it directly
+        std::span<const short> acts = prev.rvs_activities_pool;
+        for (short act : acts) {
+            if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
+            new_start = std::min(new_start,
+                (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+        }
+    } else {
+        // reconstruct from resource and conflict time
+        const ResourceInfo& res = resource_info[prev.resourceType];
+        for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+            short actIdx = res.activity_indices[j];
+            short start  = prev.start_times[actIdx];
+            short finish = start + RCPSPex.activities[actIdx].duration;
+            if (start <= prev.t && finish > prev.t) {
+                if (std::find(mda_activities.begin(), mda_activities.end(), actIdx) != mda_activities.end()) continue;
+                new_start = std::min(new_start, finish);
+            }
         }
     }
 
-    // 3. Apply to all MDA members
     for (short delayed : mda_activities) {
         start_times[delayed] = new_start;
     }
 
-    if (setting.use_strong_constraints) {
-        added_precedences = prev.added_precedences;
-        is_size2_conflict = false;
-        propagate_with_strong_form_0(); // full pass with strong constraints
-
-    } else {
-        propagate(0); // fast path — no strong constraints
-
-    }
+    // if (added_precedences.empty()) {
+        propagate(0);
+    // } else {
+    //     propagate_with_strong_form_0();
+    // }
 }
+    // 2. Reconstruct current_jobs from resource and conflict time
+    // short new_start = 9999;
+    // const ResourceInfo& res = resource_info[prev.resourceType];
+    // for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+    //     short actIdx = res.activity_indices[j];
+    //     short start  = prev.start_times[actIdx];
+    //     short finish = start + RCPSPex.activities[actIdx].duration;
+    //     if (start <= prev.t && finish > prev.t) {
+    //         // skip if in MDA set
+    //         if (std::find(mda_activities.begin(), mda_activities.end(), actIdx) != mda_activities.end()) continue;
+    //         new_start = std::min(new_start, finish);
+    //     }
+    // }
+    // 2. Find latest finish of all other activities in conflict
+    // short new_start = 9999;
+
+    // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
+    // 2. Iterate directly over the 'act' values
+    // std::span<const short> acts = prev.rvs_activities_pool;
+    // for (short j = 0; j < prev.rvs_activities_pool.size(); j++) {
+    //
+    //     short act = acts[j];
+    // if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
+    //     new_start = std::min(new_start,
+    //         (short)(start_times[act] + RCPSPex.activities[act].duration));
+    // }
+    // // 3. Apply to all MDA members
+    // // std::cout << "new_start for MDA: " << new_start << std::endl;
+    // for (short delayed : mda_activities) {
+    //     // std::cout << "delaying activity " << delayed << " from " << start_times[delayed] << " to " << new_start << std::endl;
+    //     start_times[delayed] = new_start;
+    //     // propagate(delayed); // fast path — no strong constraints
+    //
+    // }
+    // propagate(0); // fast path — no strong constraints
+
+    // if (setting.use_strong_constraints) {
+    //     added_precedences = prev.added_precedences;
+    //     is_size2_conflict = false;
+    //     propagate_with_strong_form_0(); // full pass with strong constraints
+    //
+    // } else {
+    //
+    // }
+// }
 
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short to, short conflict_t) {

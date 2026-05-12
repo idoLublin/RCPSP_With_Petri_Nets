@@ -2004,6 +2004,9 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
         // neighbors.emplace_back(nodeID, A, B, nodeID.t);
         // neighbors.emplace_back(nodeID, B, A, nodeID.t);
       }
+// if (sets.size() !=nodeID.conflict_solutions.size() ) {
+//   std::cout << "cache " << sets.size() << "local " << nodeID.conflict_solutions.size() <<std::endl;
+// }
       for (const auto& set : sets) {
         neighbors.emplace_back(nodeID, set, nodeID.t);
       }

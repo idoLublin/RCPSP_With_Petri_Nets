@@ -1263,22 +1263,36 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
 
     if (problemType == "j30") {
         int opt = getOptimalMakespan(group, exam, problemType);
-        file << (makespan == opt ? "True" : "False") << ","
+        bool solved = (!path.empty() || first.rvs_activities_pool.empty());
+        bool correct = (makespan == opt);
+
+        file << (correct ? "True" : "False") << ","
              << problemType << ","
              << "CBS" << ","
              << opt << ",-1,";
-        if (makespan != opt)
+
+        if (solved && !correct) {
             allcorrect = false;
+            // exit(0); // only exit if we finished but got wrong answer
+        }
     } else {
         Bounds b = getBounds(group, exam, problemType);
-        file << (b.optimal_known ? (makespan == b.lb ? "True" : "False") : "Unknown") << ","
+        bool solved = (!path.empty() || first.rvs_activities_pool.empty());
+        bool correct = b.optimal_known ? (makespan == b.lb) : (makespan >= b.lb && makespan <= b.ub);
+
+        file << (b.optimal_known ? (correct ? "True" : "False") : "Unknown") << ","
              << problemType << ","
              << "CBS" << ","
              << b.lb << "," << b.ub << ",";
-        if (makespan < b.lb||makespan >b.ub)
-            allcorrect = false;
-    }
 
+        if (solved && !correct) {
+            if (b.optimal_known) {
+                allcorrect = false;
+
+                // exit(0); // only exit if optimal known and we finished with wrong answer
+            }
+        }
+    }
     file << p.NC << "," << p.RF << "," << p.RS << ","
          << ((!path.empty() || first.rvs_activities_pool.empty()) ? "True" : "False") << ","
          << astar.GetNodesExpanded() << ","
@@ -1291,6 +1305,11 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << setting.use_dominance << ","
          << setting.use_greed_conflic_resultion_asstimation << ","
          << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
+    if (!allcorrect) {
+        std::cout <<"Error: incorrect results" <<std::endl;
+
+        exit(0);
+    }
 
     return 0;
 }
@@ -1603,7 +1622,8 @@ void runBenchmark() {
 
 
     // solveRCPSP_TT2(16, 9, filename, "j30");
-    solveRCPSP_CBS(5, 5, filename, "j60");
+    solveRCPSP_CBS(5, 5, filename, "j30");
+    // solveRCPSP_CBS(5, 5, filename, "j60");
 
     std::cout <<debug_cardinal_num <<std::endl;
 

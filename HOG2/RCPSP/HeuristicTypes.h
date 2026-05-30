@@ -22,6 +22,7 @@ enum class HeuristicType {
     CRITICAL_PATH,  // Default - fast DP-based critical path
     LBCS,           // Lower Bound Critical Sequence (workload-based)
     LBCC,           // Lower Bound Critical Capacity (work arrival simulation)
+    LBER,           // Enhanced Energetic Reasoning (Haouari, Kooli, Neron 2012)
 };
 
 /**
@@ -39,6 +40,9 @@ inline HeuristicType stringToHeuristicType(const std::string& str) {
         {"lbcc", HeuristicType::LBCC},
         {"critical-capacity", HeuristicType::LBCC},
         {"criticalcapacity", HeuristicType::LBCC},
+        {"lber", HeuristicType::LBER},
+        {"energetic", HeuristicType::LBER},
+        {"energetic-reasoning", HeuristicType::LBER},
     };
 
     // Convert to lowercase for case-insensitive matching
@@ -59,6 +63,7 @@ inline std::string heuristicTypeToString(HeuristicType type) {
         case HeuristicType::CRITICAL_PATH: return "CP";
         case HeuristicType::LBCS: return "LBCS";
         case HeuristicType::LBCC: return "LBCC";
+        case HeuristicType::LBER: return "LBER";
         default: return "UNKNOWN";
     }
 }
@@ -74,6 +79,9 @@ inline std::string heuristicTypeDescription(HeuristicType type) {
             return "Lower Bound Critical Sequence (workload-based)";
         case HeuristicType::LBCC:
             return "Lower Bound Critical Capacity (work arrival simulation)";
+        case HeuristicType::LBER:
+            return "Enhanced Energetic Reasoning (destructive; CER per-node, "
+                   "DFF/RER/EER/GER/SHV in root mode)";
         default:
             return "Unknown heuristic";
     }

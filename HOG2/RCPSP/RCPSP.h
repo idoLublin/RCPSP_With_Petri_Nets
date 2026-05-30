@@ -36,6 +36,21 @@ double computeCriticalCapacityLB(
     const std::vector<std::pair<short, short>>& activeTransitions,
     int currentMakespan);
 
+// Forward declarations for LBER (enhanced energetic reasoning)
+void initializeEnergetic();
+double computeEnergeticLB(
+    const std::vector<short>& unfinishedActivities,
+    const std::vector<std::pair<short, short>>& activeTransitions,
+    int currentMakespan, int depth);
+void computeRootBound(int depth);  // root-mode SHV pipeline (once per problem)
+extern thread_local bool energeticInitialized;
+extern thread_local bool lberRootComputed;
+
+// LBER configuration (defined in Driver.cpp): mode = "root"|"pernode",
+// depth 1..6 selects how far up the feasibility cascade to go.
+extern std::string lberMode;
+extern int lberDepth;
+
 // Global DP toggle (defined in Driver.cpp)
 extern bool useDPHeuristic;
 
@@ -288,6 +303,13 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       double cpH = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
       double lbccH = computeCriticalCapacityLB(tempUnstarted, state1.activeTransitionIndices, state1.g);
       state1.h = std::max(cpH, lbccH);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBER) {
+      int depth = (lberMode == "pernode") ? std::min(lberDepth, 2) : lberDepth;
+      if (lberMode != "pernode")
+        computeRootBound(depth); // once per problem: tightens windows + root LB
+      double cpH = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+      double erH = computeEnergeticLB(tempUnstarted, state1.activeTransitionIndices, state1.g, depth);
+      state1.h = std::max(cpH, erH);
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       state1.h = computeLBCS(tempUnstarted, state1.activeTransitionIndices);
     } else if (useDPHeuristic) {
@@ -736,6 +758,16 @@ int lastActivityId = -1;
       double lbccVal = std::max(computeCriticalCapacityLB(tempUnstarted, emptyActive, state1.g) - unkTime,
                                 computeCriticalCapacityLB(newUnstartedTransitions, emptyActive, state1.g));
       return std::max(cpVal, lbccVal);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBER) {
+      int depth = (lberMode == "pernode") ? std::min(lberDepth, 2) : lberDepth;
+      if (lberMode != "pernode")
+        computeRootBound(depth);
+      std::vector<std::pair<short, short>> emptyActive;
+      double cpVal = std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
+                              getForwardHcostDP_TT(newUnstartedTransitions));
+      double erVal = std::max(computeEnergeticLB(tempUnstarted, emptyActive, state1.g, depth) - unkTime,
+                              computeEnergeticLB(newUnstartedTransitions, emptyActive, state1.g, depth));
+      return std::max(cpVal, erVal);
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return std::max(computeLBCS_TT(tempUnstarted) - unkTime,
              computeLBCS_TT(newUnstartedTransitions));
@@ -753,6 +785,14 @@ int lastActivityId = -1;
       std::vector<std::pair<short, short>> emptyActive;
       double lbccVal = computeCriticalCapacityLB(tempUnstarted, emptyActive, state1.g);
       return std::max(cpVal, lbccVal);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBER) {
+      int depth = (lberMode == "pernode") ? std::min(lberDepth, 2) : lberDepth;
+      if (lberMode != "pernode")
+        computeRootBound(depth);
+      std::vector<std::pair<short, short>> emptyActive;
+      double cpVal = getForwardHcostDP_TT(tempUnstarted);
+      double erVal = computeEnergeticLB(tempUnstarted, emptyActive, state1.g, depth);
+      return std::max(cpVal, erVal);
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return computeLBCS_TT(tempUnstarted);
     } else if (useDPHeuristic) {

@@ -1,5 +1,6 @@
-# Build directory for compiled executables
+# Build directories for compiled executables
 build/
+build_cmake/
 
 # HOG2 Compiled Objects
 HOG2/bin
@@ -7,4 +8,7 @@ HOG2/objs
 
 # CLion files
 cmake-build-debug
-CMakeLists.txt
+
+# Claude Code — keep local skills, plugin config, and NotebookLM auth/session
+# data (Google cookies, browser profile) out of the repo.
+.claude/

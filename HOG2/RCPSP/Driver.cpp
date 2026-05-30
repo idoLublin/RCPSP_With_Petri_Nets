@@ -37,6 +37,11 @@ P_RCPSP::HeuristicType activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
 // Global DP heuristic toggle
 bool useDPHeuristic = true;
 
+// LBER configuration: mode ("root"|"pernode") and pipeline depth (1..6).
+// Default depth 3 = CER+DFF+SHV (the efficient, best bound); 4=+RER, 5=+EER, 6=+GER.
+std::string lberMode = "root";
+int lberDepth = 3;
+
 // Global optimal makespan map for validation
 std::map<std::pair<int,int>, int> optimalMakespan;
 
@@ -100,6 +105,8 @@ struct Config {
     
     // Algorithm options
     P_RCPSP::HeuristicType heuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;  // Default: CP
+    std::string lberMode = "root";  // LBER mode: "root" (full pipeline) or "pernode"
+    int lberDepth = 3;              // LBER pipeline depth 1..6 (higher = tighter, costlier)
     bool useDP = true;           // Use DP preprocessing for heuristic (default: true)
     bool sortResults = true;
     bool writeHeader = true;
@@ -226,6 +233,10 @@ Config parseArgs(int argc, char* argv[]) {
             config.timeLimit = std::stoi(argv[++i]);
         } else if (arg == "--heuristic" && i + 1 < argc) {
             config.heuristic = P_RCPSP::stringToHeuristicType(argv[++i]);
+        } else if (arg == "--lber-mode" && i + 1 < argc) {
+            config.lberMode = argv[++i];
+        } else if (arg == "--lber-depth" && i + 1 < argc) {
+            config.lberDepth = std::stoi(argv[++i]);
         } else if (arg == "--use-cs") {
             // Deprecated: backward compatibility
             config.heuristic = P_RCPSP::HeuristicType::LBCS;
@@ -560,6 +571,8 @@ void runSolver(const Config& config) {
     // Set global heuristic type and DP flag
     activeHeuristic = config.heuristic;
     useDPHeuristic = config.useDP;
+    lberMode = config.lberMode;
+    lberDepth = config.lberDepth;
 
     // Load optimal makespan for validation
     optimalMakespan = loadOptimalMakespan(config.problemType);
@@ -585,6 +598,8 @@ void runSolver(const Config& config) {
             RCPSPex.reset();
             heuristicDPInitialized = false;  // Reset DP cache for new problem
             lbccInitialized = false;         // Reset LBcc cache for new problem
+            energeticInitialized = false;    // Reset LBER cache for new problem
+            lberRootComputed = false;        // Reset LBER root-bound cache
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {

@@ -12,6 +12,9 @@
 #include <thread>
 #include <unordered_set>
 #include <vector>
+#ifdef USE_ORTOOLS
+#include "ortools/sat/cp_model.h" // EER/GER 0-1 IP feasibility tests (depth >=5)
+#endif
 using namespace P_RCPSP;
 
 // std::chrono::duration<double> generateTIME;
@@ -359,6 +362,680 @@ double computeCriticalCapacityLB(
   }
 
   return std::ceil(finalLB);
+}
+
+// ============================================================================
+// Enhanced Energetic Reasoning Lower Bound (LBER)
+// Haouari, Kooli, Neron, "Enhanced energetic reasoning-based lower bounds for
+// the resource constrained project scheduling problem", Computers & Operations
+// Research, 2012.
+//
+// Destructive lower bound: for a trial (remaining) makespan C, derive per-
+// activity release r_j / deadline d_j from the precedence longest paths and run
+// energetic feasibility tests on the O(n^2) relevant intervals. If some
+// resource is overloaded, C is infeasible and the bound is C+1; the smallest C
+// that is not proven infeasible is a valid lower bound.
+//
+// Phase 1 implements the classical energetic reasoning test (CER). The cascade
+// is depth-parameterised by cost (cheapest-first, short-circuiting). The inner
+// per-interval feasibility test strengthens with depth: depth>=2 DFF,
+// >=4 RER, >=5 EER, >=6 GER. SHV (depth>=3) is the efficient shaving procedure
+// applied by the root pipeline as a wrap around these tests (not inside
+// erInfeasible). All of these are added in later phases and are no-ops here.
+// Applied to the RESIDUAL problem at a node, the result is an admissible lower
+// bound on the REMAINING makespan.
+// ============================================================================
+
+// Precomputation cache (thread-local; reset per problem in runSolver()).
+thread_local std::vector<int> tailAfter; // longest path from finish of j to sink (1-based)
+thread_local std::vector<std::vector<int>> erDemand; // erDemand[k][j] = b_jk (1-based j)
+thread_local std::vector<int> erCapacity;            // capacity B_k per resource index
+thread_local bool energeticInitialized = false;
+
+// Reusable per-call scratch (thread-local) so the per-node hot path performs no
+// heap allocation. Indexed by activity id (1-based); only the current residual
+// ids are read, so stale entries are harmless.
+thread_local std::array<int, MAX_ACTIVITIES + 2> erP{}; // residual processing time
+thread_local std::array<int, MAX_ACTIVITIES + 2> erR{}; // residual release date
+thread_local std::array<int, MAX_ACTIVITIES + 2> erD{}; // deadline at trial C
+thread_local std::vector<int> erO1, erO2;               // interval endpoints
+thread_local std::vector<int> erEST; // global earliest start (1-based), tightened by root shaving
+
+// Root-mode (SHV) state: the destructive + shaving bound is computed once per
+// problem and tightens erEST[]/tailAfter[] for the per-node bound.
+thread_local int lberRootBound = 0;
+thread_local bool lberRootComputed = false;
+
+void initializeEnergetic() {
+  if (energeticInitialized)
+    return;
+  if (!lbccInitialized)
+    initializeLBcc(); // ensures estValues[] (EST) is populated
+
+  int n = RCPSPex.activities.size();
+
+  // tailAfter[j] = longest path (in durations) from the FINISH of activity j to
+  // the project end, i.e. max over successors s of (p_s + tailAfter[s]).
+  // Activities are in topological order, so process them in reverse.
+  tailAfter.assign(n + 2, 0);
+  for (int j = n; j >= 1; j--) {
+    int best = 0;
+    for (int s : RCPSPex.dependencies[j - 1]) {
+      int cand = RCPSPex.activities[s - 1].duration + tailAfter[s];
+      best = std::max(best, cand);
+    }
+    tailAfter[j] = best;
+  }
+
+  // Dense per-resource demand matrix + capacities (avoids std::map lookups in
+  // the O(n^2) interval hot loop).
+  int K = RCPSPex.resources.size();
+  erCapacity.assign(K, 0);
+  erDemand.assign(K, std::vector<int>(n + 1, 0));
+  for (int k = 0; k < K; k++) {
+    const std::string &resName = RCPSPex.resources[k].first;
+    erCapacity[k] = RCPSPex.resources[k].second;
+    for (int j = 1; j <= n; j++) {
+      const auto &dem = RCPSPex.activities[j - 1].resource_demands;
+      auto it = dem.find(resName);
+      if (it != dem.end())
+        erDemand[k][j] = it->second;
+    }
+  }
+
+  // Global earliest starts (copy of EST); root shaving tightens these in place.
+  erEST.assign(n + 2, 0);
+  for (int j = 1; j <= n; j++)
+    erEST[j] = estValues[j];
+
+  energeticInitialized = true;
+}
+
+// Mandatory work of activity j (demand b, processing p, release r, deadline d)
+// inside interval [t1,t2]: min of its "left work" and "right work".
+static inline long long erMandatoryWork(int b, int p, int r, int d, int t1,
+                                        int t2) {
+  if (b == 0)
+    return 0;
+  int span = t2 - t1;
+  int wl = std::min(std::min(span, p), std::max(0, r + p - t1));
+  int wr = std::min(std::min(span, p), std::max(0, t2 - d + p));
+  int w = std::min(wl, wr);
+  return (w > 0) ? (long long)b * w : 0;
+}
+
+// Reduced processing time of activity j inside [t1,t2] (= W_jk / b_jk):
+// p_j(t1,t2) = min(t2-t1, p, max(0,r+p-t1), max(0,t2-d+p)).
+static inline int erReducedP(int p, int r, int d, int t1, int t2) {
+  int span = t2 - t1;
+  int v = std::min(std::min(span, p),
+                   std::min(std::max(0, r + p - t1), std::max(0, t2 - d + p)));
+  return v > 0 ? v : 0;
+}
+
+// Fekete-Schepers DFF f^2_s applied to value x with capacity B (s in {1,2}):
+// f(x) = x if x(s+1) mod B == 0, else floor(x(s+1)/B) * (B/s). f(B) = B.
+static inline long long dff2(long long x, long long B, int s) {
+  if (x <= 0 || B <= 0)
+    return 0;
+  long long num = x * (s + 1);
+  if (num % B == 0)
+    return x;
+  return (num / B) * (B / s);
+}
+
+// 0-1 knapsack via DP: maximize total value with total weight <= cap.
+// items = (weight, value) pairs. Reuses a thread-local DP buffer.
+thread_local std::vector<long long> erKnap;
+static long long erKnapsackMax(const std::vector<std::pair<int, long long>> &items,
+                               int cap) {
+  if (cap <= 0)
+    return 0;
+  erKnap.assign(cap + 1, 0);
+  for (const auto &it : items) {
+    int w = it.first;
+    long long v = it.second;
+    if (w <= 0 || w > cap || v <= 0)
+      continue;
+    for (int c = cap; c >= w; c--)
+      erKnap[c] = std::max(erKnap[c], erKnap[c - w] + v);
+  }
+  return erKnap[cap];
+}
+
+// RER (relaxed revisited energetic reasoning), depth>=4. For resource k over
+// interval [t1,t2], compute the relaxed work estimate W~_k via the 7-subset
+// partition + two independent knapsacks (P2 with constraints (11),(12) relaxed),
+// and test Property 4: W~_k > m_k*(t2-t1) => infeasible. Uses the current
+// windows erR/erD/erP. m^l_k/m^r_k use the admissible over-approximation
+// min(placeable-demand, m_k) (a larger left/right capacity only weakens the
+// bound, never breaks admissibility). W~_k <= the exact min work, so it is a
+// valid lower bound on the work.
+thread_local std::vector<std::pair<int, long long>> erLeftItems, erRightItems;
+static bool rerInfeasibleInterval(const std::vector<short> &ids, int t1, int t2,
+                                  int k) {
+  long long span = t2 - t1;
+  int B = erCapacity[k];
+  const std::vector<int> &dem = erDemand[k];
+
+  // m_k = B_k - sum of demands of A_0 (activities spanning the whole interval).
+  long long a0 = 0;
+  for (short j : ids) {
+    int b = dem[j];
+    if (b == 0)
+      continue;
+    int rj = erR[j], dj = erD[j], pj = erP[j];
+    if (!((rj + pj > t1) && (dj - pj < t2)))
+      continue; // not in A(t1,t2)
+    if ((rj + pj >= t2) && (dj - pj <= t1))
+      a0 += b; // A_0: whole-interval
+  }
+  long long mk = (long long)B - a0;
+  if (mk < 0)
+    return true; // forced whole-interval demand already exceeds capacity
+
+  long long baseline = 0, sumL = 0, sumR = 0;
+  erLeftItems.clear();
+  erRightItems.clear();
+  for (short j : ids) {
+    int b = dem[j];
+    if (b == 0)
+      continue;
+    int rj = erR[j], dj = erD[j], pj = erP[j];
+    if (!((rj + pj > t1) && (dj - pj < t2)))
+      continue;
+    if ((rj + pj >= t2) && (dj - pj <= t1))
+      continue; // A_0 already counted in m_k
+    long long Wi = (long long)b * pj;
+    long long Wl = (long long)b * std::min(std::min((int)span, pj), std::max(0, rj + pj - t1));
+    long long Wr = (long long)b * std::min(std::min((int)span, pj), std::max(0, t2 - dj + pj));
+
+    bool Lonly = (rj + pj < t2) && (dj - pj <= t1);
+    bool Ronly = (rj + pj >= t2) && (dj - pj > t1);
+    bool Ionly = (t1 < rj) && (dj < t2);
+    if (Lonly) {
+      baseline += Wl;
+    } else if (Ronly) {
+      baseline += Wr;
+    } else if (Ionly) {
+      baseline += Wi;
+    } else {
+      // mixed (A_LI / A_RI / A_LR / A_LIR): baseline = full inside work W^i,
+      // and offer left/right "savings" items to the knapsacks per placeability.
+      baseline += Wi;
+      bool aLI = (rj <= t1) && (dj < t2) && (dj - pj > t1);
+      bool aRI = (rj > t1) && (dj >= t2) && (rj + pj < t2);
+      bool common = (rj <= t1) && (dj >= t2) && (rj + pj < t2) && (dj - pj > t1);
+      bool plL = aLI || common;           // A_LI, A_LR, A_LIR
+      bool plR = aRI || common;           // A_RI, A_LR, A_LIR
+      if (plL) { erLeftItems.push_back({b, Wi - Wl}); sumL += b; }
+      if (plR) { erRightItems.push_back({b, Wi - Wr}); sumR += b; }
+    }
+  }
+  long long mlk = std::min(sumL, mk);
+  long long mrk = std::min(sumR, mk);
+  long long Ek = erKnapsackMax(erLeftItems, (int)mlk) +
+                 erKnapsackMax(erRightItems, (int)mrk);
+  long long Wtilde = baseline - Ek;
+  return Wtilde > mk * span;
+}
+
+#ifdef USE_ORTOOLS
+namespace ors = operations_research::sat;
+
+// Classify a mixed (left/right/inside-flexible) activity for interval [t1,t2].
+// The partition is resource-independent. Returns true if j is "mixed" and sets
+// placeability flags; false if j is forced (or not in A(t1,t2)\A_0).
+static inline bool erClassifyMixed(int rj, int dj, int pj, int t1, int t2,
+                                   bool &plL, bool &plR, bool &plI) {
+  long long span = t2 - t1;
+  bool aLI = (rj <= t1) && (dj < t2) && (dj - pj > t1);
+  bool aRI = (rj > t1) && (dj >= t2) && (rj + pj < t2);
+  bool common = (rj <= t1) && (dj >= t2) && (rj + pj < t2) && (dj - pj > t1);
+  if (!(aLI || aRI || common))
+    return false;
+  plL = aLI || common;                      // A_LI, A_LR, A_LIR
+  plR = aRI || common;                      // A_RI, A_LR, A_LIR
+  plI = aLI || aRI || (common && pj < span - 1); // A_LI, A_RI, A_LIR (not A_LR)
+  return true;
+}
+
+// EER (exact revisited ER), depth>=5: solve the per-resource 0-1 IP (P1) for the
+// minimum inside-work E_k via CP-SAT, then W_bar_k = E_k + forced work
+// (Property 3: W_bar_k > m_k*(t2-t1) => infeasible). Only acts on a proven
+// OPTIMAL solve; otherwise returns false (cannot prove -> stay admissible).
+static bool eerInfeasibleInterval(const std::vector<short> &ids, int t1, int t2,
+                                  int k) {
+  long long span = t2 - t1;
+  const std::vector<int> &dem = erDemand[k];
+  long long a0 = 0, forced = 0, sumL = 0, sumR = 0;
+  struct Mx { long long b, Wl, Wr, Wi; bool plL, plR, plI; };
+  std::vector<Mx> mixed;
+  for (short j : ids) {
+    int b = dem[j];
+    if (b == 0)
+      continue;
+    int rj = erR[j], dj = erD[j], pj = erP[j];
+    if (!((rj + pj > t1) && (dj - pj < t2)))
+      continue;
+    if ((rj + pj >= t2) && (dj - pj <= t1)) { a0 += b; continue; }
+    long long Wi = (long long)b * pj;
+    long long Wl = (long long)b * std::min(std::min((int)span, pj), std::max(0, rj + pj - t1));
+    long long Wr = (long long)b * std::min(std::min((int)span, pj), std::max(0, t2 - dj + pj));
+    bool Lonly = (rj + pj < t2) && (dj - pj <= t1);
+    bool Ronly = (rj + pj >= t2) && (dj - pj > t1);
+    bool Ionly = (t1 < rj) && (dj < t2);
+    if (Lonly) { forced += Wl; }
+    else if (Ronly) { forced += Wr; }
+    else if (Ionly) { forced += Wi; }
+    else {
+      bool plL, plR, plI;
+      erClassifyMixed(rj, dj, pj, t1, t2, plL, plR, plI);
+      mixed.push_back({b, Wl, Wr, Wi, plL, plR, plI});
+      if (plL) sumL += b;
+      if (plR) sumR += b;
+    }
+  }
+  long long mk = (long long)erCapacity[k] - a0;
+  if (mk < 0)
+    return true;
+  if (mixed.empty())
+    return forced > mk * span;
+  if ((int)mixed.size() > 30)
+    return false; // gate large IPs for tractability
+  long long mlk = std::min(sumL, mk), mrk = std::min(sumR, mk);
+
+  ors::CpModelBuilder cp;
+  ors::LinearExpr obj, capL, capR;
+  for (const auto &a : mixed) {
+    ors::BoolVar x = cp.NewBoolVar(), y = cp.NewBoolVar(), z = cp.NewBoolVar();
+    if (!a.plL) cp.AddEquality(x, 0);
+    if (!a.plR) cp.AddEquality(y, 0);
+    if (!a.plI) cp.AddEquality(z, 0);
+    cp.AddEquality(x + y + z, 1);
+    obj += a.Wl * x; obj += a.Wr * y; obj += a.Wi * z;
+    capL += a.b * x; capR += a.b * y;
+  }
+  cp.AddLessOrEqual(capL, mlk);
+  cp.AddLessOrEqual(capR, mrk);
+  cp.Minimize(obj);
+  ors::SatParameters params;
+  params.set_max_time_in_seconds(1.0);
+  params.set_num_search_workers(1);
+  const ors::CpSolverResponse resp = ors::SolveWithParameters(cp.Build(), params);
+  if (resp.status() != ors::CpSolverStatus::OPTIMAL)
+    return false;
+  long long Ek = (long long)(resp.objective_value() + 0.5);
+  return (Ek + forced) > mk * span;
+}
+
+// GER (global revisited ER), depth>=6: one IP (P3) over ALL resources with
+// shared position vars and per-resource slack e_k; min sum e_k; Property 5:
+// optimum > 0 => infeasible. Partition is resource-independent. OPTIMAL-only.
+static bool gerInfeasibleInterval(const std::vector<short> &ids, int t1, int t2) {
+  long long span = t2 - t1;
+  int K = erCapacity.size();
+  std::vector<long long> mk(K), forced(K, 0);
+  for (int k = 0; k < K; k++) mk[k] = erCapacity[k];
+  std::vector<short> mixedIds;
+  std::vector<std::array<bool, 3>> place; // plL, plR, plI per mixed activity
+  for (short j : ids) {
+    int rj = erR[j], dj = erD[j], pj = erP[j];
+    if (!((rj + pj > t1) && (dj - pj < t2)))
+      continue;
+    bool whole = (rj + pj >= t2) && (dj - pj <= t1);
+    if (whole) { for (int k = 0; k < K; k++) mk[k] -= erDemand[k][j]; continue; }
+    bool Lonly = (rj + pj < t2) && (dj - pj <= t1);
+    bool Ronly = (rj + pj >= t2) && (dj - pj > t1);
+    bool Ionly = (t1 < rj) && (dj < t2);
+    if (Lonly || Ronly || Ionly) {
+      for (int k = 0; k < K; k++) {
+        int b = erDemand[k][j];
+        if (!b) continue;
+        long long Wi = (long long)b * pj;
+        long long Wl = (long long)b * std::min(std::min((int)span, pj), std::max(0, rj + pj - t1));
+        long long Wr = (long long)b * std::min(std::min((int)span, pj), std::max(0, t2 - dj + pj));
+        forced[k] += Lonly ? Wl : (Ronly ? Wr : Wi);
+      }
+    } else {
+      bool plL, plR, plI;
+      erClassifyMixed(rj, dj, pj, t1, t2, plL, plR, plI);
+      mixedIds.push_back(j);
+      place.push_back({plL, plR, plI});
+    }
+  }
+  for (int k = 0; k < K; k++)
+    if (mk[k] < 0) return true;
+  if (mixedIds.empty()) {
+    for (int k = 0; k < K; k++)
+      if (forced[k] > mk[k] * span) return true;
+    return false;
+  }
+  if ((int)mixedIds.size() > 30)
+    return false;
+
+  ors::CpModelBuilder cp;
+  size_t M = mixedIds.size();
+  std::vector<ors::BoolVar> X(M), Y(M), Z(M);
+  for (size_t i = 0; i < M; i++) {
+    X[i] = cp.NewBoolVar(); Y[i] = cp.NewBoolVar(); Z[i] = cp.NewBoolVar();
+    if (!place[i][0]) cp.AddEquality(X[i], 0);
+    if (!place[i][1]) cp.AddEquality(Y[i], 0);
+    if (!place[i][2]) cp.AddEquality(Z[i], 0);
+    cp.AddEquality(X[i] + Y[i] + Z[i], 1);
+  }
+  ors::LinearExpr objSlack;
+  for (int k = 0; k < K; k++) {
+    ors::LinearExpr capL, capR, energy;
+    for (size_t i = 0; i < M; i++) {
+      short j = mixedIds[i];
+      int b = erDemand[k][j];
+      if (!b) continue;
+      int rj = erR[j], dj = erD[j], pj = erP[j];
+      long long Wi = (long long)b * pj;
+      long long Wl = (long long)b * std::min(std::min((int)span, pj), std::max(0, rj + pj - t1));
+      long long Wr = (long long)b * std::min(std::min((int)span, pj), std::max(0, t2 - dj + pj));
+      capL += (long long)b * X[i];
+      capR += (long long)b * Y[i];
+      energy += Wl * X[i]; energy += Wr * Y[i]; energy += Wi * Z[i];
+    }
+    cp.AddLessOrEqual(capL, mk[k]);
+    cp.AddLessOrEqual(capR, mk[k]);
+    long long Ek = mk[k] * span - forced[k]; // available work for mixed activities
+    if (Ek < 0) Ek = 0;
+    ors::IntVar ek = cp.NewIntVar(operations_research::Domain(0, mk[k] * span + 1));
+    cp.AddLessOrEqual(energy - ek, Ek);
+    objSlack += ek;
+  }
+  cp.Minimize(objSlack);
+  ors::SatParameters params;
+  params.set_max_time_in_seconds(2.0);
+  params.set_num_search_workers(1);
+  const ors::CpSolverResponse resp = ors::SolveWithParameters(cp.Build(), params);
+  if (resp.status() != ors::CpSolverStatus::OPTIMAL)
+    return false;
+  return resp.objective_value() > 0.5; // xi > 0 => infeasible
+}
+#endif // USE_ORTOOLS
+
+// CER overload test over the CURRENT windows erR[]/erD[]/erP[] for the given
+// ids. Returns true iff some resource is overloaded on some relevant interval.
+// Cheapest-first; short-circuits on the first overload. (Shaving calls this
+// directly after mutating erR/erD; the destructive loop sets erD from C first.)
+static bool erOverload(const std::vector<short> &ids, int depth) {
+  // Interval endpoint sets O1 = {r_j} U {d_j - p_j}, O2 = {d_j} U {r_j + p_j}.
+  erO1.clear();
+  erO2.clear();
+  for (short j : ids) {
+    erO1.push_back(erR[j]);
+    erO1.push_back(erD[j] - erP[j]);
+    erO2.push_back(erD[j]);
+    erO2.push_back(erR[j] + erP[j]);
+  }
+  std::sort(erO1.begin(), erO1.end());
+  erO1.erase(std::unique(erO1.begin(), erO1.end()), erO1.end());
+  std::sort(erO2.begin(), erO2.end());
+  erO2.erase(std::unique(erO2.begin(), erO2.end()), erO2.end());
+
+  int K = erCapacity.size();
+
+  // ---- depth 1: CER (classical energetic reasoning), per resource ----
+  for (int t1 : erO1) {
+    for (int t2 : erO2) {
+      if (t2 <= t1)
+        continue;
+      long long span = t2 - t1;
+      for (int k = 0; k < K; k++) {
+        const std::vector<int> &dem = erDemand[k];
+        long long avail = (long long)erCapacity[k] * span;
+        long long Wk = 0;
+        for (short j : ids) {
+          int b = dem[j];
+          if (b == 0)
+            continue;
+          Wk += erMandatoryWork(b, erP[j], erR[j], erD[j], t1, t2);
+          if (Wk > avail)
+            return true; // overload -> infeasible (short-circuit)
+        }
+        // ---- depth >= 2: DFF capacity bound on the reduced instance. Apply the
+        // Fekete-Schepers DFF f^2_s to demands; f(B_k)=B_k, so infeasibility
+        // (Corollary 1, transformed reduced LB_C > t2-t1) is f-work > B_k*span.
+        if (depth >= 2) {
+          for (int s = 1; s <= 2; s++) {
+            long long fwork = 0;
+            for (short j : ids) {
+              int b = dem[j];
+              if (b == 0)
+                continue;
+              int pr = erReducedP(erP[j], erR[j], erD[j], t1, t2);
+              if (pr == 0)
+                continue;
+              fwork += dff2(b, erCapacity[k], s) * pr;
+            }
+            if (fwork > (long long)erCapacity[k] * span)
+              return true;
+          }
+        }
+        // ---- depth >= 4: RER (relaxed revisited), a tighter per-resource test
+        if (depth >= 4 && rerInfeasibleInterval(ids, t1, t2, k))
+          return true;
+#ifdef USE_ORTOOLS
+        // ---- depth >= 5: EER (exact revisited), per-resource 0-1 IP
+        if (depth >= 5 && eerInfeasibleInterval(ids, t1, t2, k))
+          return true;
+#endif
+      }
+#ifdef USE_ORTOOLS
+      // ---- depth >= 6: GER (global revisited), single IP over all resources
+      if (depth >= 6 && gerInfeasibleInterval(ids, t1, t2))
+        return true;
+#endif
+    }
+  }
+
+  // Stronger inner tests added in later phases: depth >= 2 (DFF),
+  // >= 5 (EER), >= 6 (GER). SHV (depth >= 3) wraps this test in the root
+  // pipeline rather than running here.
+  return false;
+}
+
+// Set deadlines d_j = C - tailAfter[j] for the given ids, then run the overload
+// test. True iff trial makespan C is proven infeasible.
+static bool erInfeasibleC(const std::vector<short> &ids, int C, int depth) {
+  for (short j : ids)
+    erD[j] = C - tailAfter[j];
+  return erOverload(ids, depth);
+}
+
+// Energetic-reasoning lower bound on the REMAINING makespan from a search node.
+// Builds the residual instance (unstarted + in-progress activities, origin
+// shifted to currentMakespan) and runs the destructive loop. Admissible: never
+// exceeds the true remaining makespan.
+double computeEnergeticLB(
+    const std::vector<short> &unfinishedActivities,
+    const std::vector<std::pair<short, short>> &activeTransitions,
+    int currentMakespan, int depth) {
+  if (!energeticInitialized)
+    initializeEnergetic();
+  if (unfinishedActivities.size() < 2)
+    return 0; // CER cannot overload with <2 activities; CP handles it
+
+  // EER/GER (depth >= 5) solve a CP-SAT IP per interval — far too slow to run at
+  // every A* node. They are used only as a one-shot ROOT bound (computeRootBound);
+  // the per-node test is capped at the polynomial tiers (CER/DFF/RER).
+  if (depth > 4)
+    depth = 4;
+
+  // Remaining processing time of in-progress activities.
+  std::array<short, MAX_ACTIVITIES> activeRemaining;
+  activeRemaining.fill(-1);
+  for (const auto &[idx, rem] : activeTransitions)
+    activeRemaining[idx] = rem;
+
+  // Residual forward pass: earliest finish (origin = currentMakespan), giving a
+  // valid (true) residual release r_j = earlyFinish_j - p_j for each activity.
+  // Fills the thread-local scratch erP/erR (no allocation).
+  std::array<int, MAX_ACTIVITIES> earlyFinish;
+  earlyFinish.fill(-1);
+  long long sumP = 0;
+  int cInit = 0;
+  for (short j : unfinishedActivities) {
+    int maxPredFinish = 0;
+    for (int dep : RCPSPex.backword_dependencies[j - 1]) {
+      if (earlyFinish[dep] != -1)
+        maxPredFinish = std::max(maxPredFinish, earlyFinish[dep]);
+      else if (activeRemaining[dep] != -1)
+        maxPredFinish = std::max(maxPredFinish, (int)activeRemaining[dep]);
+    }
+    int pj = (activeRemaining[j] != -1) ? activeRemaining[j]
+                                        : RCPSPex.activities[j - 1].duration;
+    erP[j] = pj;
+    earlyFinish[j] = maxPredFinish + pj;
+    // Residual release: the residual forward pass, tightened by the global
+    // earliest start (erEST, possibly raised by root shaving), shifted into the
+    // residual frame. Both are valid lower bounds on j's residual start.
+    int rj = earlyFinish[j] - pj;
+    int rGlobal = erEST[j] - currentMakespan;
+    if (rGlobal > rj)
+      rj = rGlobal;
+    if (rj < 0)
+      rj = 0;
+    erR[j] = rj;
+    sumP += pj;
+    // residual critical-path bound: earliest finish of j + its downstream tail.
+    cInit = std::max(cInit, earlyFinish[j] + tailAfter[j]);
+  }
+
+  // Common case: the critical-path bound is already feasible, so energetic
+  // reasoning does not improve it -> a single feasibility test returns cInit.
+  if (!erInfeasibleC(unfinishedActivities, cInit, depth))
+    return (double)cInit;
+
+  // Otherwise the bound is strictly above cInit. Binary search the smallest
+  // C in (cInit, cMax] not proven infeasible (erInfeasible is monotone in C:
+  // larger C widens windows -> less mandatory work -> no new infeasibility).
+  int cMax = (int)sumP; // serial schedule is always feasible -> upper bound
+  if (cMax < cInit)
+    cMax = cInit;
+  int lo = cInit + 1, hi = cMax;
+  while (lo < hi) {
+    int mid = lo + (hi - lo) / 2;
+    if (erInfeasibleC(unfinishedActivities, mid, depth))
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return (double)lo;
+}
+
+// Root-mode SHV: run the destructive loop + dichotomous shaving (Algorithm 1 of
+// Haouari, Kooli, Neron 2012) ONCE on the full problem. Stores the root lower
+// bound (lberRootBound) and tightens erEST[]/tailAfter[] so the per-node bound
+// is stronger. Self-contained: uses only the CER overload test. depth>=3 enables
+// the shaving inner loop; depth<3 yields the plain destructive CER bound.
+void computeRootBound(int depth) {
+  if (lberRootComputed)
+    return;
+  if (!energeticInitialized)
+    initializeEnergetic();
+  lberRootComputed = true;
+
+  // The per-activity shaving inner loop runs many feasibility tests, so it uses
+  // the cheap polynomial tiers (CER/RER). The expensive EER/GER (depth >= 5)
+  // run only as the once-per-trial-C GLOBAL feasibility check below.
+  int shaveDepth = std::min(depth, 4);
+
+  int n = RCPSPex.activities.size();
+  if (n < 2) {
+    lberRootBound = 0;
+    return;
+  }
+
+  std::vector<short> ids;
+  ids.reserve(n);
+  for (int j = 1; j <= n; j++)
+    ids.push_back((short)j);
+
+  long long sumP = 0;
+  int cpLB = 0;
+  for (int j = 1; j <= n; j++) {
+    erP[j] = RCPSPex.activities[j - 1].duration;
+    sumP += erP[j];
+    cpLB = std::max(cpLB, erEST[j] + erP[j] + tailAfter[j]); // critical-path LB
+  }
+  int cMax = (int)sumP; // serial schedule is feasible -> upper bound on makespan
+  if (cMax < cpLB)
+    cMax = cpLB;
+
+  int C = cpLB; // destructive: start from the critical-path bound
+  bool solved = false;
+  while (!solved && C <= cMax) {
+    // (Re)initialise windows for trial C; shaving below only tightens them.
+    for (short j : ids) {
+      erR[j] = erEST[j];
+      erD[j] = C - tailAfter[j];
+    }
+
+    // Line 2: global energetic feasibility at this C.
+    if (erOverload(ids, depth)) {
+      C++;
+      continue;
+    }
+    if (depth < 3) { // no shaving requested -> plain destructive CER bound
+      solved = true;
+      break;
+    }
+
+    // Lines 3-13: dichotomous shaving to a fixpoint.
+    bool changed = true, bumped = false;
+    while (changed && !bumped) {
+      changed = false;
+      for (short j : ids) {
+        int lo = erR[j];
+        int hi = erD[j] - erP[j]; // latest start
+        if (hi <= lo)
+          continue; // start-time window too small to split
+        int Mj = (lo + hi + 1) / 2; // ceil((r_j + d_j - p_j)/2)
+        int savedR = erR[j], savedD = erD[j];
+
+        // I^1_j: force j into the left half (finish by M_j+p_j-1).
+        erD[j] = Mj + erP[j] - 1;
+        bool leftInf = erOverload(ids, shaveDepth);
+        erD[j] = savedD;
+
+        // I^2_j: force j into the right half (start at/after M_j).
+        erR[j] = Mj;
+        bool rightInf = erOverload(ids, shaveDepth);
+        erR[j] = savedR;
+
+        if (leftInf && rightInf) {
+          bumped = true; // neither half possible -> C infeasible
+          break;
+        } else if (leftInf) {
+          erR[j] = Mj; // cannot be left -> r_j <- M_j
+          changed = true;
+        } else if (rightInf) {
+          erD[j] = Mj + erP[j] - 1; // cannot be right -> d_j <- M_j+p_j-1
+          changed = true;
+        }
+      }
+    }
+    if (bumped) {
+      C++;
+      continue;
+    }
+    solved = true; // fixpoint reached with no infeasibility -> C is feasible
+  }
+
+  lberRootBound = C;
+  // Persist tightened windows (only ever tighter, hence still valid lower
+  // bounds): erEST <- shaved release; tailAfter <- C - shaved deadline.
+  for (short j : ids) {
+    erEST[j] = erR[j];
+    int tnew = C - erD[j];
+    if (tnew > tailAfter[j])
+      tailAfter[j] = tnew;
+  }
 }
 
 // Fast DP-based heuristic lookup

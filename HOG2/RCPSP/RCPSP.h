@@ -1977,7 +1977,84 @@ inline RCPSP_CBS<N>::RCPSP_CBS() {
 // //     return a.makespan() < b.makespan();
 // // });
 // }
+// put this BEFORE GetSuccessors, at file scope or as a static helper
+template<short N>
+bool satisfies_optimal(const RCPSPState_CBS<N>& s) {
+  static const std::array<short, 32> optimal_37_1 = {
+    0,  // 0 (act1)
+    0,  // 1 (act2)
+    0,  // 2 (act3)
+    8,  // 3 (act4)
+    27, // 4 (act5)
+    2,  // 5 (act6)
+    17, // 6 (act7)
+    25, // 7 (act8)
+    19, // 8 (act9)
+    7,  // 9 (act10)
+    17, // 10 (act11)
+    37, // 11 (act12)
+    36, // 12 (act13)
+    27, // 13 (act14)
+    19, // 14 (act15)
+    59, // 15 (act16)
+    34, // 16 (act17)
+    13, // 17 (act18)
+    44, // 18 (act19)
+    36, // 19 (act20)
+    36, // 20 (act21)
+    37, // 21 (act22)
+    51, // 22 (act23)
+    44, // 23 (act24)
+    39, // 24 (act25)
+    53, // 25 (act26)
+    53, // 26 (act27)
+    62, // 27 (act28)
+    71, // 28 (act29)
+    66, // 29 (act30)
+    62, // 30 (act31)
+    79  // 31 (act32)
+};
+  for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
+    if (s.start_times[i] > optimal_37_1[i]) return false;
+  }
+  // std::cout<<"s";
+  return true;
+}
 
+static const std::array<short, 32> optimal_37_1 = {
+  0,  // 0 (act1)
+  0,  // 1 (act2)
+  0,  // 2 (act3)
+  8,  // 3 (act4)
+  27, // 4 (act5)
+  2,  // 5 (act6)
+  17, // 6 (act7)
+  25, // 7 (act8)
+  19, // 8 (act9)
+  7,  // 9 (act10)
+  17, // 10 (act11)
+  37, // 11 (act12)
+  36, // 12 (act13)
+  27, // 13 (act14)
+  19, // 14 (act15)
+  59, // 15 (act16)
+  34, // 16 (act17)
+  13, // 17 (act18)
+  44, // 18 (act19)
+  36, // 19 (act20)
+  36, // 20 (act21)
+  37, // 21 (act22)
+  51, // 22 (act23)
+  44, // 23 (act24)
+  39, // 24 (act25)
+  53, // 25 (act26)
+  53, // 26 (act27)
+  62, // 27 (act28)
+  71, // 28 (act29)
+  66, // 29 (act30)
+  62, // 30 (act31)
+  79  // 31 (act32)
+};
 template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
@@ -1993,7 +2070,6 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       }
       else{
         const auto& sets = get_mda_cache<N>().at(nodeID.conflict_key);      // std::array<short, N> latest_starts = {};
-
         for (const auto& set : sets) {
            neighbors.emplace_back(nodeID, set, nodeID.t);
         }
@@ -2054,35 +2130,112 @@ if (setting.use_dominance){
         }
     }
   }
+
+
+  // if (satisfies_optimal(nodeID)) {
+  //   bool any_child_satisfies = false;
+  //   int satisfying_child = -1;
+  //   for (int c = 0; c < (int)neighbors.size(); c++) {
+  //     if (satisfies_optimal(neighbors[c])) {
+  //       any_child_satisfies = true;
+  //       satisfying_child = c;
+  //       break;
+  //     }
+  //   }
+  //   if (!any_child_satisfies) {
+  //     std::cout << "=== LEMMA 2 VIOLATED ===" << std::endl;
+  //     std::cout << "parent makespan=" << nodeID.makespan() << std::endl;
+  //     std::cout << "conflict t=" << nodeID.t << " r=" << nodeID.resourceType << std::endl;
+  //     std::cout << "pool: ";
+  //     for (short a : nodeID.rvs_activities_pool)
+  //       std::cout << a << "(s=" << nodeID.start_times[a]
+  //                 << ",f=" << nodeID.start_times[a]+RCPSPex.activities[a].duration << ") ";
+  //     std::cout << std::endl;
+  //     std::cout << "children differences from optimal:" << std::endl;
+  //     for (int c = 0; c < (int)neighbors.size(); c++) {
+  //       std::cout << "child " << c << " makespan=" << neighbors[c].makespan() << ": ";
+  //       for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
+  //         if (neighbors[c].start_times[i] > optimal_37_1[i])
+  //           std::cout << "act" << i << "(" << neighbors[c].start_times[i]
+  //                     << ">" << optimal_37_1[i] << ") ";
+  //       }
+  //       std::cout << std::endl;
+  //     }
+  //   }
+    // else {
+    //   std::cout << "Lemma 2 OK: parent_makespan=" << nodeID.makespan()
+    //             << " satisfying_child_makespan=" << neighbors[satisfying_child].makespan()
+    //             << std::endl;
+    // }
+  // }
 }
 template<short N>
 inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const {
+  // std::cout << "goal: ";
+
   return !node.found_conflict;
 
 }
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
+  // std::cout << "H: ";
+  // return .0;
   return state1.compute_h_and_RVS();//return h_cost
+
 
   // return state1.h_cost;
 }
 template<short N>
   inline double RCPSP_CBS<N>::GCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
+  // double g = state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
+  // if (g < 0) {
+  //   std::cout << "NEGATIVE GCOST: " << g
+  //             << " parent_makespan=" << state1.start_times[g_sink_id]
+  //             << " child_makespan=" << state2.start_times[g_sink_id] << std::endl;
+  // }
+  // return g;
     return state2.start_times[g_sink_id] - state1.start_times[g_sink_id];
   }
+// template<short N>
+// inline uint64_t RCPSP_CBS<N>::GetStateHash(const RCPSPState_CBS<N> &node) const {
+//   std::size_t seed = 0;
+//   for (const auto& st : node.start_times) {
+//     seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   }
+//   // for (const auto& [f, t] : node.added_precedences) {
+//   //   seed ^= std::hash<short>{}(f) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   //   seed ^= std::hash<short>{}(t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   // }
+//   return seed;
+// }
 template<short N>
 inline uint64_t RCPSP_CBS<N>::GetStateHash(const RCPSPState_CBS<N> &node) const {
   std::size_t seed = 0;
+
+  // start_times
   for (const auto& st : node.start_times) {
     seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
   }
-  for (const auto& [f, t] : node.added_precedences) {
-    seed ^= std::hash<short>{}(f) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    seed ^= std::hash<short>{}(t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  }
+  //
+  // // added_precedences
+  // for (const auto& [f, t] : node.added_precedences) {
+  //   seed ^= std::hash<short>{}(f) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //   seed ^= std::hash<short>{}(t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // }
+  //
+  // // conflict info
+  // seed ^= std::hash<short>{}(node.t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // seed ^= std::hash<short>{}(node.resourceType) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // seed ^= std::hash<bool>{}(node.found_conflict) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // seed ^= std::hash<bool>{}(node.is_size2_conflict) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  //
+  // // pool
+  // for (const auto& a : node.rvs_activities_pool) {
+  //   seed ^= std::hash<short>{}(a) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  // }
+
   return seed;
 }
-
 
 template<short N>
 inline int RCPSP_CBS<N>::GetAction(const RCPSPState_CBS<N> &nodeID, const RCPSPState_CBS<N> &nodeID2) const {

@@ -278,18 +278,18 @@ template<short N>
 class RCPSPState_CBS {
 public:
     std::array<short, N> start_times;
-    mutable short t;
-    mutable short resourceType;
-    mutable bool  found_conflict      = false;
-    mutable short conflict_number=0;
+     mutable short t;
+     mutable short resourceType;
+     mutable bool  found_conflict      = false;
+     mutable short conflict_number=0;
 
-    mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
+     mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
 
-    mutable std::vector<MDA> conflict_solutions;//need to enable-- if we use MDA cache it stay empty
-    mutable ConflictKey<N> conflict_key;  // empty if not using both MDA sets and cache
+     mutable std::vector<MDA> conflict_solutions;//need to enable-- if we use MDA cache it stay empty
+     mutable ConflictKey<N> conflict_key;  // empty if not using both MDA sets and cache
 
-    mutable std::vector<std::pair<short,short>> added_precedences={}; // accumulated from root
-    mutable bool is_size2_conflict = false;
+     std::vector<std::pair<short,short>> added_precedences={}; // accumulated from root
+     mutable  bool is_size2_conflict = false;
 
     short compute_h_and_RVS() const;
     void propagate_with_strong_form_0();
@@ -310,8 +310,9 @@ public:
     }
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_CBS& other) const {
-        if (added_precedences != other.added_precedences) return false;
+        // if (added_precedences != other.added_precedences) return false;
         if (start_times != other.start_times) return false;
+
         return true;
     }
     short makespan() const {

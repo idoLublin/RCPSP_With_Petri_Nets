@@ -97,15 +97,20 @@ template<short N>
 struct AStarCompareWithF<RCPSPState_CBS<N>> {
     bool operator()(const AStarOpenClosedDataWithF<RCPSPState_CBS<N>>& i1,
                     const AStarOpenClosedDataWithF<RCPSPState_CBS<N>>& i2) const {
-        if (i1.f != i2.f) return i1.f > i2.f;//less
-        if (i1.g != i2.g) return i1.g < i2.g;//more
+        double f1 = i1.data.start_times[g_sink_id] + i1.h;
+        double f2 = i2.data.start_times[g_sink_id] + i2.h;
+
+        if (f1 != f2) return f1 > f2; // lower f first
+
+        // tiebreak: prefer higher g (higher makespan = less h inflation)
+        short g1 = i1.data.start_times[g_sink_id];
+        short g2 = i2.data.start_times[g_sink_id];
+        if (g1 != g2) return g1 < g2; // higher g first = lower h
+        return i1.data.conflict_number > i2.data.conflict_number;
+
+        return false;
 
 
-        if (setting.use_first_conflict) {
-            // Bell & Park: prefer highest RVST
-            if (i1.data.t != i2.data.t)
-                return i1.data.t < i2.data.t;          // higher t = better
-        }
 
         // if (i1.data.best_score != i2.data.best_score)
         //     return i1.data.best_score > i2.data.best_score;

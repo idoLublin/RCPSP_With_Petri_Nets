@@ -3401,7 +3401,19 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
 
                 std::vector<short> current_set;
                 current_set.reserve(sorted_jobs.size());
+                // std::cout<<"new conflict:";
+                // std::cout << "excess=" << excess_demand << " demands: ";
+                //
+                // for (int i = 0; i < (int)sorted_jobs.size(); i++) {
+                //     std::cout << sorted_jobs[i] << "=" << resource_info[res_idx].demand_lookup.at(sorted_jobs[i]) << " ";
+                // }
+                // std::cout<<std::endl;
                 enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, local_sets);
+                // for (int i = 0; i < (int)local_sets.size(); i++) {
+                //     for (int j=0; j < (int)local_sets[i].size(); j++)
+                //         std::cout<<local_sets[i][j]<<" ";
+                //     std::cout<<std::endl;
+                // }
                 cache[key] = std::move(local_sets);
                 it = cache.find(key);
             }
@@ -3420,7 +3432,17 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
 
             std::vector<short> current_set;
             current_set.reserve(sorted_jobs.size());
+            // std::cout<<"new conflict:";
+            // std::cout << "excess=" << excess_demand << " demands: ";
+            // for (int i = 0; i < sorted_jobs.size(); i++)
+            // std::cout << sorted_jobs[i] << "=" << resource_info[res_idx].demand_lookup.at(sorted_jobs[i]) << " ";
+            // std::cout<<std::endl;
             enumerate_sets_bnb(sorted_jobs, demands_sorted, excess_demand, 0, 0, current_set, local_sets);
+            // for (int i = 0; i < (int)local_sets.size(); i++) {
+            //     for (int j=0; j < (int)local_sets[i].size(); j++)
+            //     std::cout<<local_sets[i][j]<<" ";
+            //     std::cout<<std::endl;
+            // }
             sets_ptr = &local_sets;
         }
     }
@@ -3534,7 +3556,7 @@ void reset_mda_cache() {
     get_mda_cache<N>().clear();
 }
 template<short N>
-short RCPSPState_CBS<N>::compute_h_and_RVS() const {
+short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
     if (!setting.use_conflict_prioritization &&setting.use_first_conflict) {
         rvs_activities_pool.clear();
@@ -3610,6 +3632,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
         for (short t : events) {
 
             std::vector<short> current_jobs;
+            current_jobs.clear();
             short total_demand = 0;
 
             for (int j = 0; j < (int)res.activity_indices.size(); j++) {
@@ -3624,12 +3647,26 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
             }
 
             if (total_demand <= res.capacity) continue;//conflict found
+            found_any=true;
             // std::cout << resIdx <<":"<<t<< std::endl;
             //
             // for (short job: current_jobs){
             //     std::cout << job << " ";
             //     }
             // std::cout << std::endl;
+
+            // if (t == 52 && resIdx == 2) {
+            //     std::cout << "conflict detection t=52 r=2:" << std::endl;
+            //     for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+            //         short actIdx = res.activity_indices[j];
+            //         short start  = start_times[actIdx];
+            //         short finish = start + RCPSPex.activities[actIdx].duration;
+            //         std::cout << "act=" << actIdx << " s=" << start << " f=" << finish
+            //                   << " overlaps=" << (start <= 52 && finish > 52) << std::endl;
+            //     }
+            // }
+
+
             if (setting.use_MDA_sets) {
                 ConflictKey<N> key = make_conflict_key<N>(current_jobs, (short)resIdx);
                 short excess = total_demand - res.capacity;
@@ -3669,7 +3706,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
                     best_resource = resIdx;
                     best_score    = score;
                     best_mdas =     std::move(mdas);
-                    best_jobs     = std::move(current_jobs); // move last
+                    best_jobs     = current_jobs; // move last
                     best_key      = key;  // store key not solutions
 
 
@@ -3771,7 +3808,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const {
                 // }
 
                 if (setting.use_conflict_prioritization && setting.use_first_conflict) {
-                    if (best_score == 1) goto done; // early exit ok
+                    // if (best_score == 1) goto done; // early exit ok
                 }
             }
         }
@@ -3803,56 +3840,56 @@ else {
 
 
 
-if (found_conflict && setting.use_ancestor_branching) {
-        // Impact Mask -> Best Ancestor index
-        // uint32_t is perfect for J30 (up to 32 activities)
-        std::unordered_map<uint32_t, short> mask_to_ancestor;
-
-        for (int i = 0; i < (int)rvs_activities_pool.size(); ++i) {
-            short jobIdx = rvs_activities_pool[i];
-
-            // Iterate through precomputed ancestors for this job
-            for (short P : upstream[jobIdx]) {
-                uint32_t impact_mask = 0;
-                bool reaches_all = true;
-
-                // Calculate the impact mask for ancestor P across the conflict pool
-                for (int j = 0; j < (int)rvs_activities_pool.size(); ++j) {
-                    short targetJob = rvs_activities_pool[j];
-
-                    // Since upstream[targetJob] is sorted, binary_search is O(log N)
-                    bool reaches = (targetJob == P) ||
-                                   std::binary_search(upstream[targetJob].begin(),
-                                                      upstream[targetJob].end(), P);
-
-                    if (reaches) {
-                        impact_mask |= (1u << j);
-                    } else {
-                        reaches_all = false;
-                    }
-                }
-
-                // Rule 1: Skip if it pushes everyone (doesn't resolve the conflict)
-                if (reaches_all) continue;
-
-                // Rule 3 (Unique Mask) + Rule 2 (Most Downstream/Highest Start Time)
-                auto it = mask_to_ancestor.find(impact_mask);
-                if (it == mask_to_ancestor.end()) {
-                    mask_to_ancestor[impact_mask] = P;
-                } else {
-                    // Tie-breaker: Keep the lever physically closest to the conflict
-                    if (start_times[P] > start_times[it->second]) {
-                        it->second = P;
-                    }
-                }
-            }
-        }
-
-        // Add the unique strategic levers to the pool
-        for (auto const& [mask, ancestorIdx] : mask_to_ancestor) {
-            rvs_activities_pool.push_back(ancestorIdx);
-        }
-    }
+// if (found_conflict && setting.use_ancestor_branching) {
+//         // Impact Mask -> Best Ancestor index
+//         // uint32_t is perfect for J30 (up to 32 activities)
+//         std::unordered_map<uint32_t, short> mask_to_ancestor;
+//
+//         for (int i = 0; i < (int)rvs_activities_pool.size(); ++i) {
+//             short jobIdx = rvs_activities_pool[i];
+//
+//             // Iterate through precomputed ancestors for this job
+//             for (short P : upstream[jobIdx]) {
+//                 uint32_t impact_mask = 0;
+//                 bool reaches_all = true;
+//
+//                 // Calculate the impact mask for ancestor P across the conflict pool
+//                 for (int j = 0; j < (int)rvs_activities_pool.size(); ++j) {
+//                     short targetJob = rvs_activities_pool[j];
+//
+//                     // Since upstream[targetJob] is sorted, binary_search is O(log N)
+//                     bool reaches = (targetJob == P) ||
+//                                    std::binary_search(upstream[targetJob].begin(),
+//                                                       upstream[targetJob].end(), P);
+//
+//                     if (reaches) {
+//                         impact_mask |= (1u << j);
+//                     } else {
+//                         reaches_all = false;
+//                     }
+//                 }
+//
+//                 // Rule 1: Skip if it pushes everyone (doesn't resolve the conflict)
+//                 if (reaches_all) continue;
+//
+//                 // Rule 3 (Unique Mask) + Rule 2 (Most Downstream/Highest Start Time)
+//                 auto it = mask_to_ancestor.find(impact_mask);
+//                 if (it == mask_to_ancestor.end()) {
+//                     mask_to_ancestor[impact_mask] = P;
+//                 } else {
+//                     // Tie-breaker: Keep the lever physically closest to the conflict
+//                     if (start_times[P] > start_times[it->second]) {
+//                         it->second = P;
+//                     }
+//                 }
+//             }
+//         }
+//
+//         // Add the unique strategic levers to the pool
+//         for (auto const& [mask, ancestorIdx] : mask_to_ancestor) {
+//             rvs_activities_pool.push_back(ancestorIdx);
+//         }
+//     }
 
 
     // Fix bug 1: always set h_cost, even when no cardinals
@@ -4044,16 +4081,16 @@ template<short N>
 void RCPSPState_CBS<N>::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
         // std::cout << succ <<std::endl;
-        short new_start = start_times[succ];
+        short new_start = 0;
         for (short dep : RCPSPex.backword_dependencies[succ]) {
             int depIdx = dep - 1;
             new_start = std::max((int)new_start,
                 start_times[depIdx] + RCPSPex.activities[depIdx].duration);
         }
         // Only update if pushing FORWARD - never allow going backwards
-        // if (new_start > start_times[succ]) {
+        if (new_start > start_times[succ]) {
             start_times[succ] = new_start;
-        // }
+        }
     }
 }
 //
@@ -4249,6 +4286,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS() {
     // }
     // std::cout << "Makespan: " << makespan << "\n";
     // std::cout << "------------------------------------------\n";
+    // std::cout<<g_sink_id;
     compute_h_and_RVS();
 }
 template<short N>
@@ -4365,28 +4403,76 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     added_precedences = prev.added_precedences;
 
     short new_start = 9999;
-
-    if (!prev.rvs_activities_pool.empty()) {
-        // pool available — use it directly
-        std::span<const short> acts = prev.rvs_activities_pool;
-        for (short act : acts) {
-            if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
-            new_start = std::min(new_start,
-                (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
-        }
-    } else {
-        // reconstruct from resource and conflict time
-        const ResourceInfo& res = resource_info[prev.resourceType];
-        for (int j = 0; j < (int)res.activity_indices.size(); j++) {
-            short actIdx = res.activity_indices[j];
-            short start  = prev.start_times[actIdx];
-            short finish = start + RCPSPex.activities[actIdx].duration;
-            if (start <= prev.t && finish > prev.t) {
-                if (std::find(mda_activities.begin(), mda_activities.end(), actIdx) != mda_activities.end()) continue;
-                new_start = std::min(new_start, finish);
-            }
-        }
+    std::span<const short> acts = prev.rvs_activities_pool;
+    for (short act : acts) {
+        if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
+        new_start = std::min(new_start,
+            (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
     }
+    // std::cout << "new " << std::endl;
+    // std::cout << "pool " << std::endl;
+    //
+    // for (short i : prev.rvs_activities_pool) {
+    //     std::cout << i << std::endl;
+    // }
+    // std::cout << "MDA" << std::endl;
+    //
+    // for (short i : mda_activities) {
+    //     std::cout << i << std::endl;
+    // }
+    // if (prev.t == 52 && prev.resourceType == 2) {
+    //     bool is_28_mda = (mda_activities.size() == 1 && mda_activities[0] == 28);
+    //     if (is_28_mda) {
+    //         std::cout << "=== FOUND {28} MDA branch ===" << std::endl;
+    //         std::cout << "new_start=" << new_start << std::endl;
+    //         std::cout << "activity 28 will be set to " << new_start << std::endl;
+    //         std::cout << "activity 25 stays at " << prev.start_times[25] << std::endl;
+    //         std::cout << "optimal needs act25=53, act28=71" << std::endl;
+    //         std::cout << "act25 blocked? " << (prev.start_times[25] > 53 ? "YES" : "NO") << std::endl;
+    //     }
+    // }
+    // std::cout << "MDA activities: ";
+    // for (short a : mda_activities) std::cout << a << " ";
+    // std::cout << std::endl;
+    //
+    // std::cout << "Pool: ";`
+    // for (short a : prev.rvs_activities_pool) std::cout << a << " ";
+    // std::cout << std::endl;
+    //
+    // std::cout << "new_start candidates: ";
+    // for (short act : prev.rvs_activities_pool) {
+    //     bool in_mda = std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end();
+    //     std::cout << act << "(in_mda=" << in_mda << ",finish="
+    //               << prev.start_times[act] + RCPSPex.activities[act].duration << ") ";
+    // }
+    // std::cout << "\nnew_start=" << new_start << std::endl;
+    //
+
+
+    // if (!prev.rvs_activities_pool.empty()) {
+        // pool available — use it directly
+
+        // std::span<const short> acts = prev.rvs_activities_pool;
+        // for (short act : acts) {
+        //     if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
+        //     new_start = std::min(new_start,
+        //         (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+        // }
+
+
+    // } else {
+    //     // reconstruct from resource and conflict time
+    //     const ResourceInfo& res = resource_info[prev.resourceType];
+    //     for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+    //         short actIdx = res.activity_indices[j];
+    //         short start  = prev.start_times[actIdx];
+    //         short finish = start + RCPSPex.activities[actIdx].duration;
+    //         if (start <= prev.t && finish > prev.t) {
+    //             if (std::find(mda_activities.begin(), mda_activities.end(), actIdx) != mda_activities.end()) continue;
+    //             new_start = std::min(new_start, finish);
+    //         }
+    //     }
+    // }
 
     for (short delayed : mda_activities) {
         start_times[delayed] = new_start;
@@ -4397,6 +4483,24 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     } else {
         propagate_with_strong_form_0();
     }
+
+
+    // if (start_times[25] > 53 && prev.start_times[25] <= 53) {
+    //     std::cout << "=== ACTIVITY 25 FIRST BLOCKED HERE ===" << std::endl;
+    //     std::cout << "set to " << start_times[25] << " was " << prev.start_times[25] << std::endl;
+    //     std::cout << "mda: ";
+    //     for (short a : mda_activities) std::cout << a << " ";
+    //     std::cout << std::endl;
+    //     std::cout << "conflict t=" << prev.t << " r=" << prev.resourceType << std::endl;
+    //     std::cout << "new_start=" << new_start << std::endl;
+    //     std::cout << "pool: ";
+    //     for (short a : prev.rvs_activities_pool)
+    //         std::cout << a << "(s=" << prev.start_times[a]
+    //                   << ",f=" << prev.start_times[a]+RCPSPex.activities[a].duration << ") ";
+    //     std::cout << std::endl;
+    // }
+    // compute_h_and_RVS();
+
 }
     // 2. Reconstruct current_jobs from resource and conflict time
     // short new_start = 9999;
@@ -4621,6 +4725,7 @@ RCPSPState_BAP::RCPSPState_BAP() {
 
     // Sink is last activity in map (highest key)
     g_sink_id = earlyStartMap.rbegin()->first - 1; // -1 for 0-indexed
+    std::cout<<g_sink_id;
     // computeRVS hidden for now
     computeFirstRVS();
 

@@ -3558,8 +3558,12 @@ void reset_mda_cache() {
 template<short N>
 short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
-    if (!setting.use_conflict_prioritization &&setting.use_first_conflict) {
+    if (!setting.use_conflict_prioritization && setting.use_first_conflict) {
         rvs_activities_pool.clear();
+        short best_t        = std::numeric_limits<short>::max();
+        short best_resource = -1;
+        std::vector<short> best_jobs;
+
         for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
             const ResourceInfo& res = resource_info[resIdx];
 
@@ -3571,6 +3575,8 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
             events.erase(std::unique(events.begin(), events.end()), events.end());
 
             for (short t : events) {
+                if (t >= best_t) break; // can't beat current best in this resource
+
                 short total_demand = 0;
                 std::vector<short> current_jobs;
 
@@ -3586,19 +3592,23 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
                 if (total_demand <= res.capacity) continue;
 
-                // First conflict found — take it immediately
-                rvs_activities_pool = std::move(current_jobs);
-                this->t      = t;
-                resourceType = resIdx;
-                found_conflict = true;
-                return 0;// h_cost = 0;
-
+                // Earliest conflict across all resources
+                best_t        = t;
+                best_resource = resIdx;
+                best_jobs     = std::move(current_jobs);
+                break; // earliest in this resource found, move to next
             }
         }
-        // No conflict found
-        found_conflict = false;
 
-        return 0;//h_cost = 0;
+        if (best_resource != -1) {
+            rvs_activities_pool = std::move(best_jobs);
+            this->t      = best_t;
+            resourceType = best_resource;
+            found_conflict = true;
+        } else {
+            found_conflict = false;
+        }
+        return 0;
     }
 
     // Compute latest starts fresh each time — no copy bug
@@ -3696,9 +3706,9 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 float score = mdas.empty() ? 0.0f : (float)cardinal_count / (float)mdas.size();
 
                 bool is_better = !found_any
-                    || (score > best_score)
-                    || (score == best_score && t < best_t);
-                if (score == 1.0f) {
+                    || (setting.use_conflict_prioritization && (score > best_score))
+                    || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                if (setting.use_conflict_prioritization && score == 1.0f) {
                     cardinal_conflicts.push_back({current_jobs, min_cardinal_cost});
                 }
                 if (is_better) {
@@ -3758,8 +3768,8 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 float score = (float)costly / (float)current_jobs.size();
                 conflict_number++;
                 bool is_better = !found_any
-                    || (score > best_score)  // BUG: should be score > best_score!
-                    || (score == best_score && t < best_t);
+                    || (setting.use_conflict_prioritization && score > best_score)
+                    || (setting.use_conflict_prioritization && score == best_score && t < best_t);
                 if (is_better) {
                     best_jobs     = current_jobs;
                     best_t        = t;
@@ -3770,7 +3780,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
                 bool non_cardinal_cant_resolve = (total_demand - non_cardinal_demand) > res.capacity;
 
-                if (score == 1.0f || (score > 0.0f && non_cardinal_cant_resolve)) {
+                if (setting.use_conflict_prioritization && (score == 1.0f || (score > 0.0f && non_cardinal_cant_resolve))) {
 
                     if (setting.use_greed_conflic_resultion_asstimation) {
                         short temp =min_forced;

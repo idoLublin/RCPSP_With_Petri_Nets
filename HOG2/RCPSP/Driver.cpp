@@ -1537,107 +1537,74 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
 }
 
 
- int main() {
-     runBenchmark();
+int main() {
+    runBenchmark();
     return 0;
 }
 
 
+void runConfig(const std::string& filename, const std::string& problemType) {
+    allcorrect = true;
+    for (int i = 1; i <= 48; i++) {
+        for (int j = 1; j <= 10; j++) {
+            solveRCPSP_CBS(i, j, filename, problemType);
+        }
+    }
+    if (allcorrect)
+        std::cout << "All correct" << std::endl;
+    else
+        std::cout << "Error: incorrect results" << std::endl;
+}
+
 void runBenchmark() {
     std::string folder = "new_results";
-    std::string baseName = "output!!!!!!_";
+    std::string baseName = "output_";
     std::string extension = ".csv";
     std::string filename = getNextFilename(folder, baseName, extension);
     std::ofstream file(filename);
-    // Open file stream
     if (!file.is_open()) {
         std::cerr << "Error opening file!" << std::endl;
         return;
     }
-
-    setting.use_conflict_prioritization = true;  // cardinal > semi > non cardinal
-    // setting.heuristic = HeuristicType::NONE;   // no heuristic
-    // setting.heuristic = HeuristicType::CG;   // cardinal hitting set
-    setting.heuristic = HeuristicType::HCBS;   // cardinal hitting set
-    // setting.heuristic = HeuristicType::DG;     // dependency graph
-
-    setting.use_first_conflict = false;  // cardinal > semi > non cardinal
-    setting.use_ancestor_branching          = false;
-    setting.use_dominance          = false;
-    setting.use_pair_decomposition         = false;
-    setting.use_greed_conflic_resultion_asstimation=false;
-    setting.use_MDA_sets=true;
-    setting.use_MDA_cache=true;
-    setting.use_strong_constraints=false;
-    setting.use_MDA_BAB=true;
-
-
- // file << "group,exam,time,finished,makespan,expand number,generated number,depth,PetriType,SetType,max mem,calculated LB,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),hashTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)" << std::endl;
-    // file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
-    //      << "finished,expandNumber,generatedNumber,depth,maxMem,"
-    //      << "useConflictPrioritization,useHeuristic,usefirstconflict,usedominance,usebetterReslution,cardianlity ratio"
-    //      << std::endl;
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
          << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
          << std::endl;
+    file.close();
 
-    if (!setting.use_conflict_prioritization&& !(setting.heuristic == HeuristicType::NONE)) {
-        std::cout <<"Error: invalid setting"<< std::endl;
-        exit(0);
+    // for (const std::string& problemType : {"j30", "j60", "j90"}) {
+        std::string problemType="j30";
+        // --- Config 1: No features (baseline) ---
+        std::cout << "\n=== Config 1: No features | " << problemType << " ===" << std::endl;
+        setting.use_conflict_prioritization = false;
+        setting.use_first_conflict          = true;
+        setting.heuristic                   = HeuristicType::NONE;
+        setting.use_MDA_sets                = false;
+        setting.use_MDA_cache               = false;
+        setting.use_MDA_BAB                 = false;
+        runConfig(filename, problemType);
+
+        // --- Config 2: All features ---
+        std::cout << "\n=== Config 2: All features | " << problemType << " ===" << std::endl;
+        setting.use_conflict_prioritization = true;
+        setting.use_first_conflict          = false;
+        setting.heuristic                   = HeuristicType::HCBS;
+        setting.use_MDA_sets                = true;
+        setting.use_MDA_cache               = true;
+        setting.use_MDA_BAB                 = true;
+        runConfig(filename, problemType);
+
+        // --- Config 3: All except MDA ---
+        std::cout << "\n=== Config 3: All except MDA | " << problemType << " ===" << std::endl;
+        setting.use_conflict_prioritization = true;
+        setting.use_first_conflict          = false;
+        setting.heuristic                   = HeuristicType::HCBS;
+        setting.use_MDA_sets                = false;
+        setting.use_MDA_cache               = false;
+        setting.use_MDA_BAB                 = false;
+        runConfig(filename, problemType);
     }
-    // for(int i = 1; i < 5; i++) {
-    //     for(int j = 1; j < 11; j++) {
-    //         petri.reset();
-    //         RCPSPex.reset();
-    //
-    //         // 2. SOLVE
-    //         // solveRCPSP_TT2_Backward(i, j, filename, "j30");
-    //         // solveRCPSP_CBS(i, j, filename, "j60");
-    //         solveRCPSP_CBS(i, j, filename, "j30");
-    //          // solveRCPSP_TT2(i, j, filename, "j30");
-    //         //solveRCPSP_TT(i, j, filename, "j30");
-    //          // solveRCPSP_Bi(i, j, filename, "j30");
-    //     }
-    // }
-
-    // for (int j = 1; j < 11; j++) {
-    //     // solveRCPSP(16, j, filename, "j30");
-    //     // solveRCPSP_TT2(16, j, filename, "j30");
-    //     // solveoldRCPSP(16, j, filename, "j30");
-    //     solveRCPSP_CBS(6, j, filename, "j30");
-    //     // solveRCPSP_CBS(24, j, filename, "j60");
-    //     // solveRCPSP_CBS(24, j, filename, "j90");
-    //     // solveRCPSP_CBS(1, j, filename, "j90");
-    // }
-    // for (int j = 1; j < 11; j++) {
-    //     // solveRCPSP(startGroup, j, filename, setType);
-    //     // solveRCPSP_CBS(17, j, filename, "j30");
-    //     solveRCPSP_CBS(17, j, filename, "j60");
-    //     // solveRCPSP_CBS(17, j, filename, "j90");
-    // }
-    // for (int j = 1; j < 11; j++) {
-    //     // solveRCPSP(startGroup, j, filename, setType);
-    //     // solveRCPSP_CBS(33, j, filename, "j30");
-    //     solveRCPSP_CBS(33, j, filename, "j60");
-    //     // solveRCPSP_CBS(33, j, filename, "j90");
-    // }
-    // extractBounds(filename,"j90");
-
-
-    // solveRCPSP_TT2(16, 9, filename, "j30");
-    // solveRCPSP_CBS(6, 8, filename, "j30");
-    solveRCPSP_CBS(37, 1, filename, "j30");
-
-    std::cout <<debug_cardinal_num <<std::endl;
-
-if (allcorrect) {
-    std::cout <<"All correct" <<std::endl;
-}
-else {
-    std::cout <<"Error: incorrect results" <<std::endl;
-}
-}
+// }
 
 struct ResultRow {
     std::string fullLine;

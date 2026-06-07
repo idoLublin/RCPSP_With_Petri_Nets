@@ -1328,91 +1328,94 @@ int solveRCPSP_CBS(int group, int exam, const std::string& filename, const std::
     else if (problemType == "j120")
         return solveRCPSP_CBS_impl<122>(group, exam, filename, problemType);
 }
-// int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType="j30") {
-//     std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
-//     setProblemSize(problemType);
-//     getRCPSP(RCPSPex, group, exam, problemType);
-//     RCPSP_CBS as1;
-//     resource_info.clear();
-//     downstream.clear();
-//     precomputeDownstream();
-//     precomputeResourceInfo();
-//     RCPSPState_CBS first;
-//     RCPSPState_CBS last = first;
-//     last.t=0;
-//     last.resourceType=-1;
-//
-//
-//     TemplateAStar<RCPSPState_CBS, int, RCPSP_CBS> astar;
-//     std::vector<RCPSPState_CBS> path;
-//
-//     std::chrono::duration<double> elapsed;
-//     auto start = std::chrono::high_resolution_clock::now();
-//
-//     astar.GetPath(&as1, first, last, path);
-//
-//     auto end = std::chrono::high_resolution_clock::now();
-//     elapsed = end - start;
-//     long peakMemKB = getPeakMemoryKB();
-//
-//     int makespan = 0;
-//
-//
-//     if (!path.empty() || first.rvs_activities_pool.empty()) {
-//
-//         // Get final state - either from path or initial state if already feasible
-//         RCPSPState_CBS& finalState = path.empty() ? first : path.back();
-//
-//         makespan = finalState.start_times[RCPSPex.activities.size()-1] +
-//                    RCPSPex.activities[RCPSPex.activities.size()-1].duration;
-//
-//         std::cout << "{'scheduling': {";
-//         bool firstActivity = true;
-//         for (int i = 0; i < RCPSPex.activities.size(); i++) {
-//             if (!firstActivity) std::cout << ", ";
-//             std::cout << "'" << i+1 << "': " << finalState.start_times[i];
-//             firstActivity = false;
-//         }
-//         std::cout << "}, ";
-//         std::cout << "'makespan': " << makespan << ", ";
-//         std::cout << "'solved': True, ";
-//         std::cout << "}" << std::endl;
-//         std::cout << "\nFinal makespan: " << makespan << std::endl;
-//     }
-//     else {
-//         std::cout << "Path not found or timeout occurred.\n";
-//     }
-//
-//     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
-//     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
-//     std::ofstream file(filename, std::ios::app);
-//     file << group << "," << exam << "," << elapsed.count() << ","
-//          << ((!path.empty()|| first.rvs_activities_pool.empty()) ? "True" : "False") << ","
-//          << makespan << ","
-//          << astar.GetNodesExpanded() << ","
-//          << astar.GetNodesTouched() << ","
-//          << path.size() << ","
-//          << "BAP" << ","
-//          << problemType << ","
-//          << peakMemKB << ",";
-//     // Verify optimality
-//     int optMakespan = getOptimalMakespan(group, exam, "j30opt.sm");
-//     if (optMakespan != -1) {
-//         bool correct = (makespan == optMakespan);
-//         std::cout << "Optimal makespan: " << optMakespan << std::endl;
-//         std::cout << "Our makespan: " << makespan << std::endl;
-//         std::cout << "Correct: " << (correct ? "YES" : "NO") << std::endl;
-//
-//         // Also write to file
-//         file << (correct ? "True" : "False") << ","
-//              << optMakespan << ",";
-//         if (!correct) {
-//             allcorrect = false;
-//         }
-//     }
-//     file << "\n";
-//     return 0;
-// }
+template<int N>
+int solveRCPSP_BAP_impl(int group, int exam, const std::string& filename, const std::string& problemType) {
+    debug_cardinal_num = 0;
+    reset_mda_cache<N>();
+    getRCPSP(RCPSPex, group, exam, problemType);
+    resource_info.clear();
+    downstream.clear();
+    upstream.clear();
+    precomputeDownstream();
+    precomputeUpstream();
+    precomputeResourceInfo();
+
+    RCPSP_CBS<N> as1;
+    RCPSPState_CBS<N> first;
+    RCPSPState_CBS<N> last = first;
+    last.t = 0;
+    last.resourceType = -1;
+
+    TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> astar;
+    std::vector<RCPSPState_CBS<N>> path;
+
+    std::chrono::duration<double> elapsed;
+    auto start = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&as1, first, last, path);
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+    long peakMemKB = getPeakMemoryKB();
+
+    int makespan = 0;
+    bool solved = (!path.empty() || first.rvs_activities_pool.empty());
+
+    if (solved) {
+        RCPSPState_CBS<N>& finalState = path.empty() ? first : path.back();
+        makespan = finalState.start_times[RCPSPex.activities.size() - 1] +
+                   RCPSPex.activities[RCPSPex.activities.size() - 1].duration;
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+    } else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::ofstream file(filename, std::ios::app);
+    InstanceParams p = getParams(group);
+
+    file << group << "," << exam << "," << elapsed.count() << "," << makespan << ",";
+
+    if (problemType == "j30") {
+        int opt = getOptimalMakespan(group, exam, problemType);
+        bool correct = (makespan == opt);
+        file << (correct ? "True" : "False") << "," << problemType << ",BAP," << opt << ",-1,";
+        if (solved && !correct) allcorrect = false;
+    } else {
+        Bounds b = getBounds(group, exam, problemType);
+        bool correct = b.optimal_known ? (makespan == b.lb) : (makespan >= b.lb && makespan <= b.ub);
+        file << (b.optimal_known ? (correct ? "True" : "False") : "Unknown") << ","
+             << problemType << ",BAP," << b.lb << "," << b.ub << ",";
+        if (solved && !correct && b.optimal_known) allcorrect = false;
+    }
+
+    file << p.NC << "," << p.RF << "," << p.RS << ","
+         << (solved ? "True" : "False") << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+         << peakMemKB << ","
+         << setting.use_first_conflict << ","
+         << setting.use_conflict_prioritization << ","
+         << (int)setting.heuristic << ","
+         << setting.use_MDA_sets << ","
+         << setting.use_MDA_cache << ","
+         << setting.use_strong_constraints << ","
+         << setting.use_MDA_BAB << ","
+         << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
+
+    return 0;
+}
+
+int solveRCPSP_BAP(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving BAP: " << group << ":" << exam << std::endl;
+    setProblemSize(problemType);
+    if (problemType == "j30")       return solveRCPSP_BAP_impl<32>(group, exam, filename, problemType);
+    else if (problemType == "j60")  return solveRCPSP_BAP_impl<62>(group, exam, filename, problemType);
+    else if (problemType == "j90")  return solveRCPSP_BAP_impl<92>(group, exam, filename, problemType);
+    else if (problemType == "j120") return solveRCPSP_BAP_impl<122>(group, exam, filename, problemType);
+    return 0;
+}
 
 template<int N>
 int solveRCPSP_old_impl(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
@@ -1556,6 +1559,29 @@ void runConfig(const std::string& filename, const std::string& problemType) {
         std::cout << "Error: incorrect results" << std::endl;
 }
 
+void runConfigBAP(const std::string& filename, const std::string& problemType) {
+    allcorrect = true;
+    for (int i = 1; i <= 48; i++) {
+        for (int j = 1; j <= 10; j++) {
+            solveRCPSP_BAP(i, j, filename, problemType);
+        }
+    }
+    if (allcorrect)
+        std::cout << "All correct" << std::endl;
+    else
+        std::cout << "Error: incorrect results" << std::endl;
+}
+
+void applyConfig(bool prio, bool first, HeuristicType h, bool mda) {
+    setting.use_conflict_prioritization = prio;
+    setting.use_first_conflict          = first;
+    setting.heuristic                   = h;
+    setting.use_MDA_sets                = mda;
+    setting.use_MDA_cache               = mda;
+    setting.use_MDA_BAB                 = mda;
+    setting.use_strong_constraints      = false;
+}
+
 void runBenchmark() {
     std::string folder = "new_results";
     std::string baseName = "output_";
@@ -1572,39 +1598,54 @@ void runBenchmark() {
          << std::endl;
     file.close();
 
-    // for (const std::string& problemType : {"j30", "j60", "j90"}) {
-        std::string problemType="j30";
-        // --- Config 1: No features (baseline) ---
-        std::cout << "\n=== Config 1: No features | " << problemType << " ===" << std::endl;
-        setting.use_conflict_prioritization = false;
-        setting.use_first_conflict          = true;
-        setting.heuristic                   = HeuristicType::NONE;
-        setting.use_MDA_sets                = false;
-        setting.use_MDA_cache               = false;
-        setting.use_MDA_BAB                 = false;
+    for (const std::string& problemType : {"j30", "j60", "j90"}) {
+
+        // --- Config 1: Baseline — no features ---
+        std::cout << "\n=== Baseline | " << problemType << " ===" << std::endl;
+        applyConfig(false, true, HeuristicType::NONE, false);
         runConfig(filename, problemType);
 
-        // --- Config 2: All features ---
-        std::cout << "\n=== Config 2: All features | " << problemType << " ===" << std::endl;
-        setting.use_conflict_prioritization = true;
-        setting.use_first_conflict          = false;
-        setting.heuristic                   = HeuristicType::HCBS;
-        setting.use_MDA_sets                = true;
-        setting.use_MDA_cache               = true;
-        setting.use_MDA_BAB                 = true;
-        runConfig(filename, problemType);
+        // --- Config 2: Prio only ---
+        // std::cout << "\n=== Prio only | " << problemType << " ===" << std::endl;
+        // applyConfig(true, false, HeuristicType::NONE, false);
+        // runConfig(filename, problemType);
 
-        // --- Config 3: All except MDA ---
-        std::cout << "\n=== Config 3: All except MDA | " << problemType << " ===" << std::endl;
-        setting.use_conflict_prioritization = true;
-        setting.use_first_conflict          = false;
-        setting.heuristic                   = HeuristicType::HCBS;
-        setting.use_MDA_sets                = false;
-        setting.use_MDA_cache               = false;
-        setting.use_MDA_BAB                 = false;
-        runConfig(filename, problemType);
+        // --- Config 3: H only (no prio, no MDA) ---
+        // std::cout << "\n=== H only | " << problemType << " ===" << std::endl;
+        // applyConfig(false, false, HeuristicType::HCBS, false);
+        // runConfig(filename, problemType);
+
+        // --- Config 4: MDA only (no prio, no H) ---
+        // std::cout << "\n=== MDA only | " << problemType << " ===" << std::endl;
+        // applyConfig(false, false, HeuristicType::NONE, true);
+        // runConfig(filename, problemType);
+
+        // --- Config 5: Prio + H, no MDA ---
+        // std::cout << "\n=== Prio + H (no MDA) | " << problemType << " ===" << std::endl;
+        // applyConfig(true, false, HeuristicType::HCBS, false);
+        // runConfig(filename, problemType);
+
+        // --- Config 6: Prio + MDA, no H ---
+        // std::cout << "\n=== Prio + MDA (no H) | " << problemType << " ===" << std::endl;
+        // applyConfig(true, false, HeuristicType::NONE, true);
+        // runConfig(filename, problemType);
+
+        // --- Config 7: H + MDA, no prio ---
+        // std::cout << "\n=== H + MDA (no prio) | " << problemType << " ===" << std::endl;
+        // applyConfig(false, false, HeuristicType::HCBS, true);
+        // runConfig(filename, problemType);
+
+        // --- Config 8: All features (Prio + H + MDA) ---
+        // std::cout << "\n=== All features | " << problemType << " ===" << std::endl;
+        // applyConfig(true, false, HeuristicType::HCBS, true);
+        // runConfig(filename, problemType);
+
+        // --- Config BAP: original BAP (no features, first conflict) ---
+        // std::cout << "\n=== BAP | " << problemType << " ===" << std::endl;
+        // applyConfig(false, true, HeuristicType::NONE, false);
+        // runConfigBAP(filename, problemType);
     }
-// }
+}
 
 struct ResultRow {
     std::string fullLine;

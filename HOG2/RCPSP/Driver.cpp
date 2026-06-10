@@ -1273,6 +1273,150 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
         if (solved && !correct) {
             allcorrect = false;
             // exit(0); // only exit if we finished but got wrong answer
+
+            // ── DEBUG: wrong answer — print schedule and scan for violations ──
+            const RCPSPState_CBS<N>& dbgState = path.empty() ? first : path.back();
+            std::cout << "\n=== WRONG ANSWER DEBUG (" << group << "," << exam
+                      << ") makespan=" << makespan << " optimal=" << opt << " ===\n";
+
+            // Root makespan (path[0] is the root state)
+            short root_mk = path.empty() ? 0 : path[0].start_times[g_sink_id];
+            std::cout << "Root makespan=" << root_mk << "\n";
+
+            // Save ORIGINAL fc_stored for all path states BEFORE any recheck modifies them
+            std::vector<bool> original_fc;
+            original_fc.reserve(path.size());
+            for (const auto& ps : path) original_fc.push_back(ps.found_conflict);
+
+            // KEY DIAGNOSTIC 1: does compute_h_and_RVS detect the conflict NOW?
+            bool fc_before = dbgState.found_conflict;  // = original_fc.back()
+            short h_recheck = dbgState.compute_h_and_RVS();
+            bool fc_after = dbgState.found_conflict;
+            std::cout << "found_conflict in stored state (before recheck): " << fc_before << "\n";
+            std::cout << "compute_h_and_RVS() recheck: h=" << h_recheck
+                      << "  found_conflict_after=" << fc_after << "\n";
+
+            // KEY DIAGNOSTIC 2: look up goal state in the OC list, check stored g
+            uint64_t goalID;
+            dataLocation goalLoc = astar.openClosedList.Lookup(as1.GetStateHash(dbgState), goalID);
+            if (goalLoc != kNotFound) {
+                const auto& goalItem = astar.openClosedList.Lookat(goalID);
+                double stored_g     = goalItem.g;
+                double expected_g   = (double)(dbgState.start_times[g_sink_id] - root_mk);
+                double data_mk      = goalItem.data.start_times[g_sink_id];
+                std::cout << "[OC-GOAL] stored_g=" << stored_g
+                          << " expected_g=" << expected_g
+                          << " data.makespan=" << data_mk
+                          << " data.start_times[g_sink_id]=" << goalItem.data.start_times[g_sink_id]
+                          << " stored_fc=" << goalItem.data.found_conflict
+                          << " loc=" << goalLoc << "\n";
+                if (std::abs(stored_g - expected_g) > 0.5)
+                    std::cout << "  [!!] g INCONSISTENCY: stored_g=" << stored_g
+                              << " but data.makespan - root = " << expected_g << "\n";
+            } else {
+                std::cout << "[OC-GOAL] goal state NOT FOUND in OC list (unexpected)\n";
+            }
+
+            // KEY DIAGNOSTIC 3: scan OC list for ALL g-data inconsistencies
+            int inconsistent_count = 0;
+            int fc_false_count = 0;
+            for (int ii = 0; ii < (int)astar.openClosedList.size(); ii++) {
+                const auto& item = astar.openClosedList.Lookat(ii);
+                double item_expected_g = (double)(item.data.start_times[g_sink_id] - root_mk);
+                if (std::abs(item.g - item_expected_g) > 0.5) {
+                    inconsistent_count++;
+                    if (inconsistent_count <= 5) { // print first 5
+                        std::cout << "  [g-INCONSIST] idx=" << ii
+                                  << " stored_g=" << item.g
+                                  << " expected_g=" << item_expected_g
+                                  << " data.mk=" << item.data.start_times[g_sink_id]
+                                  << " fc=" << item.data.found_conflict << "\n";
+                    }
+                }
+                if (!item.data.found_conflict) fc_false_count++;
+            }
+            std::cout << "OC list g-inconsistencies: " << inconsistent_count
+                      << "  fc=false items: " << fc_false_count << "\n";
+
+            // PATH REPLAY: walk the entire CBS path, use ORIGINAL fc values (not modified by recheck)
+            std::cout << "CBS path replay (" << path.size() << " states):\n";
+            for (int pi = 0; pi < (int)path.size(); pi++) {
+                bool fc_stored = original_fc[pi];  // use saved original
+                short h_pi = path[pi].compute_h_and_RVS();
+                bool fc_now = path[pi].found_conflict;
+                short mk = path[pi].start_times[g_sink_id];
+                if (fc_stored != fc_now || (!fc_stored && pi < (int)path.size()-1)) {
+                    std::cout << "  [!!] path[" << pi << "] makespan=" << mk
+                              << " fc_stored=" << fc_stored << " fc_now=" << fc_now
+                              << " h=" << h_pi << "\n";
+                } else {
+                    std::cout << "      path[" << pi << "] makespan=" << mk
+                              << " fc_stored=" << fc_stored << " fc_now=" << fc_now << "\n";
+                }
+            }
+
+            // Print full schedule
+            std::cout << "Schedule:\n";
+            for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
+                std::cout << "  act[" << i << "]: start=" << dbgState.start_times[i]
+                          << "  dur=" << RCPSPex.activities[i].duration
+                          << "  finish=" << (dbgState.start_times[i] + RCPSPex.activities[i].duration)
+                          << "\n";
+            }
+
+            // Independent resource-conflict check
+            bool any_res_conflict = false;
+            std::cout << "Resource conflicts:\n";
+            for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
+                const ResourceInfo& res = resource_info[resIdx];
+                std::vector<short> events;
+                for (short actIdx : res.activity_indices)
+                    events.push_back(dbgState.start_times[actIdx]);
+                std::sort(events.begin(), events.end());
+                events.erase(std::unique(events.begin(), events.end()), events.end());
+                for (short t : events) {
+                    short total_demand = 0;
+                    std::vector<short> conflicting;
+                    for (int j2 = 0; j2 < (int)res.activity_indices.size(); j2++) {
+                        short actIdx = res.activity_indices[j2];
+                        short s = dbgState.start_times[actIdx];
+                        short f = s + RCPSPex.activities[actIdx].duration;
+                        if (s <= t && f > t) {
+                            total_demand += res.demands[j2];
+                            conflicting.push_back(actIdx);
+                        }
+                    }
+                    if (total_demand > res.capacity) {
+                        any_res_conflict = true;
+                        std::cout << "  RES CONFLICT res=" << resIdx
+                                  << " t=" << t
+                                  << " demand=" << total_demand
+                                  << "/" << res.capacity << " acts={";
+                        for (short a : conflicting) std::cout << a << " ";
+                        std::cout << "}\n";
+                    }
+                }
+            }
+            if (!any_res_conflict) std::cout << "  none\n";
+
+            // Independent precedence check
+            bool any_prec_viol = false;
+            std::cout << "Precedence violations:\n";
+            for (int i = 0; i < (int)RCPSPex.activities.size(); i++) {
+                for (short dep : RCPSPex.backword_dependencies[i]) {
+                    int predIdx = dep - 1;
+                    short pred_finish = dbgState.start_times[predIdx]
+                                      + RCPSPex.activities[predIdx].duration;
+                    if (dbgState.start_times[i] < pred_finish) {
+                        any_prec_viol = true;
+                        std::cout << "  PREC VIOL act[" << i << "] starts=" << dbgState.start_times[i]
+                                  << " but pred[" << predIdx << "] finishes=" << pred_finish << "\n";
+                    }
+                }
+            }
+            if (!any_prec_viol) std::cout << "  none\n";
+
+            std::cout << "=== END DEBUG ===\n\n";
         }
     } else {
         Bounds b = getBounds(group, exam, problemType);
@@ -1308,8 +1452,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
-
-        exit(0);
+        // exit(0); // disabled: log wrong answers and continue benchmark
     }
 
     return 0;
@@ -1539,9 +1682,122 @@ std::string getNextFilename(const std::string& folder, const std::string& baseNa
     return newFilename;
 }
 
+void applyConfig(bool prio, bool first, HeuristicType h, bool mda) {
+    setting.use_conflict_prioritization = prio;
+    setting.use_first_conflict          = first;
+    setting.heuristic                   = h;
+    setting.use_MDA_sets                = mda;
+    setting.use_MDA_cache               = mda;
+    setting.use_MDA_BAB                 = mda;
+    setting.use_strong_constraints      = false;
+}
+
+void runCrashDiagnostic() {
+    // Tests exactly the 4 instances that caused crashes in previous runs,
+    // across all 8 configs, with no exit on wrong answer.
+    // Crash points found from last-written rows in output_46/49/56/57:
+    //   Prio only  (output_46): crashed on (29,3)
+    //   Prio+MDA   (output_49): crashed on (25,7)
+    //   MDA only   (output_56): crashed on (41,9)
+    //   H+MDA      (output_57): crashed on (46,7)
+    std::string folder = "new_results";
+    std::string baseName = "output_";
+    std::string extension = ".csv";
+    std::string filename = getNextFilename(folder, baseName, extension);
+    std::ofstream file(filename);
+    if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
+    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+         << "finished,expandNumber,generatedNumber,depth,maxMem,"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << std::endl;
+    file.close();
+
+    const std::vector<std::pair<int,int>> suspects = {{29,3},{25,7},{41,9},{46,7}};
+
+    auto runSuspects = [&]() {
+        allcorrect = true;
+        for (auto [g, e] : suspects)
+            solveRCPSP_CBS(g, e, filename, "j30");
+        std::cout << (allcorrect ? "All correct" : "Some INCORRECT") << std::endl;
+    };
+
+    std::cout << "\n=== DIAG: Baseline ===" << std::endl;
+    applyConfig(false, true, HeuristicType::NONE, false);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: Prio only ===" << std::endl;
+    applyConfig(true, false, HeuristicType::NONE, false);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: H only ===" << std::endl;
+    applyConfig(false, false, HeuristicType::HCBS, false);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: MDA only ===" << std::endl;
+    applyConfig(false, false, HeuristicType::NONE, true);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: Prio + H ===" << std::endl;
+    applyConfig(true, false, HeuristicType::HCBS, false);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: Prio + MDA ===" << std::endl;
+    applyConfig(true, false, HeuristicType::NONE, true);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: H + MDA ===" << std::endl;
+    applyConfig(false, false, HeuristicType::HCBS, true);
+    runSuspects();
+
+    std::cout << "\n=== DIAG: All features ===" << std::endl;
+    applyConfig(true, false, HeuristicType::HCBS, true);
+    runSuspects();
+
+    std::cout << "\nDiagnostic done -> " << filename << std::endl;
+}
+
+void runWrongAnswerDebug() {
+    // Only the 4 instance-config combos that gave wrong answers in output_59.csv.
+    // All other combos timed out — skip them to save time.
+    std::string folder = "new_results";
+    std::string baseName = "output_";
+    std::string extension = ".csv";
+    std::string filename = getNextFilename(folder, baseName, extension);
+    std::ofstream file(filename);
+    if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
+    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+         << "finished,expandNumber,generatedNumber,depth,maxMem,"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << std::endl;
+    file.close();
+
+    // (29,3) Prio only  — was wrong: makespan=53, optimal=78
+    std::cout << "\n=== Prio only | (29,3) ===\n";
+    applyConfig(true, false, HeuristicType::NONE, false);
+    solveRCPSP_CBS(29, 3, filename, "j30");
+
+    // (41,9) MDA only   — was wrong: makespan=86, optimal=92
+    std::cout << "\n=== MDA only | (41,9) ===\n";
+    applyConfig(false, false, HeuristicType::NONE, true);
+    solveRCPSP_CBS(41, 9, filename, "j30");
+
+    // (25,7) Prio+MDA   — was wrong: makespan=85, optimal=95
+    std::cout << "\n=== Prio+MDA | (25,7) ===\n";
+    applyConfig(true, false, HeuristicType::NONE, true);
+    solveRCPSP_CBS(25, 7, filename, "j30");
+
+    // (46,7) H+MDA      — was wrong: makespan=53, optimal=59
+    std::cout << "\n=== H+MDA | (46,7) ===\n";
+    applyConfig(false, false, HeuristicType::HCBS, true);
+    solveRCPSP_CBS(46, 7, filename, "j30");
+
+    std::cout << "\nDebug run done -> " << filename << "\n";
+}
 
 int main() {
-    runBenchmark();
+    runWrongAnswerDebug();
+    // runCrashDiagnostic();
+    // runBenchmark();
     return 0;
 }
 
@@ -1572,15 +1828,6 @@ void runConfigBAP(const std::string& filename, const std::string& problemType) {
         std::cout << "Error: incorrect results" << std::endl;
 }
 
-void applyConfig(bool prio, bool first, HeuristicType h, bool mda) {
-    setting.use_conflict_prioritization = prio;
-    setting.use_first_conflict          = first;
-    setting.heuristic                   = h;
-    setting.use_MDA_sets                = mda;
-    setting.use_MDA_cache               = mda;
-    setting.use_MDA_BAB                 = mda;
-    setting.use_strong_constraints      = false;
-}
 
 void runBenchmark() {
     std::string folder = "new_results";
@@ -1601,9 +1848,9 @@ void runBenchmark() {
     for (const std::string& problemType : {"j30", "j60", "j90"}) {
 
         // --- Config 1: Baseline — no features ---
-        std::cout << "\n=== Baseline | " << problemType << " ===" << std::endl;
-        applyConfig(false, true, HeuristicType::NONE, false);
-        runConfig(filename, problemType);
+        // std::cout << "\n=== Baseline | " << problemType << " ===" << std::endl;
+        // applyConfig(false, true, HeuristicType::NONE, false);
+        // runConfig(filename, problemType);
 
         // --- Config 2: Prio only ---
         // std::cout << "\n=== Prio only | " << problemType << " ===" << std::endl;
@@ -1645,6 +1892,7 @@ void runBenchmark() {
         // applyConfig(false, true, HeuristicType::NONE, false);
         // runConfigBAP(filename, problemType);
     }
+
 }
 
 struct ResultRow {
@@ -1845,3 +2093,5 @@ void solver_group_TT(int startGroup, const std::string& filename, const std::str
 
 
 
+
+extern "C" void renderScene() {}

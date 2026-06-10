@@ -2171,10 +2171,7 @@ if (setting.use_dominance){
 }
 template<short N>
 inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const {
-  // std::cout << "goal: ";
-
   return !node.found_conflict;
-
 }
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
@@ -2210,31 +2207,25 @@ template<short N>
 // }
 template<short N>
 inline uint64_t RCPSP_CBS<N>::GetStateHash(const RCPSPState_CBS<N> &node) const {
-  std::size_t seed = 0;
+  // FNV-1a 64-bit over the raw bytes of start_times.
+  //
+  // The previous Boost hash_combine used std::hash<short>(x)=x (identity), so
+  // every state began with the same seed (start_times[0] is always 0 for the
+  // source activity).  For CBS states that differ in only a few values, the
+  // resulting hashes had far too many collisions.
+  //
+  // FNV-1a processes every byte with a multiply-xor, giving strong avalanche
+  // across all 64 bits even for small/structured integer arrays.
+  constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+  constexpr uint64_t FNV_PRIME  =  1099511628211ULL;
 
-  // start_times
-  for (const auto& st : node.start_times) {
-    seed ^= std::hash<short>{}(st) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  uint64_t h = FNV_OFFSET;
+  const uint8_t* p = reinterpret_cast<const uint8_t*>(node.start_times.data());
+  for (size_t i = 0; i < N * sizeof(short); ++i) {
+    h ^= static_cast<uint64_t>(p[i]);
+    h *= FNV_PRIME;
   }
-  //
-  // // added_precedences
-  // for (const auto& [f, t] : node.added_precedences) {
-  //   seed ^= std::hash<short>{}(f) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   seed ^= std::hash<short>{}(t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
-  //
-  // // conflict info
-  // seed ^= std::hash<short>{}(node.t) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // seed ^= std::hash<short>{}(node.resourceType) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // seed ^= std::hash<bool>{}(node.found_conflict) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // seed ^= std::hash<bool>{}(node.is_size2_conflict) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //
-  // // pool
-  // for (const auto& a : node.rvs_activities_pool) {
-  //   seed ^= std::hash<short>{}(a) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
-
-  return seed;
+  return h;
 }
 
 template<short N>

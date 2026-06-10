@@ -585,6 +585,7 @@ void runSolver(const Config& config) {
             RCPSPex.reset();
             heuristicDPInitialized = false;  // Reset DP cache for new problem
             lbccInitialized = false;         // Reset LBcc cache for new problem
+            lbip0Initialized = false;        // Reset LBip0 cache for new problem
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {

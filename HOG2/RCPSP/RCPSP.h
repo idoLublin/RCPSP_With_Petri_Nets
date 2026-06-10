@@ -36,6 +36,10 @@ double computeCriticalCapacityLB(
     const std::vector<std::pair<short, short>>& activeTransitions,
     int currentMakespan);
 
+// Forward declarations for LBip0 heuristic (Klein & Scholl 1999, LB10)
+void initializeLBIP0();
+double computeLBIP0(int currentMakespan);
+
 // Global DP toggle (defined in Driver.cpp)
 extern bool useDPHeuristic;
 
@@ -290,6 +294,10 @@ inline double RCPSP::HCost(const RCPSPState &state1, const RCPSPState &state2) c
       state1.h = std::max(cpH, lbccH);
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       state1.h = computeLBCS(tempUnstarted, state1.activeTransitionIndices);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBIP0) {
+      double cpH = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
+      double ipH = computeLBIP0(state1.g);
+      state1.h = std::max(cpH, ipH);
     } else if (useDPHeuristic) {
       state1.h = getForwardHcostDP(tempUnstarted, state1.activeTransitionIndices);
     } else {
@@ -739,6 +747,11 @@ int lastActivityId = -1;
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return std::max(computeLBCS_TT(tempUnstarted) - unkTime,
              computeLBCS_TT(newUnstartedTransitions));
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBIP0) {
+      double cpVal = std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
+                              getForwardHcostDP_TT(newUnstartedTransitions));
+      double ipVal = computeLBIP0(state1.g);
+      return std::max(cpVal, ipVal);
     } else if (useDPHeuristic) {
       return std::max(getForwardHcostDP_TT(tempUnstarted) - unkTime,
              getForwardHcostDP_TT(newUnstartedTransitions));
@@ -755,6 +768,10 @@ int lastActivityId = -1;
       return std::max(cpVal, lbccVal);
     } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
       return computeLBCS_TT(tempUnstarted);
+    } else if (activeHeuristic == P_RCPSP::HeuristicType::LBIP0) {
+      double cpVal = getForwardHcostDP_TT(tempUnstarted);
+      double ipVal = computeLBIP0(state1.g);
+      return std::max(cpVal, ipVal);
     } else if (useDPHeuristic) {
       return getForwardHcostDP_TT(tempUnstarted);
     } else {

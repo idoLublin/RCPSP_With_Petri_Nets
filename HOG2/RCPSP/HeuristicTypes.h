@@ -22,6 +22,7 @@ enum class HeuristicType {
     CRITICAL_PATH,  // Default - fast DP-based critical path
     LBCS,           // Lower Bound Critical Sequence (workload-based)
     LBCC,           // Lower Bound Critical Capacity (work arrival simulation)
+    LBIP0,          // Lower Bound Incompatible Pairs (Klein & Scholl 1999, LB10)
 };
 
 /**
@@ -39,6 +40,10 @@ inline HeuristicType stringToHeuristicType(const std::string& str) {
         {"lbcc", HeuristicType::LBCC},
         {"critical-capacity", HeuristicType::LBCC},
         {"criticalcapacity", HeuristicType::LBCC},
+        {"lbip0", HeuristicType::LBIP0},
+        {"ip0", HeuristicType::LBIP0},
+        {"incompatible-pairs", HeuristicType::LBIP0},
+        {"incompatiblepairs", HeuristicType::LBIP0},
     };
 
     // Convert to lowercase for case-insensitive matching
@@ -59,6 +64,7 @@ inline std::string heuristicTypeToString(HeuristicType type) {
         case HeuristicType::CRITICAL_PATH: return "CP";
         case HeuristicType::LBCS: return "LBCS";
         case HeuristicType::LBCC: return "LBCC";
+        case HeuristicType::LBIP0: return "LBIP0";
         default: return "UNKNOWN";
     }
 }
@@ -74,6 +80,8 @@ inline std::string heuristicTypeDescription(HeuristicType type) {
             return "Lower Bound Critical Sequence (workload-based)";
         case HeuristicType::LBCC:
             return "Lower Bound Critical Capacity (work arrival simulation)";
+        case HeuristicType::LBIP0:
+            return "Lower Bound Incompatible Pairs (Klein & Scholl 1999, LB10)";
         default:
             return "Unknown heuristic";
     }

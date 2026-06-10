@@ -180,13 +180,13 @@ double computeCriticalCapacityLB_Full() {
     initializeLBcc();
   }
 
-  double finalLB = 0.0;
+  int finalLB = 0;
 
   // Process each resource type
   for (const auto &res : RCPSPex.resources) {
     const std::string &resName = res.first;
-    short capacity = res.second;
-    double workContentTank = 0.0;
+    int capacity = res.second;
+    int workContentTank = 0;
     int currentTime = 0;
 
     // Process each EST event in order
@@ -196,8 +196,8 @@ double computeCriticalCapacityLB_Full() {
       workContentTank -= deltaT * capacity;
 
       // Step 2: Apply idle time constraint (tank cannot go negative)
-      if (workContentTank < 0.0) {
-        workContentTank = 0.0;
+      if (workContentTank < 0) {
+        workContentTank = 0;
       }
 
       // Step 3: Update current time
@@ -209,22 +209,19 @@ double computeCriticalCapacityLB_Full() {
         const auto &activity = RCPSPex.activities[activityId - 1];
         auto it = activity.resource_demands.find(resName);
         if (it != activity.resource_demands.end()) {
-          double workContent =
-              static_cast<double>(activity.duration) * it->second;
-          workContentTank += workContent;
+          workContentTank += activity.duration * it->second;
         }
       }
     }
 
-    // Step 5: Final drain calculation
-    double remainingTime = workContentTank / capacity;
-    double resourceLB = currentTime + remainingTime;
+    // Step 5: Final drain - integer ceiling division
+    int resourceLB = currentTime + (workContentTank + capacity - 1) / capacity;
 
     // Update global maximum
     finalLB = std::max(finalLB, resourceLB);
   }
 
-  return std::ceil(finalLB);
+  return static_cast<double>(finalLB);
 }
 
 // ============================================================================
@@ -302,13 +299,13 @@ double computeCriticalCapacityLB(
   }
   std::sort(sortedRelativeESTs.begin(), sortedRelativeESTs.end());
 
-  double finalLB = 0.0;
+  int finalLB = 0;
 
   // Process each resource type
   for (const auto &res : RCPSPex.resources) {
     const std::string &resName = res.first;
-    short capacity = res.second;
-    double workContentTank = 0.0;
+    int capacity = res.second;
+    int workContentTank = 0;
     int currentTime = 0;
 
     // Process each EST event
@@ -318,8 +315,8 @@ double computeCriticalCapacityLB(
       workContentTank -= deltaT * capacity;
 
       // Idle time constraint
-      if (workContentTank < 0.0) {
-        workContentTank = 0.0;
+      if (workContentTank < 0) {
+        workContentTank = 0;
       }
 
       currentTime = relEST;
@@ -345,20 +342,127 @@ double computeCriticalCapacityLB(
         const auto &activity = RCPSPex.activities[activityId - 1];
         auto it = activity.resource_demands.find(resName);
         if (it != activity.resource_demands.end()) {
-          double workContent = static_cast<double>(duration) * it->second;
-          workContentTank += workContent;
+          workContentTank += duration * it->second;
         }
       }
     }
 
-    // Final drain
-    double remainingTime = workContentTank / capacity;
-    double resourceLB = currentTime + remainingTime;
+    // Final drain - integer ceiling division
+    int resourceLB = currentTime + (workContentTank + capacity - 1) / capacity;
 
     finalLB = std::max(finalLB, resourceLB);
   }
 
-  return std::ceil(finalLB);
+  return static_cast<double>(finalLB);
+}
+
+// ============================================================================
+// LBip0 (Klein & Scholl 1999, "Precedence bound 1" / LB10)
+// ============================================================================
+// For every incompatible pair (i, j) not already ordered by transitive
+// precedence, both orientations i->j and j->i are tested. Per Remark 3, the
+// longest path through arc (i, j) equals ES[i] + d[i] + d[j] + tail[j], where
+// tail[k] = LB1 - LF[k]. The pair bound is min(LB(i,j), LB(j,i)), and LBip0
+// is the max over all incompatible pairs. The bound is static: computed once
+// from the project network and reused at every search node with a g-subtract.
+
+thread_local int lbip0Value = 0;
+thread_local bool lbip0Initialized = false;
+
+void initializeLBIP0() {
+  if (!heuristicDPInitialized) initializeHeuristicDP();
+  if (lbip0Initialized) return;
+
+  int n = static_cast<int>(RCPSPex.activities.size());
+
+  // LB1 = critical path length = max EFT over all activities
+  int LB1 = 0;
+  for (int i = 1; i <= n; i++) LB1 = std::max(LB1, heuristicDP[i]);
+  lbip0Value = LB1;
+
+  if (n <= 1) { lbip0Initialized = true; return; }
+
+  // ES[i] = EFT[i] - d[i]
+  std::vector<int> ES(n + 1, 0);
+  for (int i = 1; i <= n; i++) {
+    ES[i] = heuristicDP[i] - RCPSPex.activities[i - 1].duration;
+  }
+
+  // Backward pass for LF[i] (latest finish given makespan LB1)
+  // LF[i] = min over successors s of (LF[s] - d[s]); sinks default to LB1
+  std::vector<int> LF(n + 1, LB1);
+  for (int i = n; i >= 1; i--) {
+    int minLS = LB1;
+    for (short s : RCPSPex.dependencies[i - 1]) {
+      int LS_s = LF[s] - RCPSPex.activities[s - 1].duration;
+      minLS = std::min(minLS, LS_s);
+    }
+    LF[i] = minLS;
+  }
+
+  // tail[i] = LB1 - LF[i]
+  std::vector<int> tail(n + 1, 0);
+  for (int i = 1; i <= n; i++) tail[i] = LB1 - LF[i];
+
+  // Transitive closure via Floyd-Warshall on precedence graph.
+  // reach[i][j] = true iff j is a (transitive) successor of i.
+  // Activities are 1-based; use n+1 x n+1 packed in 1D for cache locality.
+  int N = n + 1;
+  std::vector<unsigned char> reach(static_cast<size_t>(N) * N, 0);
+  auto R = [&](int i, int j) -> unsigned char & {
+    return reach[static_cast<size_t>(i) * N + j];
+  };
+  for (int i = 1; i <= n; i++) {
+    for (short s : RCPSPex.dependencies[i - 1]) R(i, s) = 1;
+  }
+  for (int k = 1; k <= n; k++) {
+    for (int i = 1; i <= n; i++) {
+      if (!R(i, k)) continue;
+      for (int j = 1; j <= n; j++) {
+        if (R(k, j)) R(i, j) = 1;
+      }
+    }
+  }
+
+  // Enumerate unordered pairs. Skip pairs already ordered by transitive
+  // precedence — they are incompatible by construction, but the original
+  // critical path already captures their sequencing, so they add nothing.
+  for (int i = 1; i < n; i++) {
+    const auto &actI = RCPSPex.activities[i - 1];
+    if (actI.duration == 0) continue;
+    for (int j = i + 1; j <= n; j++) {
+      if (R(i, j) || R(j, i)) continue;
+      const auto &actJ = RCPSPex.activities[j - 1];
+      if (actJ.duration == 0) continue;
+
+      // Resource incompatibility: ∃ resource k with r_ik + r_jk > a_k
+      bool incompatible = false;
+      for (const auto &res : RCPSPex.resources) {
+        auto itI = actI.resource_demands.find(res.first);
+        auto itJ = actJ.resource_demands.find(res.first);
+        int rI = (itI != actI.resource_demands.end()) ? itI->second : 0;
+        int rJ = (itJ != actJ.resource_demands.end()) ? itJ->second : 0;
+        if (rI + rJ > res.second) { incompatible = true; break; }
+      }
+      if (!incompatible) continue;
+
+      // Length of longest path through arc i->j and through arc j->i
+      int lenIJ = ES[i] + actI.duration + actJ.duration + tail[j];
+      int lenJI = ES[j] + actJ.duration + actI.duration + tail[i];
+      int lbIJ = std::max(LB1, lenIJ);
+      int lbJI = std::max(LB1, lenJI);
+      int pairBound = std::min(lbIJ, lbJI);
+      if (pairBound > lbip0Value) lbip0Value = pairBound;
+    }
+  }
+
+  lbip0Initialized = true;
+}
+
+double computeLBIP0(int currentMakespan) {
+  if (!lbip0Initialized) initializeLBIP0();
+  int remaining = lbip0Value - currentMakespan;
+  return remaining > 0 ? static_cast<double>(remaining) : 0.0;
 }
 
 // Fast DP-based heuristic lookup

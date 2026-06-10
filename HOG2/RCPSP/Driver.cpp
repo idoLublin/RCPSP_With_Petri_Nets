@@ -54,6 +54,7 @@ namespace fs = std::filesystem;
 
 void runBenchmark(const std::string& problemType);
 void runSingleConfig(const std::string& problemType, int configNum);
+void runBenchmarkTT2(const std::string& problemType);
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
 // std::atomic<bool> cancel_requested(false);
@@ -1797,17 +1798,25 @@ void runWrongAnswerDebug() {
 
 int main(int argc, char* argv[]) {
     // Usage:
-    //   Driver_bench.exe <size> <cfg>   — single config, for parallel runs
-    //   Driver_bench.exe <size>         — all 8 configs for one size, sequentially
-    //   Driver_bench.exe                — all sizes all configs, fully sequential
+    //   Driver_bench <size> <cfg>    — CBS: single config, for parallel runs
+    //   Driver_bench <size>          — CBS: all 8 configs for one size, sequentially
+    //   Driver_bench                 — CBS: all sizes all configs, fully sequential
+    //   Driver_bench tt2_<size>      — TT2: run all problems for one size
     //
     // <size> : j30 | j60 | j90 | j120
     // <cfg>  : 1..8  (1=Baseline, 2=Prio, 3=H, 4=MDA, 5=Prio+H, 6=Prio+MDA, 7=H+MDA, 8=All)
-    if (argc >= 3) {
-        int cfg = std::atoi(argv[2]);
-        runSingleConfig(argv[1], cfg);
-    } else if (argc == 2) {
-        runBenchmark(argv[1]);
+    if (argc >= 2) {
+        std::string arg1 = argv[1];
+        if (arg1.rfind("tt2_", 0) == 0) {
+            // TT2 mode: argument is "tt2_j30", "tt2_j60", "tt2_j90"
+            std::string problemType = arg1.substr(4);
+            runBenchmarkTT2(problemType);
+        } else if (argc >= 3) {
+            int cfg = std::atoi(argv[2]);
+            runSingleConfig(argv[1], cfg);
+        } else {
+            runBenchmark(argv[1]);
+        }
     } else {
         runBenchmark("j30");
         runBenchmark("j60");
@@ -1943,6 +1952,33 @@ void runBenchmark(const std::string& problemType) {
     runConfig(filename, problemType);
 
     std::cout << "\nBenchmark done (" << problemType << ") -> " << filename << std::endl;
+}
+
+void runConfigTT2(const std::string& filename, const std::string& problemType) {
+    for (int i = 1; i <= 48; i++) {
+        for (int j = 1; j <= 10; j++) {
+            solveRCPSP_TT2(i, j, filename, problemType);
+        }
+    }
+}
+
+void runBenchmarkTT2(const std::string& problemType) {
+    std::string folder = "new_results";
+    std::string baseName = "output_tt2_" + problemType + "_";
+    std::string filename = getNextFilename(folder, baseName, ".csv");
+    std::ofstream file(filename);
+    if (!file.is_open()) {
+        std::cerr << "Error opening file: " << filename << std::endl;
+        return;
+    }
+    // Header matches what solveRCPSP_TT2 writes per row
+    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB"
+         << std::endl;
+    file.close();
+
+    std::cout << "\n=== TT2 | " << problemType << " ===" << std::endl;
+    runConfigTT2(filename, problemType);
+    std::cout << "\nTT2 benchmark done (" << problemType << ") -> " << filename << std::endl;
 }
 
 struct ResultRow {

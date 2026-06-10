@@ -1504,40 +1504,70 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
 inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
   return state2.g-state1.g;//+state1.g
 }
+// Old Boost hash_combine — used 32-bit constant 0x9e3779b9, giving only ~32-bit
+// effective collision resistance (birthday paradox causes collisions for 1M+ states).
+// inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
+//   std::size_t seed = 0;
+//
+//   // 1. Finished Activities
+//   for (int i = 1; i <= petri.Transitions.size(); ++i) {
+//     seed ^= std::hash<int>{}(node.finishedActivitiys[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   }
+//
+//   // 2. Activity Nodes (Tokens)
+//   // for (const auto& p : node.activity_nodes) {
+//   //   seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   //   seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   // }
+//   //
+//   // // 3. Resource Nodes
+//   // for (const auto& resourceVec : node.resource_nodes) {
+//   //   for (const auto& p : resourceVec) {
+//   //     seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   //     seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   //   }
+//   // }
+//
+//   // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
+//   // Must verify these are SORTED in the state constructor!
+//   for (const auto& active : node.activeTransitionIndices) {
+//     // Hash the Task ID
+//     seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//     // Hash the Remaining Time (Crucial!)
+//     seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   }
+//   // seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//   // seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+//
+//   return seed;
+// }
+
+// FNV-1a 64-bit hash — true 64-bit avalanche, no birthday collision for 1M+ states.
 inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
-  std::size_t seed = 0;
+  constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+  constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
+  uint64_t h = FNV_OFFSET;
 
-  // 1. Finished Activities
-  for (int i = 1; i <= petri.Transitions.size(); ++i) {
-    seed ^= std::hash<int>{}(node.finishedActivitiys[i]) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+  auto mix_int = [&](int v) {
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(&v);
+    for (size_t i = 0; i < sizeof(int); ++i) {
+      h ^= static_cast<uint64_t>(p[i]);
+      h *= FNV_PRIME;
+    }
+  };
+
+  // 1. Finished Activities (indexed 1..N)
+  for (int i = 1; i <= (int)petri.Transitions.size(); ++i) {
+    mix_int(node.finishedActivitiys[i]);
   }
 
- // 2. Activity Nodes (Tokens)
-  // for (const auto& p : node.activity_nodes) {
-  //   seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // }
-  //
-  // // 3. Resource Nodes
-  // for (const auto& resourceVec : node.resource_nodes) {
-  //   for (const auto& p : resourceVec) {
-  //     seed ^= std::hash<int>{}(p.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //     seed ^= std::hash<int>{}(p.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  //   }
-  // }
-
-  // --- 4. ACTIVE TRANSITIONS (THE MISSING PIECE) ---
-  // Must verify these are SORTED in the state constructor!
+  // 4. Active Transitions: (task_id, remaining_time) pairs — must be sorted
   for (const auto& active : node.activeTransitionIndices) {
-    // Hash the Task ID
-    seed ^= std::hash<int>{}(active.first) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-    // Hash the Remaining Time (Crucial!)
-    seed ^= std::hash<int>{}(active.second) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+    mix_int(active.first);
+    mix_int(active.second);
   }
-  // seed ^= std::hash<int>{}(node.g) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-  // seed ^= std::hash<int>{}(node.h) + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 
-  return seed;
+  return h;
 }
 
 inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,

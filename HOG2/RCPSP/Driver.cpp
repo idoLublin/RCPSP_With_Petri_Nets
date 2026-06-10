@@ -52,7 +52,8 @@ namespace fs = std::filesystem;
 //     return -1;
 // }
 
-void runBenchmark();
+void runBenchmark(const std::string& problemType);
+void runSingleConfig(const std::string& problemType, int configNum);
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
 // std::atomic<bool> cancel_requested(false);
@@ -1794,10 +1795,24 @@ void runWrongAnswerDebug() {
     std::cout << "\nDebug run done -> " << filename << "\n";
 }
 
-int main() {
-    runWrongAnswerDebug();
-    // runCrashDiagnostic();
-    // runBenchmark();
+int main(int argc, char* argv[]) {
+    // Usage:
+    //   Driver_bench.exe <size> <cfg>   — single config, for parallel runs
+    //   Driver_bench.exe <size>         — all 8 configs for one size, sequentially
+    //   Driver_bench.exe                — all sizes all configs, fully sequential
+    //
+    // <size> : j30 | j60 | j90 | j120
+    // <cfg>  : 1..8  (1=Baseline, 2=Prio, 3=H, 4=MDA, 5=Prio+H, 6=Prio+MDA, 7=H+MDA, 8=All)
+    if (argc >= 3) {
+        int cfg = std::atoi(argv[2]);
+        runSingleConfig(argv[1], cfg);
+    } else if (argc == 2) {
+        runBenchmark(argv[1]);
+    } else {
+        runBenchmark("j30");
+        runBenchmark("j60");
+        runBenchmark("j90");
+    }
     return 0;
 }
 
@@ -1829,9 +1844,51 @@ void runConfigBAP(const std::string& filename, const std::string& problemType) {
 }
 
 
-void runBenchmark() {
+static const char* CFG_NAMES[] = {
+    "", "baseline", "prio", "h", "mda", "prio_h", "prio_mda", "h_mda", "all"
+};
+
+void applyConfigNum(int n) {
+    switch (n) {
+        case 1: applyConfig(false, true,  HeuristicType::NONE, false); break; // Baseline
+        case 2: applyConfig(true,  false, HeuristicType::NONE, false); break; // Prio only
+        case 3: applyConfig(false, false, HeuristicType::HCBS, false); break; // H only
+        case 4: applyConfig(false, false, HeuristicType::NONE, true);  break; // MDA only
+        case 5: applyConfig(true,  false, HeuristicType::HCBS, false); break; // Prio + H
+        case 6: applyConfig(true,  false, HeuristicType::NONE, true);  break; // Prio + MDA
+        case 7: applyConfig(false, false, HeuristicType::HCBS, true);  break; // H + MDA
+        case 8: applyConfig(true,  false, HeuristicType::HCBS, true);  break; // All features
+        default:
+            std::cerr << "Unknown config " << n << " (use 1-8)\n";
+            std::exit(1);
+    }
+}
+
+void runSingleConfig(const std::string& problemType, int configNum) {
+    if (configNum < 1 || configNum > 8) {
+        std::cerr << "Config must be 1-8\n"; std::exit(1);
+    }
     std::string folder = "new_results";
-    std::string baseName = "output_";
+    std::string baseName = "output_" + problemType + "_cfg" + std::to_string(configNum) + "_";
+    std::string filename = getNextFilename(folder, baseName, ".csv");
+    std::ofstream file(filename);
+    if (!file.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
+    file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+         << "finished,expandNumber,generatedNumber,depth,maxMem,"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << std::endl;
+    file.close();
+
+    std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType << " ===" << std::endl;
+    applyConfigNum(configNum);
+    runConfig(filename, problemType);
+    std::cout << "Done -> " << filename << std::endl;
+}
+
+void runBenchmark(const std::string& problemType) {
+    std::string folder = "new_results";
+    // Include problem type in filename so parallel processes don't race.
+    std::string baseName = "output_" + problemType + "_";
     std::string extension = ".csv";
     std::string filename = getNextFilename(folder, baseName, extension);
     std::ofstream file(filename);
@@ -1845,54 +1902,47 @@ void runBenchmark() {
          << std::endl;
     file.close();
 
-    for (const std::string& problemType : {"j30", "j60", "j90"}) {
+    // --- Config 1: Baseline — no features ---
+    std::cout << "\n=== Baseline | " << problemType << " ===" << std::endl;
+    applyConfig(false, true, HeuristicType::NONE, false);
+    runConfig(filename, problemType);
 
-        // --- Config 1: Baseline — no features ---
-        // std::cout << "\n=== Baseline | " << problemType << " ===" << std::endl;
-        // applyConfig(false, true, HeuristicType::NONE, false);
-        // runConfig(filename, problemType);
+    // --- Config 2: Prio only ---
+    std::cout << "\n=== Prio only | " << problemType << " ===" << std::endl;
+    applyConfig(true, false, HeuristicType::NONE, false);
+    runConfig(filename, problemType);
 
-        // --- Config 2: Prio only ---
-        // std::cout << "\n=== Prio only | " << problemType << " ===" << std::endl;
-        // applyConfig(true, false, HeuristicType::NONE, false);
-        // runConfig(filename, problemType);
+    // --- Config 3: H only (no prio, no MDA) ---
+    std::cout << "\n=== H only | " << problemType << " ===" << std::endl;
+    applyConfig(false, false, HeuristicType::HCBS, false);
+    runConfig(filename, problemType);
 
-        // --- Config 3: H only (no prio, no MDA) ---
-        // std::cout << "\n=== H only | " << problemType << " ===" << std::endl;
-        // applyConfig(false, false, HeuristicType::HCBS, false);
-        // runConfig(filename, problemType);
+    // --- Config 4: MDA only (no prio, no H) ---
+    std::cout << "\n=== MDA only | " << problemType << " ===" << std::endl;
+    applyConfig(false, false, HeuristicType::NONE, true);
+    runConfig(filename, problemType);
 
-        // --- Config 4: MDA only (no prio, no H) ---
-        // std::cout << "\n=== MDA only | " << problemType << " ===" << std::endl;
-        // applyConfig(false, false, HeuristicType::NONE, true);
-        // runConfig(filename, problemType);
+    // --- Config 5: Prio + H, no MDA ---
+    std::cout << "\n=== Prio + H (no MDA) | " << problemType << " ===" << std::endl;
+    applyConfig(true, false, HeuristicType::HCBS, false);
+    runConfig(filename, problemType);
 
-        // --- Config 5: Prio + H, no MDA ---
-        // std::cout << "\n=== Prio + H (no MDA) | " << problemType << " ===" << std::endl;
-        // applyConfig(true, false, HeuristicType::HCBS, false);
-        // runConfig(filename, problemType);
+    // --- Config 6: Prio + MDA, no H ---
+    std::cout << "\n=== Prio + MDA (no H) | " << problemType << " ===" << std::endl;
+    applyConfig(true, false, HeuristicType::NONE, true);
+    runConfig(filename, problemType);
 
-        // --- Config 6: Prio + MDA, no H ---
-        // std::cout << "\n=== Prio + MDA (no H) | " << problemType << " ===" << std::endl;
-        // applyConfig(true, false, HeuristicType::NONE, true);
-        // runConfig(filename, problemType);
+    // --- Config 7: H + MDA, no prio ---
+    std::cout << "\n=== H + MDA (no prio) | " << problemType << " ===" << std::endl;
+    applyConfig(false, false, HeuristicType::HCBS, true);
+    runConfig(filename, problemType);
 
-        // --- Config 7: H + MDA, no prio ---
-        // std::cout << "\n=== H + MDA (no prio) | " << problemType << " ===" << std::endl;
-        // applyConfig(false, false, HeuristicType::HCBS, true);
-        // runConfig(filename, problemType);
+    // --- Config 8: All features (Prio + H + MDA) ---
+    std::cout << "\n=== All features | " << problemType << " ===" << std::endl;
+    applyConfig(true, false, HeuristicType::HCBS, true);
+    runConfig(filename, problemType);
 
-        // --- Config 8: All features (Prio + H + MDA) ---
-        // std::cout << "\n=== All features | " << problemType << " ===" << std::endl;
-        // applyConfig(true, false, HeuristicType::HCBS, true);
-        // runConfig(filename, problemType);
-
-        // --- Config BAP: original BAP (no features, first conflict) ---
-        // std::cout << "\n=== BAP | " << problemType << " ===" << std::endl;
-        // applyConfig(false, true, HeuristicType::NONE, false);
-        // runConfigBAP(filename, problemType);
-    }
-
+    std::cout << "\nBenchmark done (" << problemType << ") -> " << filename << std::endl;
 }
 
 struct ResultRow {

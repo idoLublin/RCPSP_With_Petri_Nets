@@ -3656,8 +3656,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 }
             }
 
-            if (total_demand <= res.capacity) continue;//conflict found
-            found_any=true;
+            if (total_demand <= res.capacity) continue;
             // std::cout << resIdx <<":"<<t<< std::endl;
             //
             // for (short job: current_jobs){

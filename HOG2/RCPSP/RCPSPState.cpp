@@ -3525,6 +3525,56 @@ std::vector<MDA> RCPSPState_CBS<N>::compute_mdas(
     }
     return mdas;
 }
+// ── Non-minimal delay helper ──────────────────────────────────────────────────
+// Finds the earliest t' >= prev_starts[activity] at which:
+//   bg_demand(t') + demand(activity, res_idx) <= capacity(res_idx)
+// where bg_demand(t') = sum of demands of bg_activities active at t'.
+// bg_demand is a step function that only changes at finish times of bg_activities,
+// so we only need to check prev_starts[activity] and those finish times.
+template<short N>
+short RCPSPState_CBS<N>::compute_nonminimal_delay(
+    short activity,
+    const std::array<short, N>& prev_starts,
+    const std::vector<short>& bg_activities,
+    int res_idx) const
+{
+    const short demand_i = resource_info[res_idx].demand_lookup.at(activity);
+    const short capacity = resource_info[res_idx].capacity;
+    const short current  = prev_starts[activity];
+
+    // Candidate times: current start + finish time of each bg activity.
+    // bg demand can only DROP at finish times, so those are the only
+    // moments a slot might first become feasible.
+    std::vector<short> candidates;
+    candidates.reserve(bg_activities.size() + 1);
+    candidates.push_back(current);
+    for (short bg : bg_activities) {
+        short finish = prev_starts[bg] + (short)RCPSPex.activities[bg].duration;
+        if (finish > current)
+            candidates.push_back(finish);
+    }
+    std::sort(candidates.begin(), candidates.end());
+
+    for (short t : candidates) {
+        short bg_demand = 0;
+        for (short bg : bg_activities) {
+            short s = prev_starts[bg];
+            short f = s + (short)RCPSPex.activities[bg].duration;
+            if (s <= t && t < f)
+                bg_demand += resource_info[res_idx].demand_lookup.at(bg);
+        }
+        if (bg_demand + demand_i <= capacity)
+            return t;
+    }
+
+    // Fallback: after ALL bg activities finish the slot is always free.
+    short latest = current;
+    for (short bg : bg_activities)
+        latest = std::max(latest,
+            (short)(prev_starts[bg] + RCPSPex.activities[bg].duration));
+    return latest;
+}
+
 template<short N>
 short RCPSPState_CBS<N>::compute_mda_cost(
     const std::vector<short>& mda_set,
@@ -3532,8 +3582,11 @@ short RCPSPState_CBS<N>::compute_mda_cost(
     const std::array<short, N>& latest_starts,
     int res_idx) const
 {
-    // compute new_start once for all set members
-    // = min finish of conflict members NOT in the set
+    // h-value always uses minimal delay (admissible heuristic).
+    // use_non_minimal_delay only affects child-state generation (B/C), not h.
+
+    // ── Minimal-delay path ───────────────────────────────────────────────────
+    // new_start = min finish of conflict members NOT in the set (uniform for all members)
     short new_start = std::numeric_limits<short>::max();
     for (short other : current_jobs) {
         if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
@@ -3737,27 +3790,28 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 short non_cardinal_demand = 0;
 
                 for (short job : current_jobs) {
-                    // Change from max to min in computeRVS classification
-                    short new_start = std::numeric_limits<short>::max();
-                    for (short other : current_jobs) {
-                        if (other == job) continue;
-                        new_start = std::min(new_start,
-                            (short)(start_times[other] +
-                                    RCPSPex.activities[other].duration));
+                    short new_start;
+                    // h-value always uses minimal delay (admissible heuristic).
+                    // use_non_minimal_delay only affects child-state generation (B/C), not h.
+                    {
+                        // Minimal delay: push past earliest finish of other conflict members
+                        new_start = std::numeric_limits<short>::max();
+                        for (short other : current_jobs) {
+                            if (other == job) continue;
+                            new_start = std::min(new_start,
+                                (short)(start_times[other] +
+                                        RCPSPex.activities[other].duration));
+                        }
                     }
 
                     if (new_start > latest_starts[job]) {
-                        // short forced = new_start - latest_starts[job];
                         individual_cost[job] = new_start - latest_starts[job];
                         min_forced = std::min(min_forced, individual_cost[job]);
                         costly++;
-
                     }
                     else {
                         non_cardinal_demand += RCPSPex.activities[job].resource_demands[res.resource_nume];
                     }
-
-
                 }
 
                 // ConflictType type;
@@ -4306,17 +4360,27 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     // start_times = prev.latest_start_times;
     // sink_id = prev.sink_id;
 
-    // 2. Find latest finish of all other activities in conflict
-    short new_start = 9999;
+    // 2. Compute new start for the delayed activity
+    short new_start;
 
-    // 1. Pass the specific conflict (prev.RVS[0]) into the helper function
-    // 2. Iterate directly over the 'act' values
-    std::span<const short> acts = prev.rvs_activities_pool;
-    for (short j = 0; j < prev.rvs_activities_pool.size(); j++) {
-        short act = acts[j];
-        if (act == delayedActivity) continue;
-        new_start = std::min(new_start,
-            (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+    if (setting.use_non_minimal_delay) {
+        // Build bg = all other conflict members (their schedules stay fixed)
+        std::vector<short> bg;
+        bg.reserve(prev.rvs_activities_pool.size() - 1);
+        for (short act : prev.rvs_activities_pool)
+            if (act != delayedActivity) bg.push_back(act);
+        new_start = compute_nonminimal_delay(
+            delayedActivity, prev.start_times, bg, prev.resourceType);
+    } else {
+        // Minimal delay: push delayedActivity past earliest finish of other conflict members
+        new_start = 9999;
+        std::span<const short> acts = prev.rvs_activities_pool;
+        for (short j = 0; j < (short)prev.rvs_activities_pool.size(); j++) {
+            short act = acts[j];
+            if (act == delayedActivity) continue;
+            new_start = std::min(new_start,
+                (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+        }
     }
 
     start_times[delayedActivity] = new_start;
@@ -4411,12 +4475,18 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     start_times = prev.start_times;
     added_precedences = prev.added_precedences;
 
-    short new_start = 9999;
-    std::span<const short> acts = prev.rvs_activities_pool;
-    for (short act : acts) {
-        if (std::find(mda_activities.begin(), mda_activities.end(), act) != mda_activities.end()) continue;
-        new_start = std::min(new_start,
-            (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
+    // Build background = conflict members NOT in the MDA set (their schedules stay fixed)
+    std::vector<short> bg;
+    bg.reserve(prev.rvs_activities_pool.size());
+    for (short act : prev.rvs_activities_pool)
+        if (std::find(mda_activities.begin(), mda_activities.end(), act) == mda_activities.end())
+            bg.push_back(act);
+
+    short new_start = 9999; // used only by the minimal-delay path below
+    if (!setting.use_non_minimal_delay) {
+        for (short act : bg)
+            new_start = std::min(new_start,
+                (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
     }
     // std::cout << "new " << std::endl;
     // std::cout << "pool " << std::endl;
@@ -4483,8 +4553,15 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     //     }
     // }
 
-    for (short delayed : mda_activities) {
-        start_times[delayed] = new_start;
+    if (setting.use_non_minimal_delay) {
+        // Each MDA member independently finds its own earliest feasible t'_i
+        for (short delayed : mda_activities)
+            start_times[delayed] = compute_nonminimal_delay(
+                delayed, prev.start_times, bg, prev.resourceType);
+    } else {
+        // Minimal delay: all MDA members share the same new_start
+        for (short delayed : mda_activities)
+            start_times[delayed] = new_start;
     }
 
     if (added_precedences.empty()) {

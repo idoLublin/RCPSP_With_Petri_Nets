@@ -324,6 +324,15 @@ public:
         const std::array<short, N>& latest_starts,
         int res_idx) const;
 
+    // Returns earliest t' >= prev_starts[activity] where
+    // background demand (bg_activities active at t') + demand(activity) <= capacity.
+    // Used by use_non_minimal_delay to find true feasible start instead of min-push.
+    short compute_nonminimal_delay(
+        short activity,
+        const std::array<short, N>& prev_starts,
+        const std::vector<short>& bg_activities,
+        int res_idx) const;
+
     std::vector<MDA> compute_mdas(
     const std::vector<short>& current_jobs,
     short excess_demand,

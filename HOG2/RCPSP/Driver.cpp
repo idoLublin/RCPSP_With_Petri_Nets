@@ -55,6 +55,9 @@ namespace fs = std::filesystem;
 void runBenchmark(const std::string& problemType);
 void runSingleConfig(const std::string& problemType, int configNum);
 void runBenchmarkTT2(const std::string& problemType);
+void applyConfigNum(int n);
+void runConfigResume(const std::string& filename, const std::string& problemType, int startGroup, int startExam);
+void runSingleConfigResume(const std::string& problemType, int configNum, int startGroup, int startExam);
 void runSolvedProblems();
 void sortCSV(const std::string& filename);
 // std::atomic<bool> cancel_requested(false);
@@ -1796,18 +1799,68 @@ void runWrongAnswerDebug() {
     std::cout << "\nDebug run done -> " << filename << "\n";
 }
 
+// ── Non-minimal delay correctness test ───────────────────────────────────────
+// Usage:  Driver_bench nmd_test
+void runNonMinimalDelayTest() {
+    // Problems with real resource conflicts — not trivially easy.
+    // Chosen because they have 40k-400k TT2 node expansions.
+    const std::vector<std::pair<int,int>> cases = {
+        {1,7}, {4,3}, {4,9}, {10,2}, {2,1}
+    };
+    const std::vector<std::pair<int,std::string>> configs = {
+        {1, "Baseline"},   // exercises single-delay path (Location C + D)
+        {4, "MDA-only"},   // exercises MDA path (Location A + B)
+    };
+
+    std::string filename = getNextFilename("new_results", "output_nmd_test_", ".csv");
+    { std::ofstream hdr(filename);
+      hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+          << "finished,expandNumber,generatedNumber,depth,maxMem,"
+          << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
+          << "useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+
+    setting.use_non_minimal_delay = true;
+
+    for (auto& [cfgNum, cfgName] : configs) {
+        applyConfigNum(cfgNum);
+        allcorrect = true;
+        std::cout << "\n=== NMD | cfg" << cfgNum << " (" << cfgName << ") ===\n";
+        for (auto& [g, e] : cases)
+            solveRCPSP_CBS(g, e, filename, "j30");
+        std::cout << (allcorrect ? "  ALL CORRECT\n" : "  *** ERRORS ***\n");
+    }
+
+    setting.use_non_minimal_delay = false;
+    std::cout << "\nResults: " << filename << "\n";
+}
+
 int main(int argc, char* argv[]) {
     // Usage:
     //   Driver_bench <size> <cfg>    — CBS: single config, for parallel runs
     //   Driver_bench <size>          — CBS: all 8 configs for one size, sequentially
     //   Driver_bench                 — CBS: all sizes all configs, fully sequential
     //   Driver_bench tt2_<size>      — TT2: run all problems for one size
+    //   Driver_bench nmd_test        — correctness test for use_non_minimal_delay flag
     //
     // <size> : j30 | j60 | j90 | j120
     // <cfg>  : 1..8  (1=Baseline, 2=Prio, 3=H, 4=MDA, 5=Prio+H, 6=Prio+MDA, 7=H+MDA, 8=All)
     if (argc >= 2) {
         std::string arg1 = argv[1];
-        if (arg1.rfind("tt2_", 0) == 0) {
+        if (arg1 == "nmd_test") {
+            runNonMinimalDelayTest();
+        } else if (arg1 == "resume") {
+            // Usage: Driver_bench resume <problemType> <cfg> <startGroup> <startExam>
+            // Example: Driver_bench resume j90 6 14 4
+            if (argc < 6) {
+                std::cerr << "Usage: Driver_bench resume <type> <cfg> <startGroup> <startExam>\n";
+                return 1;
+            }
+            std::string ptype = argv[2];
+            int cfg        = std::atoi(argv[3]);
+            int startGroup = std::atoi(argv[4]);
+            int startExam  = std::atoi(argv[5]);
+            runSingleConfigResume(ptype, cfg, startGroup, startExam);
+        } else if (arg1.rfind("tt2_", 0) == 0) {
             // TT2 mode: argument is "tt2_j30", "tt2_j60", "tt2_j90"
             std::string problemType = arg1.substr(4);
             runBenchmarkTT2(problemType);
@@ -1818,9 +1871,7 @@ int main(int argc, char* argv[]) {
             runBenchmark(argv[1]);
         }
     } else {
-        runBenchmark("j30");
-        runBenchmark("j60");
-        runBenchmark("j90");
+        runNonMinimalDelayTest();
     }
     return 0;
 }
@@ -1891,6 +1942,54 @@ void runSingleConfig(const std::string& problemType, int configNum) {
     std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType << " ===" << std::endl;
     applyConfigNum(configNum);
     runConfig(filename, problemType);
+    std::cout << "Done -> " << filename << std::endl;
+}
+
+// ── Resume a single config from a specific (group, exam) ─────────────────────
+// Writes to a NEW file (no header — concatenate with the original file's header row
+// using:  cat original.csv <(tail -n +2 resume.csv) > combined.csv)
+void runConfigResume(const std::string& filename, const std::string& problemType,
+                     int startGroup, int startExam) {
+    // Safety: ensure NMD flag is off — it must not bleed into benchmark runs
+    setting.use_non_minimal_delay = false;
+
+    allcorrect = true;
+    bool started = false;
+    for (int i = 1; i <= 48; i++) {
+        for (int j = 1; j <= 10; j++) {
+            if (!started) {
+                if (i < startGroup || (i == startGroup && j < startExam)) continue;
+                started = true;
+            }
+            solveRCPSP_CBS(i, j, filename, problemType);
+        }
+    }
+    std::cout << (allcorrect ? "All correct" : "Error: incorrect results") << std::endl;
+}
+
+void runSingleConfigResume(const std::string& problemType, int configNum,
+                           int startGroup, int startExam) {
+    if (configNum < 1 || configNum > 8) {
+        std::cerr << "Config must be 1-8\n"; std::exit(1);
+    }
+    std::string folder = "new_results";
+    std::string baseName = "output_" + problemType + "_cfg" + std::to_string(configNum) + "_resume_";
+    std::string filename = getNextFilename(folder, baseName, ".csv");
+
+    // Write header to the new file so it is self-contained
+    { std::ofstream hdr(filename);
+      if (!hdr.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
+      hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+          << "finished,expandNumber,generatedNumber,depth,maxMem,"
+          << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
+          << "useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+
+    std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType
+              << " | resume from (" << startGroup << "," << startExam << ") ===" << std::endl;
+
+    setting.use_non_minimal_delay = false;   // explicit guard
+    applyConfigNum(configNum);
+    runConfigResume(filename, problemType, startGroup, startExam);
     std::cout << "Done -> " << filename << std::endl;
 }
 

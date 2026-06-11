@@ -151,6 +151,7 @@ struct CBSConfig {
     bool use_MDA_cache=true;
     bool use_strong_constraints=true;
     bool use_MDA_BAB=true;
+    bool use_non_minimal_delay=false; // delay each activity to earliest truly-feasible time instead of min-push
     HeuristicType heuristic          = HeuristicType::HCBS;
 };
 

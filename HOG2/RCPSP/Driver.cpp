@@ -114,6 +114,7 @@ void runSolver(const Config& config);
 void sortCSV(const std::string& filename);
 int solveRCPSP(int group, int exam, const std::string& filename, const std::string& problemType);
 int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::string& problemType);
+int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::string& problemType);
 
 // ============================================================================
 // Helper Functions
@@ -445,6 +446,71 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
 
     return 0;
 }
+// ============================================================================
+// TT2 solver — TTPNR formulation (Lublin/Atzmon/Cohen, SoCS 2026)
+// ============================================================================
+int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving (TT2): " << group << ":" << exam << std::endl;
+    count = 0;
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
+
+    RCPSPState_TT2 first;
+    RCPSPState_TT2 last = first;
+
+    RCPSP_TT2 as1;
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+
+    std::chrono::duration<double> elapsed;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&as1, first, last, path);
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+
+    int makespan = 0;
+
+    if (!path.empty()) {
+        std::cout << "Path found!" << std::endl;
+        RCPSPState_TT2 state = path.back();
+        std::cout << std::endl;
+        makespan = state.g;
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+
+        // Validate against optimal makespan
+        auto it = optimalMakespan.find({group, exam});
+        if (it != optimalMakespan.end()) {
+            if (makespan != it->second) {
+                std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
+                          << "! Got " << makespan << ", expected optimal " << it->second << std::endl;
+                exit(1);
+            }
+            std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
+        }
+    } else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+         << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+         << "TT2" << ","
+         << problemType << ","
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
+         << "\n";
+
+    return 0;
+}
+
 // NOTE: Bidirectional search - currently not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
     std::cout << "started solving (Bi): " << group << ":" << exam << std::endl;
@@ -586,6 +652,7 @@ void runSolver(const Config& config) {
             heuristicDPInitialized = false;  // Reset DP cache for new problem
             lbccInitialized = false;         // Reset LBcc cache for new problem
             lbip0Initialized = false;        // Reset LBip0 cache for new problem
+            lbrcInitialized = false;         // Reset LBrc cache for new problem
             
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {
@@ -597,6 +664,12 @@ void runSolver(const Config& config) {
             if (config.method == "tt" || config.method == "all") {
                 setSearchTimeout(config.timeLimit);  // Reset timeout for this problem
                 solveRCPSP_TT(group, exam, filename, config.problemType);
+            }
+
+            // Run TT2 method if selected (TTPNR / relative-delay tokens)
+            if (config.method == "tt2" || config.method == "all") {
+                setSearchTimeout(config.timeLimit);
+                solveRCPSP_TT2(group, exam, filename, config.problemType);
             }
         }
     }

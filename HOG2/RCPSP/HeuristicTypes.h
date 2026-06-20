@@ -23,6 +23,7 @@ enum class HeuristicType {
     LBCS,           // Lower Bound Critical Sequence (workload-based)
     LBCC,           // Lower Bound Critical Capacity (work arrival simulation)
     LBIP0,          // Lower Bound Incompatible Pairs (Klein & Scholl 1999, LB10)
+    LBMAX,          // max(CP, LBrc) — CP combined with Resource Capacity (K&S LB2)
 };
 
 /**
@@ -44,6 +45,10 @@ inline HeuristicType stringToHeuristicType(const std::string& str) {
         {"ip0", HeuristicType::LBIP0},
         {"incompatible-pairs", HeuristicType::LBIP0},
         {"incompatiblepairs", HeuristicType::LBIP0},
+        {"lbmax", HeuristicType::LBMAX},
+        {"max", HeuristicType::LBMAX},
+        {"lbrc-cp", HeuristicType::LBMAX},
+        {"cp-lbrc", HeuristicType::LBMAX},
     };
 
     // Convert to lowercase for case-insensitive matching
@@ -65,6 +70,7 @@ inline std::string heuristicTypeToString(HeuristicType type) {
         case HeuristicType::LBCS: return "LBCS";
         case HeuristicType::LBCC: return "LBCC";
         case HeuristicType::LBIP0: return "LBIP0";
+        case HeuristicType::LBMAX: return "LBMAX";
         default: return "UNKNOWN";
     }
 }
@@ -82,6 +88,8 @@ inline std::string heuristicTypeDescription(HeuristicType type) {
             return "Lower Bound Critical Capacity (work arrival simulation)";
         case HeuristicType::LBIP0:
             return "Lower Bound Incompatible Pairs (Klein & Scholl 1999, LB10)";
+        case HeuristicType::LBMAX:
+            return "max(CP, LBrc) — CP plus Resource Capacity (Klein & Scholl 1999, LB2)";
         default:
             return "Unknown heuristic";
     }

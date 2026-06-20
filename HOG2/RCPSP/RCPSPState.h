@@ -3,6 +3,8 @@
 //
 #pragma once
 #include <set>
+#include <bitset>
+#include <iostream>
 #include "petriclasses.h"
 #include "readPetri.cpp"
 #ifndef RCPSPSTATE_H
@@ -42,6 +44,53 @@ public:
     RCPSPState_TT();
     RCPSPState_TT(const RCPSPState_TT& prev, short ID, short firingTime);
     bool operator==(const RCPSPState_TT& other) const;
+};
+
+
+// ============================================================================
+// RCPSPState_TT2 — Timed Transition Petri Net with Resources (TTPNR)
+// ============================================================================
+// Per Lublin, Atzmon & Cohen, SoCS 2026: "Petri Net Induced Heuristic Search
+// for Resource Constrained Scheduling". State uses relative-delay tokens —
+// each control-flow / resource token carries its residual delay theta.
+// g(s) = sum of Delta-t firing jumps = true elapsed makespan.
+class RCPSPState_TT2 {
+public:
+    // Resource tokens grouped by resource index: pairs of <amount/ID, residual delay>.
+    // delay = 0 means available NOW.
+    std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
+
+    // Activity control-flow tokens: pairs of <placeID, residual delay>.
+    std::vector<std::pair<short, short>> activity_nodes;
+
+    // Bit i set => activity i finished (1-based).
+    std::bitset<128> finishedActivitiys;
+
+    // Cached derived data: <activityID, remaining duration> for currently-running tasks.
+    std::vector<std::pair<short, short>> activeTransitionIndices;
+
+    mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
+    mutable bool transitionsCached = false;
+    bool direction = 1;
+    bool isDeltaZero = false;
+    bool isCriticalInActive = false;
+    short g = 0;
+    short g_pre = 0;
+    mutable short h = 0;
+    short predessesor_h = 0;
+    short lastTransitionId = 0;
+    mutable short nextCritical = 0;
+
+    RCPSPState_TT2();
+    RCPSPState_TT2(const RCPSPState_TT2& prev, short transitionId, short firingTime, bool Direction = 1);
+
+    bool operator==(const RCPSPState_TT2& other) const {
+        if (finishedActivitiys != other.finishedActivitiys) return false;
+        if (activity_nodes != other.activity_nodes) return false;
+        if (resource_nodes != other.resource_nodes) return false;
+        if (activeTransitionIndices != other.activeTransitionIndices) return false;
+        return true;
+    }
 };
 
 

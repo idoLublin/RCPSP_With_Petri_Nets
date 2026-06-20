@@ -75,6 +75,23 @@ inline size_t getStartedCount(const RCPSPState_TT& state) {
 	return 0;  // TT doesn't track started activities
 }
 
+// Version 3: For RCPSPState_TT2 (TTPNR with relative-delay tokens)
+inline size_t getStartedCount(const RCPSPState_TT2& state) {
+	return state.activeTransitionIndices.size();
+}
+
+// finished-count helpers: -1 in fixed-size array means "not finished"; bitset bit set means "finished"
+template <size_t N>
+inline size_t countFinishedActs(const std::array<short, N>& arr) {
+	size_t c = 0;
+	for (short v : arr) if (v != -1) ++c;
+	return c;
+}
+template <size_t N>
+inline size_t countFinishedActs(const std::bitset<N>& bs) {
+	return bs.count();
+}
+
 
 
 
@@ -146,16 +163,7 @@ struct AStarCompareWithF {
 		// 2. Secondary: g_score
 		if (i1.g != i2.g) return i1.g < i2.g;
 
-		// Helper lambda to count valid items (not -1) - works with both vector and array
-		auto countValid = [](const auto& container) {
-			int count = 0;
-			for (int v : container) {
-				if (v != -1) count++;
-			}
-			return count;
-		};
-
-		// 3. Tertiary: Started Count
+		// 3. Tertiary: Started Count (active in TT2)
 		size_t start1 = getStartedCount(i1.data);
 		size_t start2 = getStartedCount(i2.data);
 
@@ -163,9 +171,9 @@ struct AStarCompareWithF {
 			return start1 < start2;
 		}
 
-		// 4. Quaternary: Finished Count
-		int finish1 = countValid(i1.data.finishedActivitiys);
-		int finish2 = countValid(i2.data.finishedActivitiys);
+		// 4. Quaternary: Finished Count — countFinishedActs overloads for array<short,N> and bitset<N>
+		size_t finish1 = countFinishedActs(i1.data.finishedActivitiys);
+		size_t finish2 = countFinishedActs(i2.data.finishedActivitiys);
 
 		return finish1 < finish2;
 	}

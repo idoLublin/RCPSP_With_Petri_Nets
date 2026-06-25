@@ -121,6 +121,7 @@ void runSolver(const Config& config);
 void sortCSV(const std::string& filename);
 int solveRCPSP(int group, int exam, const std::string& filename, const std::string& problemType);
 int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::string& problemType);
+int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::string& problemType);
 
 // ============================================================================
 // Helper Functions
@@ -456,6 +457,73 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
 
     return 0;
 }
+
+// Forward TT2 search on the consistent Class-1 LBER bound. Mirrors
+// solveRCPSP_TT but uses the RCPSPState_TT2 / RCPSP_TT2 environment.
+int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::string& problemType = "j30") {
+    std::cout << "started solving (TT2): " << group << ":" << exam << std::endl;
+    count = 0;
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
+
+    RCPSPState_TT2 first;
+    RCPSPState_TT2 last = first;
+
+    RCPSP_TT2 as1;
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    if (getenv("TT2_REOPEN")) astar.SetReopenNodes(true); // DIAGNOSTIC
+    std::vector<RCPSPState_TT2> path;
+
+    std::chrono::duration<double> elapsed;
+
+    auto start = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&as1, first, last, path);
+    auto end = std::chrono::high_resolution_clock::now();
+    elapsed = end - start;
+
+    int makespan = 0;
+
+    if (!path.empty()) {
+        std::cout << "Path found!" << std::endl;
+        RCPSPState_TT2 state = path.back();
+
+        std::cout << std::endl;
+        makespan = state.g;
+        std::cout << "\nFinal makespan: " << makespan << std::endl;
+
+        // Validate against optimal makespan (a consistent admissible heuristic
+        // must return the optimum without node re-opening).
+        auto it = optimalMakespan.find({group, exam});
+        if (it != optimalMakespan.end()) {
+            if (makespan != it->second) {
+                std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
+                          << "! Got " << makespan << ", expected optimal " << it->second << std::endl;
+                exit(1);
+            }
+            std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
+        }
+    } else {
+        std::cout << "Path not found or timeout occurred.\n";
+    }
+
+    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
+    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+
+    std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << elapsed.count() << ","
+         << (!path.empty() ? "True" : "False") << ","
+         << makespan << ","
+         << astar.GetNodesExpanded() << ","
+         << astar.GetNodesTouched() << ","
+         << path.size() << ","
+         << "TT2" << ","
+         << problemType << ","
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
+         << "\n";
+
+    return 0;
+}
 // NOTE: Bidirectional search - currently not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
     std::cout << "started solving (Bi): " << group << ":" << exam << std::endl;
@@ -611,6 +679,12 @@ void runSolver(const Config& config) {
             if (config.method == "tt" || config.method == "all") {
                 setSearchTimeout(config.timeLimit);  // Reset timeout for this problem
                 solveRCPSP_TT(group, exam, filename, config.problemType);
+            }
+
+            // Run forward TT2 (consistent Class-1 LBER) if selected
+            if (config.method == "tt2") {
+                setSearchTimeout(config.timeLimit);  // Reset timeout for this problem
+                solveRCPSP_TT2(group, exam, filename, config.problemType);
             }
         }
     }

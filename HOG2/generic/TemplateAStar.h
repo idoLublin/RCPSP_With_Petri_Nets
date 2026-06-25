@@ -170,6 +170,22 @@ struct AStarCompareWithF {
 		return finish1 < finish2;
 	}
 };
+
+// TT2 open-list comparator. TT2 stores finished tasks in a std::bitset and
+// tracks active transitions, so it cannot use the generic (-1-sentinel array)
+// comparator above. Tie-break: smaller f, then smaller g, then more finished
+// tasks, then fewer active transitions.
+template<>
+struct AStarCompareWithF<RCPSPState_TT2> {
+	bool operator()(const AStarOpenClosedDataWithF<RCPSPState_TT2>& i1,
+	                const AStarOpenClosedDataWithF<RCPSPState_TT2>& i2) const {
+		if (i1.f != i2.f) return i1.f > i2.f;
+		if (i1.g != i2.g) return i1.g < i2.g;
+		if (i1.data.finishedActivitiys.count() != i2.data.finishedActivitiys.count())
+			return i1.data.finishedActivitiys.count() < i2.data.finishedActivitiys.count();
+		return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+	}
+};
 /*
 struct AStarCompareWithF {
 	bool operator()(const AStarOpenClosedDataWithF<state> &i1, const AStarOpenClosedDataWithF<state> &i2) const

@@ -46,6 +46,16 @@ void computeRootBound(int depth);  // root-mode SHV pipeline (once per problem)
 extern thread_local bool energeticInitialized;
 extern thread_local bool lberRootComputed;
 
+// Consistent Class-1 LBER bound (used by the TT2 search). Computes the full
+// destructive LBER root bound ONCE (energetic + DFF + IP), then per node returns
+// max(residual critical path, lberRootBound - g). Both terms are admissible AND
+// consistent, so A* needs no node re-opening. Does NOT reuse the trial-horizon-
+// conditional shaved windows (which are not unconditionally admissible).
+double computeConsistentLBER_floor(
+    const std::vector<short>& unfinishedActivities,
+    const std::vector<std::pair<short, short>>& activeTransitions,
+    int currentMakespan, int depth);
+
 // LBER configuration (defined in Driver.cpp): mode = "root"|"pernode",
 // depth 1..6 selects how far up the feasibility cascade to go.
 extern std::string lberMode;
@@ -879,6 +889,228 @@ inline void RCPSP_TT::ApplyAction(RCPSPState_TT &s, int a) const {
 
 }
 inline double RCPSP_TT::GCost(const RCPSPState_TT &node, const int &act) const {
+  return node.g;
+}
+
+// ============================ RCPSP_TT2 (forward) ============================
+// Forward TT2 search environment (ported from `ido`, forward only). It runs on
+// the consistent Class-1 LBER bound: HCost calls computeConsistentLBER_floor,
+// which is admissible AND consistent, so A* stays optimal without node
+// re-opening. getForwardHcost_TT2 / getforwardResource (ido's CP-only heuristic)
+// are intentionally NOT used.
+class RCPSP_TT2 : public SearchEnvironment<RCPSPState_TT2,int>{
+public:
+  RCPSP_TT2();
+  void GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const override;
+  bool GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const override;
+  double HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
+  double GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
+  bool GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal, RCPSPState_TT2 &next, double parentH, uint64_t &special, bool &validMove) const;
+
+  int GetNumSuccessors(const RCPSPState_TT2 &stateID) const;
+  int GetAction(const RCPSPState_TT2 &nodeID, const RCPSPState_TT2 &nodeID2) const override;
+  void GetActions(const RCPSPState_TT2 &nodeID, std::vector<int> &actions) const override;
+  void ApplyAction(RCPSPState_TT2 &s, int a) const override;
+  uint64_t GetActionHash(int act) const;
+  uint64_t GetStateHash(const RCPSPState_TT2 &node) const;
+  bool InvertAction(int &a) const;
+  std::vector<RCPSPState_TT2> GetSuccessors(const RCPSPState_TT2 &nodeID) const;
+  double GCost(const RCPSPState_TT2 &node, const int &act) const override;
+};
+
+inline RCPSP_TT2::RCPSP_TT2() {
+}
+
+inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
+  std::vector<short> tempUnstarted;
+  tempUnstarted.reserve(petri.Transitions.size());
+  for (int i = 0; i < (int)petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+    if (nodeID.finishedActivitiys[taskID] == 0) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+
+  std::vector<std::pair<short, short>> avilableTransitionIndices =
+      getAvailableTransitionIndices_TT2(tempUnstarted, nodeID.finishedActivitiys,
+                                        nodeID.resource_nodes, nodeID.activity_nodes,
+                                        nodeID.activeTransitionIndices);
+
+  for (const auto &[transId, Timedelta] : avilableTransitionIndices) {
+    neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta));
+  }
+
+  if (getenv("TT2_CHECK_CONSIST")) {
+    auto buildUnf = [](const RCPSPState_TT2 &s) {
+      std::vector<short> u;
+      for (int i = 0; i < (int)petri.Transitions.size(); i++)
+        if (!s.finishedActivitiys.test(i + 1)) u.push_back(i + 1);
+      return u;
+    };
+    std::vector<short> uP = buildUnf(nodeID);
+    double cpP = getForwardHcostDP(uP, nodeID.activeTransitionIndices);
+    double hP  = computeConsistentLBER_floor(uP, nodeID.activeTransitionIndices, nodeID.g, lberDepth);
+    for (const auto &c : neighbors) {
+      std::vector<short> uC = buildUnf(c);
+      double cpC = getForwardHcostDP(uC, c.activeTransitionIndices);
+      double hC  = computeConsistentLBER_floor(uC, c.activeTransitionIndices, c.g, lberDepth);
+      double delta = (double)c.g - (double)nodeID.g;
+      if (hP > delta + hC + 1e-6) {
+        std::cerr << "[VIOL] g:" << nodeID.g << "->" << c.g << " delta=" << delta
+                  << " | hP=" << hP << " hC=" << hC << " (need hP<=delta+hC)"
+                  << " | CP_P=" << cpP << " CP_C=" << cpC
+                  << " CPviol=" << (cpP > delta + cpC + 1e-6 ? "Y" : "n")
+                  << std::endl;
+      }
+    }
+  }
+}
+
+inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const {
+  int count = 0;
+  for (int i = 1; i <= (int)petri.Transitions.size(); i++) {
+    if (node.finishedActivitiys[i] == 1) {
+      count++;
+    }
+  }
+  return count == (int)petri.Transitions.size();
+}
+
+inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
+  // Delta-zero step: the residual instance is unchanged, so reuse the parent's
+  // h. This is consistency-safe (h(s')=h(s) with step cost 0).
+  if (state1.isDeltaZero && !getenv("TT2_NO_SHORTCIRCUIT")) {
+    state1.h = state1.predessesor_h;
+    return state1.h;
+  }
+
+  std::vector<short> tempUnfinished;
+  tempUnfinished.reserve(petri.Transitions.size());
+  for (int i = 0; i < (int)petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+    if (!state1.finishedActivitiys.test(taskID)) {
+      tempUnfinished.push_back(taskID);
+    }
+  }
+
+  // Consistent Class-1 LBER bound (see computeConsistentLBER_floor): the full
+  // destructive root bound computed once + a per-node residual critical path,
+  // combined as a floor. Admissible and consistent under the TT2 step model.
+  if (getenv("TT2_CP_ONLY")) {
+    // DIAGNOSTIC: pure critical-path heuristic (provably admissible+consistent).
+    state1.h = (short)getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
+    return state1.h;
+  }
+  state1.h = (short)computeConsistentLBER_floor(
+      tempUnfinished, state1.activeTransitionIndices, state1.g, lberDepth);
+  return state1.h;
+}
+
+inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
+  return state2.g - state1.g;
+}
+
+inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
+  constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
+  constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
+  uint64_t hash = FNV_OFFSET;
+
+  auto mix_int = [&](int v) {
+    const uint8_t *p = reinterpret_cast<const uint8_t *>(&v);
+    for (size_t i = 0; i < sizeof(int); ++i) {
+      hash ^= static_cast<uint64_t>(p[i]);
+      hash *= FNV_PRIME;
+    }
+  };
+
+  for (int i = 1; i <= (int)petri.Transitions.size(); ++i) {
+    mix_int((int)node.finishedActivitiys[i]);
+  }
+  for (const auto &active : node.activeTransitionIndices) {
+    mix_int(active.first);
+    mix_int(active.second);
+  }
+  return hash;
+}
+
+inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,
+                      RCPSPState_TT2 &next, double parentH,
+                      uint64_t &special, bool &validMove) const {
+  if (special == 0 && !curr.transitionsCached) {
+    std::vector<short> tempUnstarted;
+    tempUnstarted.reserve(petri.Transitions.size());
+    for (int i = 0; i < (int)petri.Transitions.size(); i++) {
+      short taskID = i + 1;
+      if (curr.finishedActivitiys[taskID] == 0) {
+        tempUnstarted.push_back(taskID);
+      }
+    }
+
+    curr.AvailableTransitionIndices_TT2 = getAvailableTransitionIndices_TT2(
+        tempUnstarted, curr.finishedActivitiys, curr.resource_nodes,
+        curr.activity_nodes, curr.activeTransitionIndices);
+
+    if (curr.AvailableTransitionIndices_TT2.size() > 1) {
+      std::sort(curr.AvailableTransitionIndices_TT2.begin(),
+                curr.AvailableTransitionIndices_TT2.end(),
+                [](const std::pair<short, short> &a, const std::pair<short, short> &b) {
+                  return a.first < b.first;
+                });
+    }
+    curr.transitionsCached = true;
+  }
+
+  unsigned int index = (unsigned int)special;
+  if (index >= curr.AvailableTransitionIndices_TT2.size()) {
+    validMove = false;
+    return false;
+  }
+
+  std::pair<short, short> selectedMove = curr.AvailableTransitionIndices_TT2[index];
+  next = RCPSPState_TT2(curr, selectedMove.first, selectedMove.second);
+  validMove = true;
+  special++;
+  return (index + 1 < curr.AvailableTransitionIndices_TT2.size());
+}
+
+inline uint64_t RCPSP_TT2::GetActionHash(int act) const {
+  return std::hash<int>()(act);
+}
+
+inline void RCPSP_TT2::GetActions(const RCPSPState_TT2 &nodeID, std::vector<int> &actions) const {
+}
+
+inline bool RCPSP_TT2::InvertAction(int &a) const {
+  return true;
+}
+
+inline std::vector<RCPSPState_TT2> RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID) const {
+  std::vector<RCPSPState_TT2> neighbors;
+  return neighbors;
+}
+
+inline int RCPSP_TT2::GetAction(const RCPSPState_TT2 &nodeID, const RCPSPState_TT2 &nodeID2) const {
+  return 0;
+}
+
+inline int RCPSP_TT2::GetNumSuccessors(const RCPSPState_TT2 &stateID) const {
+  std::vector<short> tempUnstarted;
+  tempUnstarted.reserve(petri.Transitions.size());
+  for (int i = 0; i < (int)petri.Transitions.size(); i++) {
+    short taskID = i + 1;
+    if (stateID.finishedActivitiys[taskID] == 0) {
+      tempUnstarted.push_back(taskID);
+    }
+  }
+  return (int)getAvailableTransitionIndices_TT2(tempUnstarted, stateID.finishedActivitiys,
+                                                stateID.resource_nodes, stateID.activity_nodes,
+                                                stateID.activeTransitionIndices).size();
+}
+
+inline void RCPSP_TT2::ApplyAction(RCPSPState_TT2 &s, int a) const {
+}
+
+inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &node, const int &act) const {
   return node.g;
 }
 

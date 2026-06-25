@@ -3,6 +3,7 @@
 //
 #pragma once
 #include <set>
+#include <bitset>
 #include "petriclasses.h"
 #include "readPetri.cpp"
 #ifndef RCPSPSTATE_H
@@ -42,6 +43,43 @@ public:
     RCPSPState_TT();
     RCPSPState_TT(const RCPSPState_TT& prev, short ID, short firingTime);
     bool operator==(const RCPSPState_TT& other) const;
+};
+
+// Forward "TT2" search state (ported from the `ido` branch, forward only).
+// Relative-time model: active activities carry a residual duration, time is
+// advanced by a firing delta, and finished activities are tracked in a bitset.
+// Runs on the consistent Class-1 LBER bound (see computeConsistentLBER_floor).
+class RCPSPState_TT2 {
+public:
+    // Resource tokens per resource index: pairs of <amount, time-remaining>.
+    std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
+    // Activity-dependency tokens: pairs of <amount, time-remaining>.
+    std::vector<std::pair<short, short>> activity_nodes;
+    // Finished tasks (1-based ids).
+    std::bitset<128> finishedActivitiys;
+    // Active (in-progress) tasks: <taskId, remaining-time>.
+    std::vector<std::pair<short, short>> activeTransitionIndices;
+
+    // Lazy successor cache for GetNextSuccessor.
+    mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
+    mutable bool transitionsCached = false;
+
+    bool isDeltaZero = false;       // firing delta of the step that produced this state was 0
+    short g = 0;                    // makespan so far
+    mutable short h = 0;
+    short predessesor_h = 0;        // parent's h, reused on delta-zero steps
+    short lastTransitionId = 0;     // task started by the step that produced this state
+
+    RCPSPState_TT2();
+    RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime);
+
+    bool operator==(const RCPSPState_TT2& other) const {
+        if (finishedActivitiys != other.finishedActivitiys) return false;
+        if (activity_nodes != other.activity_nodes) return false;
+        if (resource_nodes != other.resource_nodes) return false;
+        if (activeTransitionIndices != other.activeTransitionIndices) return false;
+        return true;
+    }
 };
 
 

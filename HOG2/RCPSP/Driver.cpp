@@ -471,7 +471,11 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
 
     RCPSP_TT2 as1;
     TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
-    if (getenv("TT2_REOPEN")) astar.SetReopenNodes(true); // DIAGNOSTIC
+    // The LBER floor bound is admissible but not a consistent state heuristic
+    // (it embeds lberRootBound - g), so node re-opening is required to keep A*
+    // optimal: a cheaper path to an already-closed state lowers its g and
+    // re-opens it (duplicate states matched via GetStateHash).
+    astar.SetReopenNodes(true);
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;

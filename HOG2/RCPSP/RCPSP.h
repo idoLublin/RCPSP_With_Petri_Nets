@@ -939,31 +939,6 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   for (const auto &[transId, Timedelta] : avilableTransitionIndices) {
     neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta));
   }
-
-  if (getenv("TT2_CHECK_CONSIST")) {
-    auto buildUnf = [](const RCPSPState_TT2 &s) {
-      std::vector<short> u;
-      for (int i = 0; i < (int)petri.Transitions.size(); i++)
-        if (!s.finishedActivitiys.test(i + 1)) u.push_back(i + 1);
-      return u;
-    };
-    std::vector<short> uP = buildUnf(nodeID);
-    double cpP = getForwardHcostDP(uP, nodeID.activeTransitionIndices);
-    double hP  = computeConsistentLBER_floor(uP, nodeID.activeTransitionIndices, nodeID.g, lberDepth);
-    for (const auto &c : neighbors) {
-      std::vector<short> uC = buildUnf(c);
-      double cpC = getForwardHcostDP(uC, c.activeTransitionIndices);
-      double hC  = computeConsistentLBER_floor(uC, c.activeTransitionIndices, c.g, lberDepth);
-      double delta = (double)c.g - (double)nodeID.g;
-      if (hP > delta + hC + 1e-6) {
-        std::cerr << "[VIOL] g:" << nodeID.g << "->" << c.g << " delta=" << delta
-                  << " | hP=" << hP << " hC=" << hC << " (need hP<=delta+hC)"
-                  << " | CP_P=" << cpP << " CP_C=" << cpC
-                  << " CPviol=" << (cpP > delta + cpC + 1e-6 ? "Y" : "n")
-                  << std::endl;
-      }
-    }
-  }
 }
 
 inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const {
@@ -977,9 +952,10 @@ inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2
 }
 
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
-  // Delta-zero step: the residual instance is unchanged, so reuse the parent's
-  // h. This is consistency-safe (h(s')=h(s) with step cost 0).
-  if (state1.isDeltaZero && !getenv("TT2_NO_SHORTCIRCUIT")) {
+  // Delta-zero step: no time passes, so the residual instance is unchanged and
+  // the parent's h is still valid (and admissible) for the child. Reusing it is
+  // safe under re-opening.
+  if (state1.isDeltaZero) {
     state1.h = state1.predessesor_h;
     return state1.h;
   }
@@ -993,14 +969,13 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  // Consistent Class-1 LBER bound (see computeConsistentLBER_floor): the full
-  // destructive root bound computed once + a per-node residual critical path,
-  // combined as a floor. Admissible and consistent under the TT2 step model.
-  if (getenv("TT2_CP_ONLY")) {
-    // DIAGNOSTIC: pure critical-path heuristic (provably admissible+consistent).
-    state1.h = (short)getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
-    return state1.h;
-  }
+  // LBER-informed floor bound = max(residual critical path, lberRootBound - g).
+  // The lberRootBound - g term depends on the path cost g (not on the state
+  // alone), so it is admissible but NOT a consistent state heuristic: it
+  // collapses f toward the constant lberRootBound. Optimality is therefore
+  // recovered by node re-opening (SetReopenNodes(true) in solveRCPSP_TT2): when
+  // a cheaper path reaches an already-closed state (matched by GetStateHash),
+  // A* lowers its g and re-opens it. Admissible + re-opening => optimal.
   state1.h = (short)computeConsistentLBER_floor(
       tempUnfinished, state1.activeTransitionIndices, state1.g, lberDepth);
   return state1.h;

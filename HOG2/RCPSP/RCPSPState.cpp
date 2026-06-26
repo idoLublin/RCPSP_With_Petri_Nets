@@ -1071,10 +1071,6 @@ double computeConsistentLBER_floor(
   computeRootBound(depth); // once per problem (guarded by lberRootComputed)
   double cpH = getForwardHcostDP(unfinishedActivities, activeTransitions);
   double floorH = (double)lberRootBound - (double)currentMakespan;
-  if (getenv("TT2_DEBUG_FLOOR") && currentMakespan == 0) {
-    std::cerr << "[FLOOR] lberRootBound=" << lberRootBound
-              << " cpH@root=" << cpH << std::endl;
-  }
   double h = cpH;
   if (floorH > h)
     h = floorH;

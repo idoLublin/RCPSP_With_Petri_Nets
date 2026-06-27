@@ -480,9 +480,9 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     // Memory cap: the per-problem LBER floor's weak pruning lets hard instances
     // grow the open/closed list without bound. Cap resident memory so such an
     // instance aborts gracefully (logged unsolved) instead of OOM-killing the
-    // whole run. Default 32 GB. Override with RCPSP_MEM_LIMIT_GB=<N>, or disable
-    // the cap entirely with RCPSP_MEM_LIMIT_GB=0 (or "unlimited"/"none").
-    long memLimitKB = 32L * 1024 * 1024;
+    // whole run. Default 26 GB (headroom under this 31 GB box). Override with
+    // RCPSP_MEM_LIMIT_GB=<N>, or disable with RCPSP_MEM_LIMIT_GB=0/unlimited/none.
+    long memLimitKB = 26L * 1024 * 1024;
     if (const char* e = std::getenv("RCPSP_MEM_LIMIT_GB")) {
         std::string v = e;
         if (v == "0" || v == "unlimited" || v == "none" || v == "inf") {

@@ -37,6 +37,8 @@
 //#include "float.h"
 
 #include <algorithm> // for vector reverse
+#include <cstdio>    // for /proc/self/statm RSS reading (memory cap)
+#include <unistd.h>  // for sysconf(_SC_PAGESIZE)
 
 #include "GenericSearchAlgorithm.h"
 //static double lastF = 0;
@@ -100,6 +102,21 @@ inline std::chrono::steady_clock::time_point timeout;
 // The actual deadline will be calculated when InitializeSearch() is called
 inline void setSearchTimeout(int seconds) {
     searchTimeoutSeconds = seconds;
+}
+
+// Current process resident set size in KB (Linux: /proc/self/statm).
+// Used by the optional per-search memory cap so a runaway instance aborts
+// gracefully instead of being OOM-killed. Returns 0 if unavailable.
+inline long getProcessRSSKB() {
+    long rssPages = 0;
+    FILE* f = fopen("/proc/self/statm", "r");
+    if (f) {
+        long total;
+        if (fscanf(f, "%ld %ld", &total, &rssPages) != 2)
+            rssPages = 0;
+        fclose(f);
+    }
+    return rssPages * (sysconf(_SC_PAGESIZE) / 1024);
 }
 
 //ido lublin 28.4 A*
@@ -301,6 +318,12 @@ public:
 	void SetReopenNodes(bool re) { reopenNodes = re; }
 	bool GetReopenNodes() { return reopenNodes; }
 
+	// Optional resident-memory cap (KB). 0 = no limit. When the process RSS
+	// exceeds this during a search, the search ends early with an empty path
+	// (like a timeout) and StoppedForMemory() returns true.
+	void SetMemoryLimitKB(long kb) { rssLimitKB = kb; }
+	bool StoppedForMemory() const { return stoppedForMemory; }
+
 	// Only necessary for BPMX computation
 	void SetDirected(bool d) { directed = d; }
 	
@@ -338,7 +361,10 @@ public:
 	double GetWeight() { return weight; }
 private:
 	uint64_t nodesTouched, nodesExpanded;
-	
+
+	long rssLimitKB = 0;            // resident-memory cap in KB; 0 = no limit
+	bool stoppedForMemory = false;  // set when a search aborts due to the cap
+
 	std::vector<state> neighbors;
 	std::vector<uint64_t> neighborID;
 	std::vector<double> edgeCosts;
@@ -446,6 +472,7 @@ bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environm
 	// Set the timeout deadline NOW when search actually starts
 	// This avoids race conditions if there's a delay between setSearchTimeout() and GetPath()
 	timeout = std::chrono::steady_clock::now() + std::chrono::seconds(searchTimeoutSeconds);
+	stoppedForMemory = false;
 
 
 	if (theHeuristic == 0 || !heuristicSet)
@@ -527,6 +554,15 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 	if (!openClosedList.Lookup(nodeid).reopened)
 		uniqueNodesExpanded++;
 	nodesExpanded++;
+
+	// Optional memory cap: if the process RSS exceeds the limit, abort this
+	// search the same way a timeout does (empty path). Throttled so the
+	// /proc read happens only every 50k expansions.
+	if (rssLimitKB && (nodesExpanded % 50000 == 0) && getProcessRSSKB() > rssLimitKB) {
+		stoppedForMemory = true;
+		thePath.resize(0);
+		return true;
+	}
 
 	if ((stopAfterGoal) && (env->GoalTest(openClosedList.Lookup(nodeid).data, goal)))
 	{

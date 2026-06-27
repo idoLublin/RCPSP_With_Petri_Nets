@@ -476,6 +476,23 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     // optimal: a cheaper path to an already-closed state lowers its g and
     // re-opens it (duplicate states matched via GetStateHash).
     astar.SetReopenNodes(true);
+
+    // Memory cap: the per-problem LBER floor's weak pruning lets hard instances
+    // grow the open/closed list without bound. Cap resident memory so such an
+    // instance aborts gracefully (logged unsolved) instead of OOM-killing the
+    // whole run. Default 32 GB. Override with RCPSP_MEM_LIMIT_GB=<N>, or disable
+    // the cap entirely with RCPSP_MEM_LIMIT_GB=0 (or "unlimited"/"none").
+    long memLimitKB = 32L * 1024 * 1024;
+    if (const char* e = std::getenv("RCPSP_MEM_LIMIT_GB")) {
+        std::string v = e;
+        if (v == "0" || v == "unlimited" || v == "none" || v == "inf") {
+            memLimitKB = 0; // no cap
+        } else {
+            try { memLimitKB = std::stol(v) * 1024L * 1024; } catch (...) {}
+        }
+    }
+    astar.SetMemoryLimitKB(memLimitKB);
+
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;
@@ -506,6 +523,9 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
             }
             std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
         }
+    } else if (astar.StoppedForMemory()) {
+        std::cout << "MEMORY LIMIT reached, aborting instance " << group << ":" << exam
+                  << " (unsolved; raise RCPSP_MEM_LIMIT_GB to attempt it).\n";
     } else {
         std::cout << "Path not found or timeout occurred.\n";
     }

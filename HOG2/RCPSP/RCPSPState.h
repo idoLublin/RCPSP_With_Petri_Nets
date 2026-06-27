@@ -51,18 +51,13 @@ public:
 // Runs on the consistent Class-1 LBER bound (see computeConsistentLBER_floor).
 class RCPSPState_TT2 {
 public:
-    // Resource tokens per resource index: pairs of <amount, time-remaining>.
-    std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
-    // Activity-dependency tokens: pairs of <amount, time-remaining>.
-    std::vector<std::pair<short, short>> activity_nodes;
+    // Slim state: identity is exactly (finished, active). resource_nodes is a
+    // deterministic function of these (renewable invariant) and is reconstructed
+    // on demand at expansion (reconstructResourceNodes), never stored per node.
     // Finished tasks (1-based ids).
     std::bitset<128> finishedActivitiys;
     // Active (in-progress) tasks: <taskId, remaining-time>.
     std::vector<std::pair<short, short>> activeTransitionIndices;
-
-    // Lazy successor cache for GetNextSuccessor.
-    mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
-    mutable bool transitionsCached = false;
 
     bool isDeltaZero = false;       // firing delta of the step that produced this state was 0
     short g = 0;                    // makespan so far
@@ -73,10 +68,10 @@ public:
     RCPSPState_TT2();
     RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime);
 
+    // State identity is (finished, active) — exactly what GetStateHash encodes.
+    // (resource_nodes is a deterministic function of these, so it is not compared.)
     bool operator==(const RCPSPState_TT2& other) const {
         if (finishedActivitiys != other.finishedActivitiys) return false;
-        if (activity_nodes != other.activity_nodes) return false;
-        if (resource_nodes != other.resource_nodes) return false;
         if (activeTransitionIndices != other.activeTransitionIndices) return false;
         return true;
     }
@@ -86,6 +81,11 @@ public:
 
 
 int computeEarlyFinishTime(int activityId);
+
+// Reconstruct the TT2 resource token lists from the active set (slim TT2 nodes
+// do not store resource_nodes). Defined in RCPSPState.cpp.
+std::array<std::vector<std::pair<short, short>>, 4> reconstructResourceNodes(
+    const std::vector<std::pair<short, short>> &activeTransitionIndices);
 
 class RCPSPState_bi {
 public:

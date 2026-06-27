@@ -477,21 +477,13 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     // re-opens it (duplicate states matched via GetStateHash).
     astar.SetReopenNodes(true);
 
-    // Memory cap: the per-problem LBER floor's weak pruning lets hard instances
-    // grow the open/closed list without bound. Cap resident memory so such an
-    // instance aborts gracefully (logged unsolved) instead of OOM-killing the
-    // whole run. Default 26 GB (headroom under this 31 GB box). Override with
-    // RCPSP_MEM_LIMIT_GB=<N>, or disable with RCPSP_MEM_LIMIT_GB=0/unlimited/none.
-    long memLimitKB = 26L * 1024 * 1024;
+    // DEBUG opt-in memory cap (default OFF). Set RCPSP_MEM_LIMIT_GB=<N> to make
+    // the search abort gracefully + report peak RSS once it would exceed N GB,
+    // instead of OOM-killing the machine. Used to test memory reductions safely.
+    bool memDebug = false;
     if (const char* e = std::getenv("RCPSP_MEM_LIMIT_GB")) {
-        std::string v = e;
-        if (v == "0" || v == "unlimited" || v == "none" || v == "inf") {
-            memLimitKB = 0; // no cap
-        } else {
-            try { memLimitKB = std::stol(v) * 1024L * 1024; } catch (...) {}
-        }
+        try { astar.SetMemoryLimitKB(std::stol(e) * 1024L * 1024); memDebug = true; } catch (...) {}
     }
-    astar.SetMemoryLimitKB(memLimitKB);
 
     std::vector<RCPSPState_TT2> path;
 
@@ -525,13 +517,16 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
         }
     } else if (astar.StoppedForMemory()) {
         std::cout << "MEMORY LIMIT reached, aborting instance " << group << ":" << exam
-                  << " (unsolved; raise RCPSP_MEM_LIMIT_GB to attempt it).\n";
+                  << " (unsolved).\n";
     } else {
         std::cout << "Path not found or timeout occurred.\n";
     }
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+    if (memDebug)
+        std::cout << "Peak RSS: " << (astar.GetPeakRSSKB() / 1024) << " MB"
+                  << (astar.StoppedForMemory() ? " (hit cap)" : "") << std::endl;
 
     std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
     std::ofstream file(filename, std::ios::app);

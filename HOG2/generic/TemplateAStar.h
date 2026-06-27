@@ -37,8 +37,8 @@
 //#include "float.h"
 
 #include <algorithm> // for vector reverse
-#include <cstdio>    // for /proc/self/statm RSS reading (memory cap)
-#include <unistd.h>  // for sysconf(_SC_PAGESIZE)
+#include <cstdio>    // debug memory cap: /proc/self/statm RSS reading
+#include <unistd.h>  // debug memory cap: sysconf(_SC_PAGESIZE)
 
 #include "GenericSearchAlgorithm.h"
 //static double lastF = 0;
@@ -104,9 +104,10 @@ inline void setSearchTimeout(int seconds) {
     searchTimeoutSeconds = seconds;
 }
 
-// Current process resident set size in KB (Linux: /proc/self/statm).
-// Used by the optional per-search memory cap so a runaway instance aborts
-// gracefully instead of being OOM-killed. Returns 0 if unavailable.
+// DEBUG/diagnostic only: current process resident set size in KB
+// (Linux /proc/self/statm). Used by the opt-in memory cap so a runaway search
+// aborts gracefully (and so we can report peak memory) instead of OOM-killing
+// the machine. Returns 0 if unavailable.
 inline long getProcessRSSKB() {
     long rssPages = 0;
     FILE* f = fopen("/proc/self/statm", "r");
@@ -318,11 +319,13 @@ public:
 	void SetReopenNodes(bool re) { reopenNodes = re; }
 	bool GetReopenNodes() { return reopenNodes; }
 
-	// Optional resident-memory cap (KB). 0 = no limit. When the process RSS
-	// exceeds this during a search, the search ends early with an empty path
-	// (like a timeout) and StoppedForMemory() returns true.
+	// DEBUG opt-in memory cap. kb<=0 disables it (default). When enabled, the
+	// search tracks peak RSS and ends early (empty path, StoppedForMemory()==true)
+	// once RSS exceeds the cap — used to test memory safely without OOM-killing
+	// the machine.
 	void SetMemoryLimitKB(long kb) { rssLimitKB = kb; }
 	bool StoppedForMemory() const { return stoppedForMemory; }
+	long GetPeakRSSKB() const { return peakRSSKB; }
 
 	// Only necessary for BPMX computation
 	void SetDirected(bool d) { directed = d; }
@@ -362,7 +365,8 @@ public:
 private:
 	uint64_t nodesTouched, nodesExpanded;
 
-	long rssLimitKB = 0;            // resident-memory cap in KB; 0 = no limit
+	long rssLimitKB = 0;            // DEBUG memory cap (KB); <=0 = disabled
+	long peakRSSKB = 0;             // DEBUG peak RSS observed during the search
 	bool stoppedForMemory = false;  // set when a search aborts due to the cap
 
 	std::vector<state> neighbors;
@@ -473,6 +477,7 @@ bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environm
 	// This avoids race conditions if there's a delay between setSearchTimeout() and GetPath()
 	timeout = std::chrono::steady_clock::now() + std::chrono::seconds(searchTimeoutSeconds);
 	stoppedForMemory = false;
+	peakRSSKB = 0;
 
 
 	if (theHeuristic == 0 || !heuristicSet)
@@ -555,13 +560,17 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 		uniqueNodesExpanded++;
 	nodesExpanded++;
 
-	// Optional memory cap: if the process RSS exceeds the limit, abort this
-	// search the same way a timeout does (empty path). Throttled so the
-	// /proc read happens only every 50k expansions.
-	if (rssLimitKB && (nodesExpanded % 50000 == 0) && getProcessRSSKB() > rssLimitKB) {
-		stoppedForMemory = true;
-		thePath.resize(0);
-		return true;
+	// DEBUG opt-in memory cap: track peak RSS and abort gracefully (empty path,
+	// like a timeout) before the process can OOM-kill the machine. Throttled to
+	// every 50k expansions.
+	if (rssLimitKB > 0 && (nodesExpanded % 50000 == 0)) {
+		long rss = getProcessRSSKB();
+		if (rss > peakRSSKB) peakRSSKB = rss;
+		if (rss > rssLimitKB) {
+			stoppedForMemory = true;
+			thePath.resize(0);
+			return true;
+		}
 	}
 
 	if ((stopAfterGoal) && (env->GoalTest(openClosedList.Lookup(nodeid).data, goal)))

@@ -2506,7 +2506,6 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,
     const std::bitset<128> &finishedActivitiys,
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
-    const std::vector<std::pair<short, short>> &activity_nodes,
     const std::vector<std::pair<short, short>> &activeTransitionIndices) {
   std::vector<std::pair<short, short>> available;
 
@@ -2603,68 +2602,70 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
   return available;
 }
 
-RCPSPState_TT2::RCPSPState_TT2() {
-  // Build mapping: resource place id -> index (0..3).
-  std::unordered_map<int, int> place_to_resource_idx;
-  int res_count = 0;
+// Reconstruct the per-resource token lists from the slim state (finished/active).
+// Renewable invariant: a resource's free tokens now = capacity - amount held by
+// active tasks; each active task returns its demand when it finishes (at its
+// remaining time). Indexed by raw resource place id (place_name_to_id), matching
+// what getAvailableTransitionIndices_TT2 expects. Canonicalized (sort+merge) so
+// it equals the value the old incremental ctor produced.
+std::array<std::vector<std::pair<short, short>>, 4> reconstructResourceNodes(
+    const std::vector<std::pair<short, short>> &activeTransitionIndices) {
+  std::array<std::vector<std::pair<short, short>>, 4> resource_nodes;
   for (const auto &[resName, cap] : RCPSPex.resources) {
-    int resID = petri.place_name_to_id.at(resName);
-    place_to_resource_idx[resID] = res_count++;
+    if (cap <= 0) continue;
+    int resID = petri.place_name_to_id.at(resName); // 0..3
+    auto &resVec = resource_nodes[resID];
+    int used = 0;
+    for (const auto &[taskID, remaining] : activeTransitionIndices) {
+      const auto &dem = RCPSPex.activities[taskID - 1].resource_demands;
+      auto it = dem.find(resName);
+      if (it != dem.end() && it->second > 0) {
+        resVec.push_back({(short)it->second, remaining});
+        used += it->second;
+      }
+    }
+    int freeNow = cap - used;
+    if (freeNow > 0) resVec.push_back({(short)freeNow, 0});
+
+    // Same canonical form as the firing ctor: sort by (time, amount), merge ties.
+    std::sort(resVec.begin(), resVec.end(), [](const auto &a, const auto &b) {
+      if (a.second != b.second) return a.second < b.second;
+      return a.first < b.first;
+    });
+    if (!resVec.empty()) {
+      auto rit = resVec.begin();
+      while (rit != resVec.end() - 1) {
+        auto next = rit + 1;
+        if (rit->second == next->second) {
+          rit->first += next->first;
+          resVec.erase(next);
+        } else {
+          ++rit;
+        }
+      }
+    }
   }
+  return resource_nodes;
+}
 
-  int num_activities = petri.places.size() - res_count;
-  activity_nodes.resize(num_activities);
-
+RCPSPState_TT2::RCPSPState_TT2() {
   finishedActivitiys.reset();
-  int activity_counter = 0;
+  // Set the global start/end place names (used elsewhere); no token state stored.
   for (int i = 0; i < (int)petri.places.size(); ++i) {
     const auto &place = petri.places[i];
     if (place.arcs_out.empty()) finalstatename = place.name;
     if (place.arcs_in.empty())  initialstatename = place.name;
-
-    auto it = place_to_resource_idx.find(i);
-    if (it != place_to_resource_idx.end()) {
-      int res_idx = it->second;
-      if (place.name == initialstatename) {
-        resource_nodes[res_idx].push_back({1, 0});
-      } else if (!place.state.empty() && !place.state[0].empty()) {
-        int val = place.state[0][0];
-        if (val > 0) resource_nodes[res_idx].push_back({(short)val, 0});
-      }
-    } else {
-      if (place.name == initialstatename) {
-        activity_nodes[activity_counter] = {1, 0};
-      } else if (!place.state.empty() && !place.state[0].empty()) {
-        int val = place.state[0][0];
-        activity_nodes[activity_counter] =
-            (val > 0) ? std::pair<short, short>{(short)val, 0}
-                      : std::pair<short, short>{0, 0};
-      } else {
-        activity_nodes[activity_counter] = {0, 0};
-      }
-      activity_counter++;
-    }
   }
-
-  for (const auto &[resName, cap] : RCPSPex.resources) {
-    if (cap > 0) {
-      int resID = petri.place_name_to_id.at(resName);
-      int res_idx = place_to_resource_idx[resID];
-      if (resource_nodes[res_idx].empty()) {
-        resource_nodes[res_idx].push_back({(short)cap, 0});
-      }
-    }
-  }
-
-  // Start state: let the search compute h via HCost (isDeltaZero=false ensures
-  // it is not short-circuited). h on the ido branch came from a CP-only helper
-  // we deliberately do not port; the consistent LBER bound is used instead.
   h = 0;
   predessesor_h = 0;
   isDeltaZero = false;
   g = 0;
 }
 
+// Slim firing step: only (finished, active) + scalars evolve. resource_nodes is
+// NOT stored — it is reconstructed on demand at expansion. The chosen move
+// (transitionId, firingTime) already encodes the resource-feasible start time,
+// computed by getAvailableTransitionIndices_TT2 on the reconstructed resources.
 RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId,
                               short firingTime) {
   isDeltaZero = (firingTime == 0);
@@ -2673,22 +2674,10 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId,
   lastTransitionId = transitionId;
 
   finishedActivitiys = prev.finishedActivitiys;
-  resource_nodes = prev.resource_nodes;
-  activity_nodes = prev.activity_nodes;
   activeTransitionIndices = prev.activeTransitionIndices;
-  transitionsCached = false;
-  AvailableTransitionIndices_TT2.clear();
 
-  // 1. Advance time by `firingTime`: decrement remaining times; finish actives.
+  // 1. Advance time by `firingTime`: active tasks lose that time; finish at <= 0.
   if (firingTime > 0) {
-    for (auto &resVec : resource_nodes)
-      for (auto &token : resVec)
-        token.second = std::max(0, token.second - firingTime);
-
-    for (auto &token : activity_nodes)
-      if (token.first > 0)
-        token.second = std::max(0, token.second - firingTime);
-
     auto it = activeTransitionIndices.begin();
     while (it != activeTransitionIndices.end()) {
       it->second -= firingTime;
@@ -2701,94 +2690,16 @@ RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId,
     }
   }
 
-  // 2. Consume the started activity's resource demands (earliest tokens first).
-  const Transition &transition = petri.Transitions[transitionId - 1];
-  const Activity &act = RCPSPex.activities[transitionId - 1];
-  short duration = act.duration;
-
-  for (const auto &[resName, demand] : act.resource_demands) {
-    if (demand > 0) {
-      short resID = petri.place_name_to_id.at(resName);
-      auto &tokens = resource_nodes[resID];
-      std::sort(tokens.begin(), tokens.end(),
-                [](const auto &a, const auto &b) { return a.second < b.second; });
-      int remainingDemand = demand;
-      auto tit = tokens.begin();
-      while (remainingDemand > 0 && tit != tokens.end()) {
-        if (tit->first > remainingDemand) {
-          tit->first -= remainingDemand;
-          remainingDemand = 0;
-        } else {
-          remainingDemand -= tit->first;
-          tit = tokens.erase(tit);
-        }
-      }
-    }
-  }
-
-  // 3. Consume the input dependency token(s) of the started activity.
-  for (const auto &[placeID, inAmount] : transition.arcs_in_indices) {
-    if (placeID >= 4) {
-      short idx = placeID - 4;
-      activity_nodes[idx].first = 0;
-      activity_nodes[idx].second = 0;
-    }
-  }
-
-  // 4. Start the activity: add to the active list with full duration, and
-  //    schedule its output tokens to become available after `duration`.
+  // 2. Start the activity: add to the active list (or finish if zero-duration).
+  short duration = RCPSPex.activities[transitionId - 1].duration;
   if (duration > 0) {
     activeTransitionIndices.emplace_back(transitionId, duration);
-    for (const auto &[placeID, outAmount] : transition.arcs_out_indices) {
-      if (placeID < 4) {
-        resource_nodes[placeID].emplace_back(outAmount, duration);
-      } else {
-        short idx = placeID - 4;
-        if (idx < (short)activity_nodes.size()) {
-          if (activity_nodes[idx].first == 0 ||
-              activity_nodes[idx].second > duration)
-            activity_nodes[idx] = {outAmount, duration};
-        }
-      }
-    }
   } else {
-    // Zero-duration activity finishes immediately.
     finishedActivitiys[transitionId] = 1;
-    for (const auto &[placeID, outAmount] : transition.arcs_out_indices) {
-      if (placeID < 4) {
-        resource_nodes[placeID].emplace_back(outAmount, 0);
-      } else {
-        short idx = placeID - 4;
-        if (idx < (short)activity_nodes.size())
-          activity_nodes[idx] = {outAmount, 0};
-      }
-    }
   }
 
-  // 5. Canonicalize so logically-equal states compare equal regardless of the
-  //    order in which they were generated (order-independent dedup).
-  for (auto &resVec : resource_nodes) {
-    if (resVec.empty()) continue;
-    std::sort(resVec.begin(), resVec.end(), [](const auto &a, const auto &b) {
-      if (a.second != b.second) return a.second < b.second;
-      return a.first < b.first;
-    });
-    auto rit = resVec.begin();
-    while (rit != resVec.end() - 1) {
-      auto next = rit + 1;
-      if (rit->second == next->second) {
-        rit->first += next->first;
-        resVec.erase(next);
-      } else {
-        ++rit;
-      }
-    }
-  }
+  // 3. Canonicalize the active list (order-independent dedup; hash uses it).
   std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
-  // NOTE: activity_nodes is positionally indexed (slot == activity: the firing
-  // ctor reads/writes activity_nodes[placeID-4]), so it is ALREADY canonical and
-  // must NOT be sorted — sorting scrambles the slot->activity mapping. This is
-  // why commit a559cb6 ("hide sort for forward") disabled the sort here.
 }
 
 // std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(

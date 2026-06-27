@@ -905,7 +905,6 @@ public:
   bool GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const override;
   double HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
   double GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
-  bool GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal, RCPSPState_TT2 &next, double parentH, uint64_t &special, bool &validMove) const;
 
   int GetNumSuccessors(const RCPSPState_TT2 &stateID) const;
   int GetAction(const RCPSPState_TT2 &nodeID, const RCPSPState_TT2 &nodeID2) const override;
@@ -931,9 +930,10 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
   }
 
+  auto resource_nodes = reconstructResourceNodes(nodeID.activeTransitionIndices);
   std::vector<std::pair<short, short>> avilableTransitionIndices =
       getAvailableTransitionIndices_TT2(tempUnstarted, nodeID.finishedActivitiys,
-                                        nodeID.resource_nodes, nodeID.activity_nodes,
+                                        resource_nodes,
                                         nodeID.activeTransitionIndices);
 
   for (const auto &[transId, Timedelta] : avilableTransitionIndices) {
@@ -969,15 +969,22 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  // LBER-informed floor bound = max(residual critical path, lberRootBound - g).
-  // The lberRootBound - g term depends on the path cost g (not on the state
-  // alone), so it is admissible but NOT a consistent state heuristic: it
-  // collapses f toward the constant lberRootBound. Optimality is therefore
-  // recovered by node re-opening (SetReopenNodes(true) in solveRCPSP_TT2): when
-  // a cheaper path reaches an already-closed state (matched by GetStateHash),
-  // A* lowers its g and re-opens it. Admissible + re-opening => optimal.
-  state1.h = (short)computeConsistentLBER_floor(
-      tempUnfinished, state1.activeTransitionIndices, state1.g, lberDepth);
+  // Heuristic selection (honors --heuristic):
+  //  - CRITICAL_PATH ("cp"/lbcp): residual critical-path bound only — a pure
+  //    consistent state heuristic.
+  //  - otherwise (LBER): the floor max(residual critical path, lberRootBound-g),
+  //    where lberRootBound is the full destructive root bound at depth lberDepth
+  //    (CER/DFF/SHV/RER/EER/GER). The lberRootBound-g term depends on path cost g,
+  //    so it is admissible but not consistent (it collapses f toward the constant
+  //    lberRootBound); optimality is recovered by node re-opening in
+  //    solveRCPSP_TT2 (a cheaper path to an already-closed state lowers g and
+  //    re-opens it). Admissible + re-opening => optimal.
+  if (activeHeuristic == P_RCPSP::HeuristicType::CRITICAL_PATH) {
+    state1.h = (short)getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
+  } else {
+    state1.h = (short)computeConsistentLBER_floor(
+        tempUnfinished, state1.activeTransitionIndices, state1.g, lberDepth);
+  }
   return state1.h;
 }
 
@@ -1006,46 +1013,6 @@ inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
     mix_int(active.second);
   }
   return hash;
-}
-
-inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,
-                      RCPSPState_TT2 &next, double parentH,
-                      uint64_t &special, bool &validMove) const {
-  if (special == 0 && !curr.transitionsCached) {
-    std::vector<short> tempUnstarted;
-    tempUnstarted.reserve(petri.Transitions.size());
-    for (int i = 0; i < (int)petri.Transitions.size(); i++) {
-      short taskID = i + 1;
-      if (curr.finishedActivitiys[taskID] == 0) {
-        tempUnstarted.push_back(taskID);
-      }
-    }
-
-    curr.AvailableTransitionIndices_TT2 = getAvailableTransitionIndices_TT2(
-        tempUnstarted, curr.finishedActivitiys, curr.resource_nodes,
-        curr.activity_nodes, curr.activeTransitionIndices);
-
-    if (curr.AvailableTransitionIndices_TT2.size() > 1) {
-      std::sort(curr.AvailableTransitionIndices_TT2.begin(),
-                curr.AvailableTransitionIndices_TT2.end(),
-                [](const std::pair<short, short> &a, const std::pair<short, short> &b) {
-                  return a.first < b.first;
-                });
-    }
-    curr.transitionsCached = true;
-  }
-
-  unsigned int index = (unsigned int)special;
-  if (index >= curr.AvailableTransitionIndices_TT2.size()) {
-    validMove = false;
-    return false;
-  }
-
-  std::pair<short, short> selectedMove = curr.AvailableTransitionIndices_TT2[index];
-  next = RCPSPState_TT2(curr, selectedMove.first, selectedMove.second);
-  validMove = true;
-  special++;
-  return (index + 1 < curr.AvailableTransitionIndices_TT2.size());
 }
 
 inline uint64_t RCPSP_TT2::GetActionHash(int act) const {
@@ -1077,8 +1044,9 @@ inline int RCPSP_TT2::GetNumSuccessors(const RCPSPState_TT2 &stateID) const {
       tempUnstarted.push_back(taskID);
     }
   }
+  auto resource_nodes = reconstructResourceNodes(stateID.activeTransitionIndices);
   return (int)getAvailableTransitionIndices_TT2(tempUnstarted, stateID.finishedActivitiys,
-                                                stateID.resource_nodes, stateID.activity_nodes,
+                                                resource_nodes,
                                                 stateID.activeTransitionIndices).size();
 }
 

@@ -979,28 +979,34 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
   }
 
   // ── Admissibility-safe dispatch for TT2 ────────────────────────────────────
-  // Baseline: hCP (REF-based critical path) — admissible & consistent per SoCS
-  // 2026 Prop. 2. Secondary bound depends on activeHeuristic. TT2's g is the
-  // true elapsed makespan (sum of Δt jumps), so static-bound subtraction is
-  // direct — no `unkTime` correction needed (contrast TT).
-  double cpH = getForwardHcost(tempUnfinished, state1.activeTransitionIndices, state1.nextCritical);
-  double secondaryH = 0.0;
+  // The paper's hmax = max(hCP, hres) is provably consistent (SoCS 2026 Prop 2/3/4).
+  // We always compute BOTH cpH and hresH so the paper's hmax is the floor under
+  // every dispatch — extra bounds can only add tightness, never weaken it.
+  // This avoids the pathology (seen on j30 group 1) where replacing hres with a
+  // static bound that decays as g grows hurts shallow search.
+  //
+  // CP is computed via getForwardHcostDP (the DP variant, already residual-aware:
+  // uses activeRemaining[] for in-progress activities). Admissible because every
+  // TT2 trajectory has actual EF[i] from the current state ≥ heuristicDP[i] — the
+  // static EF is a lower bound on any concrete execution.
+  double cpH   = getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
+  double hresH = getforwardResource(tempUnfinished, state1.activeTransitionIndices);
+  double extraH = 0.0;
   if (activeHeuristic == P_RCPSP::HeuristicType::LBCC) {
-    secondaryH = computeCriticalCapacityLB(tempUnfinished, state1.activeTransitionIndices, state1.g);
+    extraH = computeCriticalCapacityLB(tempUnfinished, state1.activeTransitionIndices, state1.g);
   } else if (activeHeuristic == P_RCPSP::HeuristicType::LBIP0) {
-    secondaryH = computeLBIP0(state1.g);
+    extraH = computeLBIP0(state1.g);
   } else if (activeHeuristic == P_RCPSP::HeuristicType::LBMAX) {
-    secondaryH = computeLBRC(state1.g);
+    extraH = computeLBRC(state1.g);
   } else if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) {
     // computeLBCS (the TP variant) is already residual-aware: it uses remaining
     // duration for active transitions in forward/backward passes and treats them
     // as critical. Reusable verbatim — admissible under TT2 semantics.
-    secondaryH = computeLBCS(tempUnfinished, state1.activeTransitionIndices);
-  } else {
-    // CRITICAL_PATH (default): pair CP with the paper's resource-load bound hres
-    secondaryH = getforwardResource(tempUnfinished, state1.activeTransitionIndices);
+    extraH = computeLBCS(tempUnfinished, state1.activeTransitionIndices);
   }
-  state1.h = std::max(cpH, secondaryH);
+  // CRITICAL_PATH case: extraH stays 0; h = max(cpH, hresH) = paper's hmax exactly.
+
+  state1.h = std::max({cpH, hresH, extraH});
   return state1.h;
 }
 inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {

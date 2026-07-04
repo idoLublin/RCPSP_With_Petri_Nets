@@ -113,6 +113,10 @@ struct Config {
 
     // Display help
     bool showHelp = false;
+
+    // Diagnostic mode: solve one instance with CP, replay the optimal path
+    // through every heuristic and report admissibility/consistency violations
+    bool diagnose = false;
 };
 
 // Forward declarations
@@ -245,6 +249,8 @@ Config parseArgs(int argc, char* argv[]) {
             config.useDP = false;
         } else if (arg == "--no-sort") {
             config.sortResults = false;
+        } else if (arg == "--diagnose") {
+            config.diagnose = true;
         } else if (arg == "--no-header") {
             config.writeHeader = false;
         } else {
@@ -565,6 +571,98 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     return 0;
 }
 
+// ============================================================================
+// Heuristic diagnosis (--diagnose)
+// ============================================================================
+// Solves one instance with the admissible CP heuristic (TT2), then replays the
+// optimal path computing every heuristic component at each state. A state with
+// g + h > optimum proves that heuristic inadmissible; h(parent) > edge + h(child)
+// (with g+h <= opt everywhere) points at inconsistency + no-reopening instead.
+int diagnoseHeuristics(int group, int exam, const std::string& problemType) {
+    petri.reset();
+    RCPSPex.reset();
+    heuristicDPInitialized = false;
+    lbccInitialized = false;
+    lbip0Initialized = false;
+    lbrcInitialized = false;
+    demandMatrixInitialized = false;
+
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
+
+    activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
+    setSearchTimeout(600);
+
+    RCPSPState_TT2 first, last;
+    RCPSP_TT2 env;
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+    astar.GetPath(&env, first, last, path);
+
+    if (path.empty()) {
+        std::cout << "diagnose: no path found (timeout?)" << std::endl;
+        return 1;
+    }
+    const int opt = path.back().g;
+    std::cout << "diagnose g" << group << " e" << exam << " (" << problemType
+              << "): optimal makespan via CP = " << opt << "\n"
+              << "step |   g | cpH | hres | lbcs | lbcc | lbip0 | lbmax | f(lbcs) flags\n";
+
+    std::vector<double> lbcsH(path.size()), fullH(path.size());
+    bool anyInadmissible = false;
+
+    for (size_t i = 0; i < path.size(); ++i) {
+        const auto& st = path[i];
+        std::vector<short> unf;
+        for (int t = 1; t <= (int)petri.Transitions.size(); ++t)
+            if (!st.finishedActivitiys.test(t)) unf.push_back(t);
+
+        double cpH   = unf.empty() ? 0 : getForwardHcostDP(unf, st.activeTransitionIndices);
+        double hres  = unf.empty() ? 0 : getforwardResource(unf, st.activeTransitionIndices);
+        double lbcs  = unf.empty() ? 0 : computeLBCS(unf, st.activeTransitionIndices);
+        double lbcc  = unf.empty() ? 0 : computeCriticalCapacityLB(unf, st.activeTransitionIndices, st.g);
+        double lbip0 = unf.empty() ? 0 : computeLBIP0(st.g);
+        double lbmax = unf.empty() ? 0 : computeLBRC(st.g);
+
+        lbcsH[i] = lbcs;
+        fullH[i] = std::max({cpH, hres, lbcs});
+        double f = st.g + fullH[i];
+
+        std::string flags;
+        if (st.g + cpH   > opt + 1e-9) flags += " CP>OPT!";
+        if (st.g + hres  > opt + 1e-9) flags += " HRES>OPT!";
+        if (st.g + lbcs  > opt + 1e-9) flags += " LBCS>OPT!";
+        if (st.g + lbcc  > opt + 1e-9) flags += " LBCC>OPT!";
+        if (st.g + lbip0 > opt + 1e-9) flags += " LBIP0>OPT!";
+        if (st.g + lbmax > opt + 1e-9) flags += " LBMAX>OPT!";
+        if (!flags.empty()) anyInadmissible = true;
+
+        printf("%4zu | %3d | %3.0f | %4.1f | %4.0f | %4.0f | %5.0f | %5.0f | %5.1f%s\n",
+               i, (int)st.g, cpH, hres, lbcs, lbcc, lbip0, lbmax, f, flags.c_str());
+
+        if (!flags.empty()) {
+            printf("      actives:");
+            for (const auto& a : st.activeTransitionIndices) printf(" (%d,rem=%d)", a.first, a.second);
+            printf("\n      unfinished:");
+            for (short t : unf) printf(" %d", t);
+            printf("\n");
+        }
+    }
+
+    // Consistency along the path for the lbcs-dispatched h = max(cp,hres,lbcs)
+    for (size_t i = 0; i + 1 < path.size(); ++i) {
+        double edge = path[i+1].g - path[i].g;
+        if (fullH[i] > edge + fullH[i+1] + 1e-9)
+            printf("INCONSISTENT h(lbcs-dispatch) at step %zu: h=%.1f > edge %.1f + h(next)=%.1f\n",
+                   i, fullH[i], edge, fullH[i+1]);
+    }
+
+    std::cout << (anyInadmissible
+        ? "VERDICT: heuristic value(s) above optimum on an optimal path -> INADMISSIBLE.\n"
+        : "VERDICT: no overestimate on this optimal path -> suspect inconsistency + reopenNodes=false.\n");
+    return 0;
+}
+
 // NOTE: Bidirectional search - currently not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
     std::cout << "started solving (Bi): " << group << ":" << exam << std::endl;
@@ -747,7 +845,11 @@ int main(int argc, char *argv[]) {
         printUsage(argv[0]);
         return 0;
     }
-    
+
+    if (config.diagnose) {
+        return diagnoseHeuristics(config.groupStart, config.examStart, config.problemType);
+    }
+
     runSolver(config);
     return 0;
 }

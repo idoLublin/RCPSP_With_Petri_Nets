@@ -707,7 +707,8 @@ void runSolver(const Config& config) {
             lbccInitialized = false;         // Reset LBcc cache for new problem
             lbip0Initialized = false;        // Reset LBip0 cache for new problem
             lbrcInitialized = false;         // Reset LBrc cache for new problem
-            
+            demandMatrixInitialized = false; // Reset demand-matrix cache for new problem
+
             // Run TP method if selected
             if (config.method == "tp" || config.method == "all") {
                 setSearchTimeout(config.timeLimit);  // Reset timeout for this problem

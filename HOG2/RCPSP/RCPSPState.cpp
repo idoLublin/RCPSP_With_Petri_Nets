@@ -116,6 +116,54 @@ void initializeHeuristicDP() {
 }
 
 // ============================================================================
+// Per-instance resource-demand cache
+// ============================================================================
+// Replaces string-keyed map lookups (activity.resource_demands.find(name),
+// petri.place_name_to_id.at(name)) in hot paths with O(1) integer indexing.
+// demandByRes[a][k] = demand of activity a for resource k (k = index into
+//                     RCPSPex.resources; 0 if the activity does not use it).
+// demandEntries[a]  = (placeID, demand) pairs in resource_demands map order —
+//                     preserves the exact iteration semantics of call sites
+//                     that loop over the map itself (including 0-demand entries).
+// resPlaceIDs[k]    = Petri place ID of resource k.
+thread_local std::vector<std::array<short, 4>> demandByRes;
+thread_local std::vector<std::vector<std::pair<short, short>>> demandEntries;
+thread_local std::array<short, 4> resPlaceIDs;
+thread_local bool demandMatrixInitialized = false;
+
+void initializeDemandMatrix() {
+  const int n = RCPSPex.activities.size();
+  const int numRes = RCPSPex.resources.size();
+
+  demandByRes.assign(n + 1, {0, 0, 0, 0});
+  demandEntries.assign(n + 1, {});
+  resPlaceIDs.fill(-1);
+
+  for (int k = 0; k < numRes; ++k) {
+    resPlaceIDs[k] = petri.place_name_to_id.at(RCPSPex.resources[k].first);
+  }
+
+  for (int a = 1; a <= n; ++a) {
+    for (const auto& [resName, demand] : RCPSPex.activities[a - 1].resource_demands) {
+      demandEntries[a].emplace_back(petri.place_name_to_id.at(resName), demand);
+      for (int k = 0; k < numRes; ++k) {
+        if (RCPSPex.resources[k].first == resName) {
+          demandByRes[a][k] = demand;
+          break;
+        }
+      }
+    }
+  }
+  demandMatrixInitialized = true;
+}
+
+// Scratch buffers for computeLBCS / computeLBCS_TT, reused across calls to
+// avoid per-node heap allocation on the A* hot path.
+thread_local std::vector<short> lbcsCritical;
+thread_local std::vector<short> lbcsNonCritical;
+thread_local std::vector<int> lbcsUsage; // flat [numResources x CPM]
+
+// ============================================================================
 // LBcc Initialization
 // ============================================================================
 /**
@@ -629,6 +677,7 @@ double getForwardHcostDP_TT(const std::vector<short> &unstartedTransitions) {
  */
 double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
     if (unstartedTransitions.empty()) return 0;
+    if (!demandMatrixInitialized) initializeDemandMatrix();
 
     // --- Step 1: Forward pass (ES, EF) for remaining activities ---
     std::array<int, MAX_ACTIVITIES> ES, EF;
@@ -678,8 +727,10 @@ double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
     }
 
     // --- Step 3: Identify critical vs non-critical ---
-    std::vector<short> criticalActivities;
-    std::vector<short> nonCriticalActivities;
+    auto& criticalActivities = lbcsCritical;
+    auto& nonCriticalActivities = lbcsNonCritical;
+    criticalActivities.clear();
+    nonCriticalActivities.clear();
 
     for (short actId : unstartedTransitions) {
         int slack = LF[actId] - EF[actId];
@@ -704,17 +755,17 @@ double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
     int numResources = RCPSPex.resources.size();
 
     // resourceUsage[resourceIdx][time] = usage at time t by critical activities
-    std::vector<std::vector<int>> resourceUsage(numResources, std::vector<int>(CPM, 0));
+    lbcsUsage.assign((size_t)numResources * CPM, 0);
+    auto& resourceUsage = lbcsUsage; // flat: index [k * CPM + t]
 
     for (short actId : criticalActivities) {
         int es = ES[actId];
         int ef = EF[actId];
         for (int k = 0; k < numResources; k++) {
-            const std::string& resName = RCPSPex.resources[k].first;
-            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
-            if (it != RCPSPex.activities[actId - 1].resource_demands.end() && it->second > 0) {
+            const short demand = demandByRes[actId][k];
+            if (demand > 0) {
                 for (int t = es; t < ef && t < CPM; t++) {
-                    resourceUsage[k][t] += it->second;
+                    resourceUsage[k * CPM + t] += demand;
                 }
             }
         }
@@ -731,18 +782,16 @@ double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
         int minAvailableSlots = INT_MAX; // min over all resources
 
         for (int k = 0; k < numResources; k++) {
-            const std::string& resName = RCPSPex.resources[k].first;
-            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
-            if (it == RCPSPex.activities[actId - 1].resource_demands.end() || it->second == 0) {
+            int demand = demandByRes[actId][k];
+            if (demand == 0) {
                 continue; // No demand for this resource
             }
 
-            int demand = it->second;
             int capacity = RCPSPex.resources[k].second;
 
             int availableSlots = 0;
             for (int t = es; t < lf && t < CPM; t++) {
-                int remainingCap = capacity - resourceUsage[k][t];
+                int remainingCap = capacity - resourceUsage[k * CPM + t];
                 if (remainingCap >= demand) {
                     availableSlots++;
                 }
@@ -773,6 +822,7 @@ double computeLBCS_TT(const std::vector<short>& unstartedTransitions) {
 double computeLBCS(const std::vector<short>& unstartedTransitions,
                    const std::vector<std::pair<short, short>>& activeTransitionIndices) {
     if (unstartedTransitions.empty()) return 0;
+    if (!demandMatrixInitialized) initializeDemandMatrix();
 
     // Build active transition lookup
     std::array<short, MAX_ACTIVITIES> activeRemaining;
@@ -833,8 +883,10 @@ double computeLBCS(const std::vector<short>& unstartedTransitions,
     }
 
     // --- Step 3: Identify critical vs non-critical ---
-    std::vector<short> criticalActivities;
-    std::vector<short> nonCriticalActivities;
+    auto& criticalActivities = lbcsCritical;
+    auto& nonCriticalActivities = lbcsNonCritical;
+    criticalActivities.clear();
+    nonCriticalActivities.clear();
 
     for (short actId : unstartedTransitions) {
         // Skip active transitions for non-critical check (they're already committed)
@@ -861,17 +913,17 @@ double computeLBCS(const std::vector<short>& unstartedTransitions,
 
     // --- Step 5: Resource profile of critical activities ---
     int numResources = RCPSPex.resources.size();
-    std::vector<std::vector<int>> resourceUsage(numResources, std::vector<int>(CPM, 0));
+    lbcsUsage.assign((size_t)numResources * CPM, 0);
+    auto& resourceUsage = lbcsUsage; // flat: index [k * CPM + t]
 
     for (short actId : criticalActivities) {
         int es = ES[actId];
         int ef = EF[actId];
         for (int k = 0; k < numResources; k++) {
-            const std::string& resName = RCPSPex.resources[k].first;
-            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
-            if (it != RCPSPex.activities[actId - 1].resource_demands.end() && it->second > 0) {
+            const short demand = demandByRes[actId][k];
+            if (demand > 0) {
                 for (int t = es; t < ef && t < CPM; t++) {
-                    resourceUsage[k][t] += it->second;
+                    resourceUsage[k * CPM + t] += demand;
                 }
             }
         }
@@ -888,16 +940,14 @@ double computeLBCS(const std::vector<short>& unstartedTransitions,
         int minAvailableSlots = INT_MAX;
 
         for (int k = 0; k < numResources; k++) {
-            const std::string& resName = RCPSPex.resources[k].first;
-            auto it = RCPSPex.activities[actId - 1].resource_demands.find(resName);
-            if (it == RCPSPex.activities[actId - 1].resource_demands.end() || it->second == 0) continue;
+            int demand = demandByRes[actId][k];
+            if (demand == 0) continue;
 
-            int demand = it->second;
             int capacity = RCPSPex.resources[k].second;
 
             int availableSlots = 0;
             for (int t = es; t < lf && t < CPM; t++) {
-                if (capacity - resourceUsage[k][t] >= demand) availableSlots++;
+                if (capacity - resourceUsage[k * CPM + t] >= demand) availableSlots++;
             }
 
             minAvailableSlots = std::min(minAvailableSlots, availableSlots);
@@ -2254,33 +2304,29 @@ double getforwardResource(const std::vector<short>& tempUnfinished,
 
     double maxResourceBound = 0.0;
 
+    if (!demandMatrixInitialized) initializeDemandMatrix();
+
     // Executing-activity lookup, shared across all resources
     std::array<bool, MAX_ACTIVITIES + 1> executing{};
     for (auto& [activityId, residualDelay] : activeTransitionIndices) {
         executing[activityId] = true;
     }
 
-    for (auto& [resourceName, capacity] : RCPSPex.resources) {
+    const int numRes = RCPSPex.resources.size();
+    for (int k = 0; k < numRes; ++k) {
+        const short capacity = RCPSPex.resources[k].second;
         double totalDemand = 0.0;
 
         // Active activities: use residual delay as remaining duration
         for (auto& [activityId, residualDelay] : activeTransitionIndices) {
             if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
-            auto& activity = RCPSPex.activities[activityId - 1];
-            auto it = activity.resource_demands.find(resourceName);
-            if (it != activity.resource_demands.end()) {
-                totalDemand += residualDelay * it->second;
-            }
+            totalDemand += residualDelay * demandByRes[activityId][k];
         }
 
         for (short activityId : tempUnfinished) {
             if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
             if (executing[activityId]) continue; // skip executing
-            auto& activity = RCPSPex.activities[activityId - 1];
-            auto it = activity.resource_demands.find(resourceName);
-            if (it != activity.resource_demands.end()) {
-                totalDemand += activity.duration * it->second;
-            }
+            totalDemand += RCPSPex.activities[activityId - 1].duration * demandByRes[activityId][k];
         }
         double bound = totalDemand / capacity;
         maxResourceBound = std::max(maxResourceBound, bound);
@@ -2301,6 +2347,8 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
 
     std::vector<std::pair<short, short>> available;
 
+    if (!demandMatrixInitialized) initializeDemandMatrix();
+
     // O(1) lookup: activeRemaining[id] = remaining duration if task is active, -1 otherwise
     std::array<short, MAX_ACTIVITIES + 1> activeRemaining;
     activeRemaining.fill(-1);
@@ -2315,7 +2363,6 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
         }
 
         const auto& dependencies = RCPSPex.backword_dependencies[transId - 1];
-        const Activity &act = RCPSPex.activities[transId - 1];
 
         // 1. Precedence constraints
         bool allPredsFinished = true;
@@ -2348,9 +2395,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
 
-        for (const auto &[res, demand] : act.resource_demands) {
-            int resID = petri.place_name_to_id.at(res);
-
+        for (const auto &[resID, demand] : demandEntries[transId]) {
             if (resource_nodes[resID].empty()) {
                 resourcesOK = false;
                 break;
@@ -2562,13 +2607,17 @@ if (direction) {
     const Activity& act = RCPSPex.activities[transitionId - 1];
     short duration = act.duration;
 
-    for (const auto& [resName, demand] : act.resource_demands) {
+    if (!demandMatrixInitialized) initializeDemandMatrix();
+
+    for (const auto& [resID, demand] : demandEntries[transitionId]) {
         if (demand > 0) {
-            short resID = petri.place_name_to_id.at(resName);
             auto& tokens = resource_nodes[resID];
 
-            std::sort(tokens.begin(), tokens.end(),
-                     [](const auto& a, const auto& b) { return a.second < b.second; });
+            // Pool is already time-sorted: the shift max(0, t - dt) preserves order
+            // (ties can only appear at 0, and the final canonical merge makes the
+            // consumption order among equal-time tokens irrelevant).
+            assert(std::is_sorted(tokens.begin(), tokens.end(),
+                   [](const auto& a, const auto& b) { return a.second < b.second; }));
 
             int remainingDemand = demand;
             auto it = tokens.begin();

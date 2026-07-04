@@ -1953,9 +1953,9 @@ RCPSPState_TT::RCPSPState_TT(const RCPSPState_TT &prev, short transitionId,
   finishedActivitiys[transitionId] = activityFinishTime;
 
   // Consume resources (NO SORTING HERE)
-  for (const auto &[resName, demand] : act.resource_demands) {
+  if (!demandMatrixInitialized) initializeDemandMatrix();
+  for (const auto &[resID, demand] : demandEntries[transitionId]) {
     if (demand > 0) {
-      short resID = petri.place_name_to_id.at(resName);
       resource_nodes[resID] =
           consumeResourceList(resource_nodes[resID], demand, firingTime);
     }
@@ -2092,19 +2092,14 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     const std::vector<std::pair<short, short>> &activity_nodes) {
   std::vector<std::pair<short, short>> available;
 
+  if (!demandMatrixInitialized) initializeDemandMatrix();
+
+  // TT pools are not kept sorted by the firing ctor, so sorted copies are
+  // needed — but once per CALL, not once per candidate transition.
+  std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
+  bool resources_sorted[4] = {false, false, false, false};
+
   for (short transId : unstartedTransitions) {
-    const auto &dependencies = RCPSPex.backword_dependencies[transId - 1];
-
-    // DEBUG: Check if Task 2 has dependencies
-    if (transId == 2 && dependencies.empty()) {
-      std::cout << "❌ CRITICAL ERROR: Task 2 has NO dependencies! (JSON "
-                   "Loading Failed)"
-                << std::endl;
-      exit(1);
-    }
-
-    const Activity &act = RCPSPex.activities[transId - 1];
-
     // 1. Precedence constraints
     bool allPredsFinished = true;
     int maxPredFinishTime = 0;
@@ -2127,13 +2122,7 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT(
     bool resourcesOK = true;
     int maxResourceTime = maxPredFinishTime;
 
-    // Sort resources only once per transition check
-    std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
-    bool resources_sorted[4] = {false, false, false, false};
-
-    for (const auto &[res, demand] : act.resource_demands) {
-      int resID = petri.place_name_to_id.at(res);
-
+    for (const auto &[resID, demand] : demandEntries[transId]) {
       if (resource_nodes[resID].empty()) {
         resourcesOK = false;
         break;

@@ -598,10 +598,9 @@ inline RCPSP_TT::RCPSP_TT() {
 
 inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCPSPState_TT> &neighbors) const {
   //auto startS1 = std::chrono::high_resolution_clock::now();
-  std::vector<short> tempUnstarted;
-
-  // Optimization: Reserve max possible size to prevent re-allocations
-  // (Using the size logic from your original code)
+  // Scratch vector reused across calls (search is single-threaded per instance)
+  static thread_local std::vector<short> tempUnstarted;
+  tempUnstarted.clear();
   tempUnstarted.reserve(petri.Transitions.size());
 
   // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
@@ -622,8 +621,9 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
+  neighbors.reserve(neighbors.size() + avilableTransitionIndices.size());
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
-    neighbors.emplace_back(RCPSPState_TT(nodeID, transId, firingTime));
+    neighbors.emplace_back(nodeID, transId, firingTime);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;

@@ -13,7 +13,13 @@
 // Maximum supported activities for fixed-size arrays
 // If problems exceed this, the code will throw an error at initialization
 // Current datasets: j30=32, j60=62, j90=92, j120=122 activities
-constexpr int MAX_ACTIVITIES = 128;
+// Build-selectable: compile with -DRCPSP_MAX_ACTIVITIES=64 for j30/j60 runs
+// (halves the per-state footprint of the fixed arrays/bitsets); the default
+// 128 covers j90/j120. Hash values are unaffected (hash iterates 1..N only).
+#ifndef RCPSP_MAX_ACTIVITIES
+#define RCPSP_MAX_ACTIVITIES 128
+#endif
+constexpr int MAX_ACTIVITIES = RCPSP_MAX_ACTIVITIES;
 
 std::string finalstatename;
 std::string initialstatename;
@@ -64,13 +70,11 @@ public:
     std::vector<std::pair<short, short>> activity_nodes;
 
     // Bit i set => activity i finished (1-based).
-    std::bitset<128> finishedActivitiys;
+    std::bitset<MAX_ACTIVITIES> finishedActivitiys;
 
     // Cached derived data: <activityID, remaining duration> for currently-running tasks.
     std::vector<std::pair<short, short>> activeTransitionIndices;
 
-    mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
-    mutable bool transitionsCached = false;
     bool direction = 1;
     bool isDeltaZero = false;
     bool isCriticalInActive = false;

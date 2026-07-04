@@ -333,6 +333,7 @@ private:
 	
 	std::vector<state> neighbors;
 	std::vector<uint64_t> neighborID;
+	std::vector<uint64_t> neighborHash;
 	std::vector<double> edgeCosts;
 	std::vector<dataLocation> neighborLoc;
 	environment *env;
@@ -532,6 +533,7 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
  	neighbors.resize(0);
 	edgeCosts.resize(0);
 	neighborID.resize(0);
+	neighborHash.resize(0);
 	neighborLoc.resize(0);
 	
 	//std::cout << "Expanding: " << env->GetStateHash(openClosedList.Lookup(nodeid).data) << " with f:";
@@ -549,7 +551,9 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 		}
 
 		uint64_t theID;
-		neighborLoc.push_back(openClosedList.Lookup(env->GetStateHash(neighbors[x]), theID));
+		// Hash each neighbor once; reused below when adding new nodes to open
+		neighborHash.push_back(env->GetStateHash(neighbors[x]));
+		neighborLoc.push_back(openClosedList.Lookup(neighborHash.back(), theID));
 		neighborID.push_back(theID);
 		edgeCosts.push_back(env->GCost(openClosedList.Lookup(nodeid).data, neighbors[x]));
 		if (useBPMX)
@@ -657,7 +661,7 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 					{
 						h = std::max(h, openClosedList.Lookup(nodeid).h-edgeCosts[x]);
 						openClosedList.AddOpenNode(neighbors[x],
-												   env->GetStateHash(neighbors[x]),
+												   neighborHash[x],
 												   phi(std::max(h, openClosedList.Lookup(nodeid).h-edgeCosts[x]), openClosedList.Lookup(nodeid).g+edgeCosts[x]),
 												   openClosedList.Lookup(nodeid).g+edgeCosts[x],
 												   h,
@@ -665,7 +669,7 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 					}
 					else {
 						openClosedList.AddOpenNode(neighbors[x],
-												   env->GetStateHash(neighbors[x]),
+												   neighborHash[x],
 												   phi(h, openClosedList.Lookup(nodeid).g+edgeCosts[x]),
 												   openClosedList.Lookup(nodeid).g+edgeCosts[x],
 												   h,

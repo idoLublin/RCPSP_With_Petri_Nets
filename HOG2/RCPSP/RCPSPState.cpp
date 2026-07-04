@@ -2336,7 +2336,7 @@ double getforwardResource(const std::vector<short>& tempUnfinished,
 
 std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
     const std::vector<short> &unstartedTransitions,
-    const std::bitset<128> &finishedActivitiys,  // ← Changed to bitset
+    const std::bitset<MAX_ACTIVITIES> &finishedActivitiys,
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
     const std::vector<std::pair<short, short>> &activity_nodes,
     const std::vector<std::pair<short, short>> &activeTransitionIndices
@@ -2540,7 +2540,6 @@ if (direction) {
     activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
     nextCritical=prev.nextCritical;
 
-    transitionsCached = false;
     isCriticalInActive = false;
 
     // if (nextCritical==transitionId) {
@@ -2553,7 +2552,6 @@ if (direction) {
     //     }
     // }
 
-    AvailableTransitionIndices_TT2.clear(); // or just leave empty
     // 3. TIME SHIFT (Update "Remaining Time")
     if (firingTime > 0) {
         // Update resource tokens
@@ -2737,8 +2735,6 @@ else {
     activity_nodes = prev.activity_nodes;
     activeTransitionIndices = prev.activeTransitionIndices;
 
-    transitionsCached = false;
-    AvailableTransitionIndices_TT2.clear();
 
     // 3. TIME SHIFT (Update "Remaining Time")
     finishedActivitiys[transitionId] = 0;

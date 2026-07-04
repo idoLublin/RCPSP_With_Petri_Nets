@@ -737,7 +737,7 @@ int lastActivityId = -1;
     int unkTime = state1.g - latestStart;
 
     // FIX: Copy the vector (std::vector copy is deep by default)
-    std::array<short, 128> finishedActivitiysnew = state1.finishedActivitiys;
+    std::array<short, MAX_ACTIVITIES> finishedActivitiysnew = state1.finishedActivitiys;
 
     for (int actIdx : independentSet) {
       // FIX: Direct index access
@@ -888,7 +888,6 @@ public:
   bool GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const override;
   double HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
   double GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const override;
-  bool GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,RCPSPState_TT2 &next, double parentH,uint64_t &special, bool &validMove) const;
 
 
   int GetNumSuccessors(const RCPSPState_TT2 &stateID) const;
@@ -1067,59 +1066,6 @@ inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
   }
 
   return h;
-}
-
-inline bool RCPSP_TT2::GetNextSuccessor(const RCPSPState_TT2 &curr, const RCPSPState_TT2 &goal,
-                      RCPSPState_TT2 &next, double parentH,
-                      uint64_t &special, bool &validMove) const
-{
-  if (special == 0 && !curr.transitionsCached) {
-    // First call for this node - generate and cache
-    std::vector<short> tempUnstarted;
-    tempUnstarted.reserve(petri.Transitions.size());
-
-    for (int i = 0; i < petri.Transitions.size(); i++) {
-      short taskID = i + 1;
-      if (curr.finishedActivitiys[taskID] == 0) {
-        tempUnstarted.push_back(taskID);
-      }
-    }
-
-    curr.AvailableTransitionIndices_TT2 = getAvailableTransitionIndices_TT2(tempUnstarted,
-                                                                curr.finishedActivitiys,
-                                                                curr.resource_nodes,
-                                                                curr.activity_nodes,
-                                                                curr.activeTransitionIndices);
-
-    // Sort for determinism
-    if (curr.AvailableTransitionIndices_TT2.size() > 1) {
-      std::sort(curr.AvailableTransitionIndices_TT2.begin(), curr.AvailableTransitionIndices_TT2.end(),
-        [](const std::pair<short, short>& a, const std::pair<short, short>& b) {
-            return a.first < b.first;
-        });
-    }
-
-    curr.transitionsCached = true;
-  }
-
-  unsigned int index = (unsigned int)special;
-
-  // Check if we have run out of moves
-  if (index >= curr.AvailableTransitionIndices_TT2.size()) {
-    validMove = false;
-    return false;
-  }
-
-  // Retrieve the specific pair for this step
-  std::pair<short, short> selectedMove = curr.AvailableTransitionIndices_TT2[index];
-
-  // Generate the next state for this move
-  next = RCPSPState_TT2(curr, selectedMove.first, selectedMove.second);
-
-  validMove = true;
-  special++;
-
-  return (index + 1 < curr.AvailableTransitionIndices_TT2.size());
 }
 
 inline uint64_t RCPSP_TT2::GetActionHash(int act) const {

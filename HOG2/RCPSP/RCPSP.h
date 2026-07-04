@@ -910,10 +910,9 @@ inline RCPSP_TT2::RCPSP_TT2() {
 
 inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
   //auto startS1 = std::chrono::high_resolution_clock::now();
-  std::vector<short> tempUnstarted;
-
-  // Optimization: Reserve max possible size to prevent re-allocations
-  // (Using the size logic from your original code)
+  // Scratch vector reused across calls (search is single-threaded per instance)
+  static thread_local std::vector<short> tempUnstarted;
+  tempUnstarted.clear();
   tempUnstarted.reserve(petri.Transitions.size());
 
   // YOUR ORIGINAL LOGIC: Loop i from 1 to size, use ID = i + 1
@@ -934,8 +933,9 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
+  neighbors.reserve(neighbors.size() + avilableTransitionIndices.size());
   for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
-    neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
+    neighbors.emplace_back(nodeID, transId, Timedelta, 1);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;
@@ -943,19 +943,8 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 }
 
 inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2 &goal) const {
-  int count = 0;
-
-  // רצים רק על הטווח הרלוונטי (למשל 1 עד 30)
-  for (int i = 1; i <= petri.Transitions.size(); i++) {
-    // אם הערך הוא 1 (סיים), מוסיפים לספירה
-    if (node.finishedActivitiys[i] == 1) {
-      count++;
-    }
-  }
-
-  // אם ספרנו בדיוק כמספר המשימות בבעיה -> סיימנו
-  return count == petri.Transitions.size();
-
+  // Only bits 1..N are ever set, so popcount == N means all tasks finished.
+  return node.finishedActivitiys.count() == petri.Transitions.size();
 }
 
 
@@ -967,7 +956,9 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     return state1.h;
   }
 
-  std::vector<short> tempUnfinished;
+  // Scratch vector reused across calls (search is single-threaded per instance)
+  static thread_local std::vector<short> tempUnfinished;
+  tempUnfinished.clear();
   tempUnfinished.reserve(petri.Transitions.size());
 
   for (int i = 0; i < petri.Transitions.size(); i++) {

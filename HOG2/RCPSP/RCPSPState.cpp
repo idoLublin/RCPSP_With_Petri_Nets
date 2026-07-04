@@ -5,6 +5,7 @@
 #include "petriclasses.h"
 #include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <climits>
 #include <iostream>
@@ -2154,8 +2155,8 @@ bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
 double getForwardHcost(std::vector<short> unstartedTransitions,
                       std::vector<std::pair<short, short>> activeTransitionIndices,
                       short& nextCritical);
-double getforwardResource(std::vector<short> tempUnfinished,
-                          std::vector<std::pair<short, short>> activeTransitionIndices);
+double getforwardResource(const std::vector<short>& tempUnfinished,
+                          const std::vector<std::pair<short, short>>& activeTransitionIndices);
 
 double getForwardHcost(std::vector<short>unstartedTransitions,
                       std::vector<std::pair<short, short>>activeTransitionIndices,
@@ -2248,16 +2249,21 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
 }
 
-double getforwardResource(std::vector<short> tempUnfinished,
-    std::vector<std::pair<short, short>> activeTransitionIndices) {
+double getforwardResource(const std::vector<short>& tempUnfinished,
+    const std::vector<std::pair<short, short>>& activeTransitionIndices) {
 
     double maxResourceBound = 0.0;
+
+    // Executing-activity lookup, shared across all resources
+    std::array<bool, MAX_ACTIVITIES + 1> executing{};
+    for (auto& [activityId, residualDelay] : activeTransitionIndices) {
+        executing[activityId] = true;
+    }
 
     for (auto& [resourceName, capacity] : RCPSPex.resources) {
         double totalDemand = 0.0;
 
         // Active activities: use residual delay as remaining duration
-        // Active activities
         for (auto& [activityId, residualDelay] : activeTransitionIndices) {
             if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
             auto& activity = RCPSPex.activities[activityId - 1];
@@ -2267,15 +2273,9 @@ double getforwardResource(std::vector<short> tempUnfinished,
             }
         }
 
-        // Build a set of executing activity IDs for fast lookup
-        std::unordered_set<short> executing;
-        for (auto& [activityId, residualDelay] : activeTransitionIndices) {
-            executing.insert(activityId);
-        }
-
         for (short activityId : tempUnfinished) {
             if (activityId == 1 || activityId == RCPSPex.activities.size()) continue;
-            if (executing.count(activityId)) continue; // skip executing
+            if (executing[activityId]) continue; // skip executing
             auto& activity = RCPSPex.activities[activityId - 1];
             auto it = activity.resource_demands.find(resourceName);
             if (it != activity.resource_demands.end()) {
@@ -2301,15 +2301,16 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
 
     std::vector<std::pair<short, short>> available;
 
-    // Create a set of active task IDs for fast lookup
-    std::unordered_set<short> activeTasks;
-    for (const auto& [taskID, _] : activeTransitionIndices) {
-        activeTasks.insert(taskID);
+    // O(1) lookup: activeRemaining[id] = remaining duration if task is active, -1 otherwise
+    std::array<short, MAX_ACTIVITIES + 1> activeRemaining;
+    activeRemaining.fill(-1);
+    for (const auto& [taskID, remaining] : activeTransitionIndices) {
+        activeRemaining[taskID] = remaining;
     }
 
     for (short transId : unstartedTransitions) {
         // Skip if already active
-        if (activeTasks.count(transId) > 0) {
+        if (activeRemaining[transId] >= 0) {
             continue;
         }
 
@@ -2328,19 +2329,11 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
             }
 
             // Check if active
-            bool isActive = false;
-            int activeRemainingTime = 0;
-            for (const auto& [activeID, remaining] : activeTransitionIndices) {
-                if (activeID == predId) {
-                    isActive = true;
-                    activeRemainingTime = remaining;
-                    break;
-                }
-            }
+            short predRemaining = activeRemaining[predId];
 
-            if (isActive) {
+            if (predRemaining >= 0) {
                 // Predecessor is active - must wait for it to finish
-                maxPredFinishTime = std::max(maxPredFinishTime, activeRemainingTime);
+                maxPredFinishTime = std::max(maxPredFinishTime, (int)predRemaining);
             } else {
                 // Predecessor not finished and not active - can't start this task
                 allPredsFinished = false;
@@ -2355,9 +2348,6 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
         bool resourcesOK = true;
         int maxResourceTime = maxPredFinishTime;
 
-        std::array<std::vector<std::pair<short, short>>, 4> sorted_resources;
-        bool resources_sorted[4] = {false, false, false, false};
-
         for (const auto &[res, demand] : act.resource_demands) {
             int resID = petri.place_name_to_id.at(res);
 
@@ -2366,14 +2356,11 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
                 break;
             }
 
-            if (!resources_sorted[resID]) {
-                sorted_resources[resID] = resource_nodes[resID];
-                std::sort(sorted_resources[resID].begin(), sorted_resources[resID].end(),
-                          [](const auto &a, const auto &b) { return a.second < b.second; });
-                resources_sorted[resID] = true;
-            }
-
-            const auto& tokens = sorted_resources[resID];
+            // Pools are canonically time-sorted with unique times (firing-ctor invariant),
+            // so they can be scanned directly without copying/re-sorting per candidate.
+            assert(std::is_sorted(resource_nodes[resID].begin(), resource_nodes[resID].end(),
+                                  [](const auto &a, const auto &b) { return a.second < b.second; }));
+            const auto& tokens = resource_nodes[resID];
             int totalAvailable = 0;
             int resourceReadyTime = -1;
 
@@ -2685,43 +2672,8 @@ if (direction) {
         std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
         // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
     }
-//**********cheack here***************
-    // 2. SORT ACTIVITY TOKENS
-    // Ensures tokens in "waiting places" are always in the same order
-    // if (!activity_nodes.empty()) {
-    //     std::sort(activity_nodes.begin(), activity_nodes.end());
-    // }
-//********************************************
-    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
-    for (auto& resVec : resource_nodes) {
-        if (resVec.empty()) continue;
-
-        // Step A: Sort by Time (Availability Time)
-        // If times are equal, sort by Amount (to be deterministic)
-        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
-            if (a.second != b.second) return a.second < b.second; // Earliest time first
-            return a.first < b.first; // Then smallest amount
-        });
-
-        // Step B: Merge Adjacent Duplicates (The "Split Resource" Fix)
-        // Converts [(5,0), (5,0)] -> [(10,0)]
-        auto it = resVec.begin();
-        while (it != resVec.end() - 1) {
-            auto next = it + 1;
-            // If they become available at the exact same time...
-            if (it->second == next->second) {
-                it->first += next->first; // Merge amounts
-                resVec.erase(next);       // Delete the duplicate
-                // Do not increment 'it', check the new neighbor
-            } else {
-                ++it;
-            }
-        }
-    }
-    // if (firingTime==7&&transitionId != 26) {
-    //     int i;
-    //     i++;
-    // }
+    // NOTE: pools are already canonical after the sort+merge above — every pool is
+    // time-sorted with unique times, so a second sort+merge pass would be a no-op.
 }
 
 else {
@@ -2819,12 +2771,6 @@ else {
             else {
                 short idx = placeID - 4;
 
-                // ADD THIS DEBUG HERE:
-                if (idx == 48 && idx < activity_nodes.size() && activity_nodes[idx].first > 0) {
-                    std::cout << "Activity " << transitionId << " overwriting idx=48: old_time="
-                              << activity_nodes[idx].second << ", new_duration=" << duration << std::endl;
-                }
-
                 if (idx < activity_nodes.size()) {
                     activity_nodes[idx] = {inAmount, duration};
                 }
@@ -2874,29 +2820,7 @@ else {
         std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
     }
 
-    // if (!activity_nodes.empty()) {
-    //     std::sort(activity_nodes.begin(), activity_nodes.end());
-    // }
-
-    for (auto& resVec : resource_nodes) {
-        if (resVec.empty()) continue;
-
-        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
-            if (a.second != b.second) return a.second < b.second;
-            return a.first < b.first;
-        });
-
-        auto it = resVec.begin();
-        while (it != resVec.end() - 1) {
-            auto next = it + 1;
-            if (it->second == next->second) {
-                it->first += next->first;
-                resVec.erase(next);
-            } else {
-                ++it;
-            }
-        }
-    }
+    // NOTE: pools are already canonical after the sort+merge above (see forward branch).
 }
 
 }

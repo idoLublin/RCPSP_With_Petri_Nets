@@ -341,6 +341,9 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
 
     RCPSP as1;
     TemplateAStar<RCPSPState, int, RCPSP> astar;
+    // The chain-based LBCS is admissible but not proven consistent; with an
+    // inconsistent heuristic A* needs node re-opening to stay optimal.
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
     std::vector<RCPSPState> path;
     std::chrono::duration<double> elapsed;
 
@@ -423,6 +426,7 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
 
     RCPSP_TT as1;
     TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
     std::vector<RCPSPState_TT> path;
 
     std::chrono::duration<double> elapsed;
@@ -504,6 +508,7 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
 
     RCPSP_TT2 as1;
     TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;

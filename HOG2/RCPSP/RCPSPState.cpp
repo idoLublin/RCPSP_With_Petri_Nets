@@ -967,7 +967,25 @@ void computeRootBound(int depth) {
   if (cMax < cpLB)
     cMax = cpLB;
 
-  int C = cpLB; // destructive: start from the critical-path bound
+  // Resource-volume bound (lbrc): ceil(total work / capacity) per resource.
+  // The overload test would refute every C below this anyway (its full-window
+  // interval computes exactly this), so starting the destructive loop here skips
+  // those wasted erOverload iterations. Cheap: O(resources * activities).
+  int rcLB = 0;
+  int Kres = erCapacity.size();
+  for (int k = 0; k < Kres; k++) {
+    if (erCapacity[k] <= 0) continue;
+    long long work = 0;
+    for (int j = 1; j <= n; j++)
+      work += (long long)erDemand[k][j] * erP[j];
+    int b = (int)((work + erCapacity[k] - 1) / erCapacity[k]); // ceil
+    if (b > rcLB) rcLB = b;
+  }
+
+  // Destructive: start from max(critical-path, resource-volume). Both are valid
+  // lower bounds, so this only skips provably-infeasible C values (same final
+  // lberRootBound, fewer iterations).
+  int C = std::max(cpLB, rcLB);
   bool solved = false;
   while (!solved && C <= cMax) {
     // (Re)initialise windows for trial C; shaving below only tightens them.

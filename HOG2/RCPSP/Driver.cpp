@@ -37,6 +37,11 @@ P_RCPSP::HeuristicType activeHeuristic = P_RCPSP::HeuristicType::CRITICAL_PATH;
 // Global DP heuristic toggle
 bool useDPHeuristic = true;
 
+// Force A* node re-opening (safe for consistent heuristics: the reopen
+// condition never fires; required for correctness if a heuristic component
+// is admissible but inconsistent, since the engine defaults to no-reopen)
+bool forceReopen = false;
+
 // Global optimal makespan map for validation
 std::map<std::pair<int,int>, int> optimalMakespan;
 
@@ -249,6 +254,8 @@ Config parseArgs(int argc, char* argv[]) {
             config.useDP = false;
         } else if (arg == "--no-sort") {
             config.sortResults = false;
+        } else if (arg == "--reopen") {
+            forceReopen = true;
         } else if (arg == "--diagnose") {
             config.diagnose = true;
         } else if (arg == "--no-header") {
@@ -343,7 +350,11 @@ int solveRCPSP(int group, int exam, const std::string& filename, const std::stri
     TemplateAStar<RCPSPState, int, RCPSP> astar;
     // The chain-based LBCS is admissible but not proven consistent; with an
     // inconsistent heuristic A* needs node re-opening to stay optimal.
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
+    // Node re-opening on by default: free when the heuristic is consistent
+    // (the reopen condition never fires), and required for optimality when a
+    // bound is admissible but inconsistent (observed: TT2+lbip0 on j30 g1 e9
+    // returned 50 vs optimum 49 without it; correct 49 with it).
+    astar.SetReopenNodes(true);
     std::vector<RCPSPState> path;
     std::chrono::duration<double> elapsed;
 
@@ -426,7 +437,11 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
 
     RCPSP_TT as1;
     TemplateAStar<RCPSPState_TT, int, RCPSP_TT> astar;
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
+    // Node re-opening on by default: free when the heuristic is consistent
+    // (the reopen condition never fires), and required for optimality when a
+    // bound is admissible but inconsistent (observed: TT2+lbip0 on j30 g1 e9
+    // returned 50 vs optimum 49 without it; correct 49 with it).
+    astar.SetReopenNodes(true);
     std::vector<RCPSPState_TT> path;
 
     std::chrono::duration<double> elapsed;
@@ -508,7 +523,11 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
 
     RCPSP_TT2 as1;
     TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
-    if (activeHeuristic == P_RCPSP::HeuristicType::LBCS) astar.SetReopenNodes(true);
+    // Node re-opening on by default: free when the heuristic is consistent
+    // (the reopen condition never fires), and required for optimality when a
+    // bound is admissible but inconsistent (observed: TT2+lbip0 on j30 g1 e9
+    // returned 50 vs optimum 49 without it; correct 49 with it).
+    astar.SetReopenNodes(true);
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;

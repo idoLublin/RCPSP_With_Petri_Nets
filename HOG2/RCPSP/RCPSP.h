@@ -15,6 +15,9 @@ using namespace P_RCPSP;
 // Forward declarations for DP-based heuristic functions
 double getForwardHcostDP(const std::vector<short>& unstartedTransitions,
                          const std::vector<std::pair<short, short>>& activeTransitionIndices);
+// Resource work/capacity lower bound (the "lbrc" term); defined in RCPSPState.cpp.
+double computeResourceWorkLB(const std::vector<short>& unfinishedActivities,
+                            const std::vector<std::pair<short, short>>& activeTransitions);
 double getForwardHcostDP_TT(const std::vector<short>& unstartedTransitions);
 void initializeHeuristicDP();
 extern thread_local bool heuristicDPInitialized;
@@ -981,6 +984,13 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
   //    re-opens it). Admissible + re-opening => optimal.
   if (activeHeuristic == P_RCPSP::HeuristicType::CRITICAL_PATH) {
     state1.h = (short)getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
+  } else if (activeHeuristic == P_RCPSP::HeuristicType::LBRC) {
+    // Consistent state bound: max(critical path, resource work/capacity). Both
+    // terms are pure state functions (no g) and consistent, so A* stays optimal
+    // with no re-opening and no f-collapse.
+    double cp = getForwardHcostDP(tempUnfinished, state1.activeTransitionIndices);
+    double rc = computeResourceWorkLB(tempUnfinished, state1.activeTransitionIndices);
+    state1.h = (short)std::max(cp, rc);
   } else {
     state1.h = (short)computeConsistentLBER_floor(
         tempUnfinished, state1.activeTransitionIndices, state1.g, lberDepth);

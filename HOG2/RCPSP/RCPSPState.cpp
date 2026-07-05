@@ -1043,6 +1043,40 @@ double getForwardHcostDP(
     const std::vector<short> &unstartedTransitions,
     const std::vector<std::pair<short, short>> &activeTransitionIndices);
 
+// Resource work / capacity lower bound (the "lbrc" term). For each resource, the
+// remaining work that must still be processed on it -- active tasks contribute
+// (residual duration x demand), unstarted tasks contribute (full duration x
+// demand) -- divided by the resource capacity. The max over resources is a valid
+// lower bound on the remaining makespan (that much work cannot be packed into
+// less time than work/capacity). It is a pure function of the state (no g), so
+// it is admissible AND consistent: across a step of length delta the work on any
+// resource drops by at most capacity*delta, so work/capacity drops by <= delta.
+double computeResourceWorkLB(
+    const std::vector<short> &unfinishedActivities,
+    const std::vector<std::pair<short, short>> &activeTransitions) {
+  std::array<short, MAX_ACTIVITIES> activeRemaining;
+  activeRemaining.fill(-1);
+  for (const auto &[id, remaining] : activeTransitions)
+    activeRemaining[id] = remaining;
+
+  double best = 0.0;
+  for (const auto &[resName, cap] : RCPSPex.resources) {
+    if (cap <= 0) continue;
+    long long work = 0;
+    for (short id : unfinishedActivities) {
+      const auto &dem = RCPSPex.activities[id - 1].resource_demands;
+      auto it = dem.find(resName);
+      if (it == dem.end() || it->second <= 0) continue;
+      int dur = (activeRemaining[id] != -1) ? (int)activeRemaining[id]
+                                            : RCPSPex.activities[id - 1].duration;
+      work += (long long)dur * it->second;
+    }
+    double b = (double)work / (double)cap;
+    if (b > best) best = b;
+  }
+  return best;
+}
+
 // Consistent Class-1 LBER bound used by the TT2 search.
 //
 // Per problem (once): compute the full destructive LBER root bound

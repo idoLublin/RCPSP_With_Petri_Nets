@@ -108,6 +108,49 @@ LBER depth guide: `3` = CER+DFF+SHV (default), `4` = +RER, `5` = +EER,
   --output-file j30_lbrc.csv
 ```
 
+### LBER examples
+
+**j30** (fits comfortably in memory; no caps needed):
+
+```bash
+# LBER depth 3 (default: CER+DFF+SHV) on all 480 j30 instances
+./build/Driver --method tt2 --heuristic lber --lber-depth 3 \
+  --problem-type j30 --group-start 1 --group-end 48 --exam-start 1 --exam-end 10 \
+  --time-limit 300 --output-file j30_lber_d3.csv
+
+# LBER depth 1 (CER only) on j30 group 1
+./build/Driver --method tt2 --heuristic lber --lber-depth 1 \
+  --problem-type j30 --group-start 1 --group-end 1 --exam-start 1 --exam-end 10 \
+  --output-file j30_lber_d1.csv
+
+# LBER depth 6 (all tiers incl. EER/GER — requires the OR-Tools build) on one instance
+./build/Driver --method tt2 --heuristic lber --lber-depth 6 \
+  --problem-type j30 --group-start 1 --group-end 1 --exam-start 1 --exam-end 1 \
+  --time-limit 300
+```
+
+**j60** (memory-heavy — always run under the caps so an overrun aborts cleanly
+instead of OOM-killing the machine; note many j60 instances will not complete):
+
+```bash
+export MALLOC_ARENA_MAX=1               # keep virtual ~= resident so the soft cap fires first
+( ulimit -v 28000000                    # hard 28 GB backstop -> child bad_alloc, machine safe
+  RCPSP_MEM_LIMIT_GB=20 \               # soft cap: abort an instance at 20 GB, continue the batch
+  ./build/Driver --method tt2 --heuristic lber --lber-depth 3 \
+    --problem-type j60 --group-start 1 --group-end 1 --exam-start 1 --exam-end 5 \
+    --time-limit 300 --output-file j60_lber_d3.csv )
+
+# Single j60 instance, LBER depth 3, capped
+( ulimit -v 28000000
+  MALLOC_ARENA_MAX=1 RCPSP_MEM_LIMIT_GB=20 \
+  ./build/Driver --method tt2 --heuristic lber --lber-depth 3 \
+    --problem-type j60 --group-start 1 --group-end 1 --exam-start 1 --exam-end 1 \
+    --time-limit 300 )
+```
+
+j60 is validated against `data/j60lb.sm` (lower bounds): a solved makespan is
+checked `≥ LB` (admissibility), not for exact optimality.
+
 ---
 
 ## 4. Output

@@ -50,11 +50,17 @@ std::map<std::pair<int,int>, int> optimalMakespan;
 // ============================================================================
 std::map<std::pair<int,int>, int> loadOptimalMakespan(const std::string& problemType) {
     std::map<std::pair<int,int>, int> result;
+    // Try {problemType}opt.sm first (j30: published optima, exact-match check).
+    // Fall back to {problemType}lb.sm (j60: lower bounds only -> admissibility
+    // check). If neither exists, return empty (validation silently skipped).
     std::string filepath = REPO_ROOT + "data/" + problemType + "opt.sm";
     std::ifstream file(filepath);
     if (!file.is_open()) {
-        std::cerr << "Warning: Could not open optimal makespan file: " << filepath << std::endl;
-        return result;
+        filepath = REPO_ROOT + "data/" + problemType + "lb.sm";
+        file.open(filepath);
+    }
+    if (!file.is_open()) {
+        return result;  // no bounds file -> caller skips validation
     }
 
     std::string line;
@@ -504,16 +510,31 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
         makespan = state.g;
         std::cout << "\nFinal makespan: " << makespan << std::endl;
 
-        // Validate against optimal makespan (a consistent admissible heuristic
-        // must return the optimum without node re-opening).
+        // Validate against bounds. For j30 the loaded value is a published
+        // optimum (exact-match required). For LB-only datasets (e.g. j60lb.sm)
+        // the value is a lower bound -- only makespan < LB is an error
+        // (heuristic inadmissible); optimality can't be verified without a UB.
         auto it = optimalMakespan.find({group, exam});
         if (it != optimalMakespan.end()) {
-            if (makespan != it->second) {
-                std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
-                          << "! Got " << makespan << ", expected optimal " << it->second << std::endl;
-                exit(1);
+            int boundValue = it->second;
+            bool isExactOptimum = (problemType == "j30");
+            if (isExactOptimum) {
+                if (makespan != boundValue) {
+                    std::cerr << "\nERROR: Makespan mismatch for group " << group << " exam " << exam
+                              << "! Got " << makespan << ", expected optimal " << boundValue << std::endl;
+                    exit(1);
+                }
+                std::cout << "Validated: makespan " << makespan << " matches published optimum." << std::endl;
+            } else {
+                if (makespan < boundValue) {
+                    std::cerr << "\nERROR: makespan " << makespan << " below published LB " << boundValue
+                              << " for group " << group << " exam " << exam
+                              << " -- heuristic is INADMISSIBLE." << std::endl;
+                    exit(1);
+                }
+                std::cout << "Validated: makespan " << makespan << " >= LB " << boundValue
+                          << " (no UB published)." << std::endl;
             }
-            std::cout << "Validated: makespan " << makespan << " matches optimal." << std::endl;
         }
     } else if (astar.StoppedForMemory()) {
         std::cout << "MEMORY LIMIT reached, aborting instance " << group << ":" << exam

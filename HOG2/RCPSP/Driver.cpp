@@ -17,11 +17,14 @@
 #include <iomanip>
 #include <ctime>
 
+#include <sys/resource.h>
+
 #include "HeuristicTypes.h"
 #include "RCPSPState.cpp"
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
 #include "RCPSP.h"
+#include "DominanceTT2.h"
 
 namespace fs = std::filesystem;
 
@@ -41,6 +44,18 @@ bool useDPHeuristic = true;
 // condition never fires; required for correctness if a heuristic component
 // is admissible but inconsistent, since the engine defaults to no-reopen)
 bool forceReopen = false;
+
+// Dominance pruning (TT2 only): cutset-style rule — prune a new state when a
+// stored state with the same scheduled set is componentwise at least as good
+// (see DominanceTT2.h). --dominance-pop additionally re-checks each node when
+// it is popped for expansion (catches dominators inserted after generation).
+bool useDominance = false;
+bool useDominancePop = false;
+
+// Upper-bound pruning (TT2 only): serial-SGS schedule computed at the root;
+// prune generated nodes with g + h > UB (strict, so an optimum equal to the
+// UB is still found by the search itself).
+bool useUBPrune = false;
 
 // Global optimal makespan map for validation
 std::map<std::pair<int,int>, int> optimalMakespan;
@@ -153,6 +168,9 @@ void printUsage(const char* programName) {
               << "                     (default: cp)\n"
               << "  --dp               Use DP preprocessing for heuristic (default)\n"
               << "  --no-dp            Disable DP preprocessing (use original heuristic)\n"
+              << "  --dominance        Enable cutset-style dominance pruning (TT2 only)\n"
+              << "  --dominance-pop    Dominance pruning + pop-time re-check (implies --dominance)\n"
+              << "  --ub-prune         Prune g+h > UB from a root SGS schedule (TT2 only)\n"
               << "  --use-cs           [DEPRECATED] Same as --heuristic lbcs\n"
               << "  --no-cs            [DEPRECATED] Same as --heuristic cp\n"
               << "  --no-sort          Disable result sorting\n"
@@ -256,6 +274,13 @@ Config parseArgs(int argc, char* argv[]) {
             config.sortResults = false;
         } else if (arg == "--reopen") {
             forceReopen = true;
+        } else if (arg == "--dominance") {
+            useDominance = true;
+        } else if (arg == "--dominance-pop") {
+            useDominance = true;   // pop check requires the table
+            useDominancePop = true;
+        } else if (arg == "--ub-prune") {
+            useUBPrune = true;
         } else if (arg == "--diagnose") {
             config.diagnose = true;
         } else if (arg == "--no-header") {
@@ -528,6 +553,36 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     // bound is admissible but inconsistent (observed: TT2+lbip0 on j30 g1 e9
     // returned 50 vs optimum 49 without it; correct 49 with it).
     astar.SetReopenNodes(true);
+
+    // Cutset-style dominance pruning (DominanceTT2.h). The table lives on the
+    // stack of this solve call, so per-instance freshness is automatic.
+    TT2DominanceTable domTable;
+    if (useDominance) {
+        astar.SetGeneratePruner([&domTable, &astar](const RCPSPState_TT2 &s, double g) {
+            return domTable.IsDominated(s, g, astar.openClosedList);
+        });
+        astar.SetOnOpenAdded([&domTable, &astar](uint64_t id) {
+            domTable.Insert(id, astar.openClosedList);
+        });
+        if (useDominancePop) {
+            astar.SetExpandPruner([&domTable, &astar](uint64_t id) {
+                return domTable.IsDominatedAtPop(id, astar.openClosedList);
+            });
+        }
+    }
+
+    // Upper-bound pruning: root SGS schedule, strict f > UB prune.
+    int ubValue = -1;
+    uint64_t ubPruned = 0;
+    if (useUBPrune) {
+        ubValue = computeSGSUpperBound();
+        std::cout << "SGS upper bound: " << ubValue << std::endl;
+        astar.SetFPruner([ubValue, &ubPruned](const RCPSPState_TT2 &, double g, double h) {
+            if (g + h > ubValue) { ++ubPruned; return true; }
+            return false;
+        });
+    }
+
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;
@@ -574,10 +629,39 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
         }
     } else {
         std::cout << "Path not found or timeout occurred.\n";
+        // With a correct UB and strict f > UB pruning, a goal at the optimum
+        // (<= UB) can never be pruned, so open-list exhaustion before the
+        // time limit means the SGS UB is below the true optimum — a bug.
+        if (useUBPrune && astar.GetNumOpenItems() == 0) {
+            std::cerr << "\nERROR: open list exhausted under UB pruning (UB=" << ubValue
+                      << ") for group " << group << " exam " << exam
+                      << " — SGS upper bound is below the optimum." << std::endl;
+            exit(1);
+        }
     }
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+    if (useDominance) {
+        std::cout << "Dominance: pruned=" << domTable.pruned
+                  << " popPruned=" << domTable.popPruned
+                  << " checks=" << domTable.checks
+                  << " popChecks=" << domTable.popChecks
+                  << " comparisons=" << domTable.comparisons
+                  << " inserts=" << domTable.inserts
+                  << " thinned=" << domTable.thinned
+                  << " buckets=" << domTable.BucketCount()
+                  << " maxBucket=" << domTable.maxBucket << std::endl;
+    }
+    if (useUBPrune) {
+        std::cout << "UB pruned: " << ubPruned << " (UB=" << ubValue << ")" << std::endl;
+    }
+    {
+        struct rusage ru;
+        getrusage(RUSAGE_SELF, &ru);
+        // ru_maxrss is bytes on macOS (kilobytes on Linux)
+        std::cout << "Peak RSS: " << (ru.ru_maxrss / (1024.0 * 1024.0)) << " MB" << std::endl;
+    }
 
     std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
     std::ofstream file(filename, std::ios::app);
@@ -589,7 +673,10 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
          << path.size() << ","
          << "TT2" << ","
          << problemType << ","
-         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag << ","
+         << domTable.pruned << ","
+         << domTable.popPruned << ","
+         << ubPruned
          << "\n";
 
     return 0;
@@ -778,7 +865,9 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
 // ============================================================================
 // CSV Header
 // ============================================================================
-const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,generatedTime%,generatedTime(ave),avilableTime%,avilableTime(ave),hashTime%,hashTime(ave),HcostTime%,HcostTime(ave),comperTime%,comperTime(ave),succsesroTime%,sucssesorTime(ave)";
+// Columns 12-14 (dominance_pruned, dominance_pop_pruned, ub_pruned) are
+// written by the TT2 solver only; TP/TT rows end after Heuristic.
+const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,dominance_pruned,dominance_pop_pruned,ub_pruned";
 
 // ============================================================================
 // Main Solver Runner
@@ -796,6 +885,8 @@ void runSolver(const Config& config) {
     std::cout << "  Heuristic: " << P_RCPSP::heuristicTypeToString(config.heuristic)
               << " (" << P_RCPSP::heuristicTypeDescription(config.heuristic) << ")\n";
     std::cout << "  DP Preprocessing: " << (config.useDP ? "Enabled" : "Disabled") << "\n";
+    std::cout << "  Dominance Pruning: " << (useDominance ? (useDominancePop ? "Enabled (+pop check)" : "Enabled") : "Disabled") << "\n";
+    std::cout << "  UB Pruning: " << (useUBPrune ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
 

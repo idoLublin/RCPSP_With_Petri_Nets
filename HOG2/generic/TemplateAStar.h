@@ -299,6 +299,17 @@ public:
 	void SetHeuristic(Heuristic<state> *h) { theHeuristic = h; if (h) heuristicSet = true; else heuristicSet = false; }
 	void SetConstraint(Constraint<state> *c) { theConstraint = c; }
 
+	// Optional external pruning hooks (RCPSP TT2 dominance / upper-bound
+	// pruning). All default-empty: engine behavior is unchanged unless set.
+	// generatePruner runs on kNotFound neighbors BEFORE the heuristic is
+	// computed (HCost is the hot path); fPruner runs after; onOpenAdded
+	// reports the element id of every node added to open; expandPruner runs
+	// when a node is popped (after the goal test) and skips its expansion.
+	void SetGeneratePruner(std::function<bool(const state &, double)> f) { generatePruner = f; }
+	void SetFPruner(std::function<bool(const state &, double, double)> f) { fPruner = f; }
+	void SetOnOpenAdded(std::function<void(uint64_t)> f) { onOpenAdded = f; }
+	void SetExpandPruner(std::function<bool(uint64_t)> f) { expandPruner = f; }
+
 	uint64_t GetNodesExpanded() const { return nodesExpanded; }
 	uint64_t GetNodesTouched() const { return nodesTouched; }
 	uint64_t GetNecessaryExpansions() const;
@@ -350,6 +361,10 @@ private:
 	Heuristic<state> *theHeuristic;
 	bool heuristicSet; // used to know if it should be cleared / reset
 	Constraint<state> *theConstraint;
+	std::function<bool(const state &, double)> generatePruner;
+	std::function<bool(const state &, double, double)> fPruner;
+	std::function<void(uint64_t)> onOpenAdded;
+	std::function<bool(uint64_t)> expandPruner;
 };
 
 /**
@@ -456,8 +471,10 @@ bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environm
 	}
 	
 	double h = theHeuristic->HCost(start, goal);
-	openClosedList.AddOpenNode(start, env->GetStateHash(start), phi(h, 0), 0, h);
-	
+	uint64_t startID = openClosedList.AddOpenNode(start, env->GetStateHash(start), phi(h, 0), 0, h);
+	if (onOpenAdded)
+		onOpenAdded(startID);
+
 	return true;
 }
 
@@ -525,11 +542,17 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 	{
 		ExtractPathToStartFromID(nodeid, thePath);
 		// Path is backwards - reverse
-		reverse(thePath.begin(), thePath.end()); 
+		reverse(thePath.begin(), thePath.end());
 		goalFCost = openClosedList.Lookup(nodeid).f;// + openClosedList.Lookup(nodeid).h;
 		return true;
 	}
-	
+
+	// Pop-time dominance check: a stored node inserted after this one may
+	// dominate it; if so, close it without generating successors. Runs after
+	// the goal test so a popped goal is never skipped.
+	if (expandPruner && expandPruner(nodeid))
+		return false;
+
  	neighbors.resize(0);
 	edgeCosts.resize(0);
 	neighborID.resize(0);
@@ -656,11 +679,20 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 //					std::cout << " adding to open ";
 //					std::cout << double(theHeuristic->HCost(neighbors[x], goal)+openClosedList.Lookup(nodeid).g+edgeCosts[x]);
 //					std::cout << " \n";
+					double tentativeG = openClosedList.Lookup(nodeid).g+edgeCosts[x];
+					// Dominance check before HCost: pruned nodes skip the
+					// (expensive) heuristic and are never stored.
+					if (generatePruner && generatePruner(neighbors[x], tentativeG))
+						break;
 					double h = theHeuristic->HCost(neighbors[x], goal);
+					// Upper-bound check (needs h)
+					if (fPruner && fPruner(neighbors[x], tentativeG, h))
+						break;
+					uint64_t newID;
 					if (useBPMX)
 					{
 						h = std::max(h, openClosedList.Lookup(nodeid).h-edgeCosts[x]);
-						openClosedList.AddOpenNode(neighbors[x],
+						newID = openClosedList.AddOpenNode(neighbors[x],
 												   neighborHash[x],
 												   phi(std::max(h, openClosedList.Lookup(nodeid).h-edgeCosts[x]), openClosedList.Lookup(nodeid).g+edgeCosts[x]),
 												   openClosedList.Lookup(nodeid).g+edgeCosts[x],
@@ -668,13 +700,15 @@ bool TemplateAStar<state,action,environment,openList>::DoSingleSearchStep(std::v
 												   nodeid);
 					}
 					else {
-						openClosedList.AddOpenNode(neighbors[x],
+						newID = openClosedList.AddOpenNode(neighbors[x],
 												   neighborHash[x],
 												   phi(h, openClosedList.Lookup(nodeid).g+edgeCosts[x]),
 												   openClosedList.Lookup(nodeid).g+edgeCosts[x],
 												   h,
 												   nodeid);
 					}
+					if (onOpenAdded)
+						onOpenAdded(newID);
 //					if (loc == -1)
 //					{ // duplicate edges
 //						neighborLoc[x] = kOpenList;

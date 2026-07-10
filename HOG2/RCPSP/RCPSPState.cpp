@@ -2027,6 +2027,124 @@ bool RCPSPState_TT::operator==(const RCPSPState_TT &other) const {
          activity_nodes == other.activity_nodes &&
          resource_nodes == other.resource_nodes;
 }
+
+// ============================================================================
+// Serial-SGS upper bound (--ub-prune)
+// ============================================================================
+// Builds feasible schedules with a serial schedule-generation scheme under
+// several priority rules (LFT, LST, MTS, LPT, GRD — cf. Liu et al. 2023 §3.5)
+// and returns the best makespan. The value is the makespan of an actual
+// feasible schedule, hence a valid upper bound on the optimum.
+// Assumes PSPLIB numbering: activity ids are topologically ordered
+// (every predecessor id < successor id), as relied on elsewhere (CP DP).
+
+// One serial SGS pass: schedule activities one at a time, always the eligible
+// activity with the smallest (key, id); each is started at the earliest time
+// that respects predecessor finishes and per-period resource capacity.
+static int runSerialSGS(const std::vector<double> &key) {
+  const int n = (int)RCPSPex.activities.size();
+  const int numRes = (int)RCPSPex.resources.size();
+
+  int horizon = 1;
+  for (const auto &act : RCPSPex.activities) horizon += act.duration;
+
+  // remaining capacity per resource per time period
+  static thread_local std::vector<std::vector<short>> cap;
+  cap.assign(numRes, {});
+  for (int k = 0; k < numRes; ++k)
+    cap[k].assign(horizon, RCPSPex.resources[k].second);
+
+  std::vector<int> finish(n + 1, -1); // finish[i] >= 0 once scheduled
+  int scheduled = 0, makespan = 0;
+
+  while (scheduled < n) {
+    int best = -1;
+    for (int i = 1; i <= n; ++i) {
+      if (finish[i] >= 0) continue;
+      bool eligible = true;
+      for (short p : RCPSPex.backword_dependencies[i - 1])
+        if (finish[p] < 0) { eligible = false; break; }
+      if (!eligible) continue;
+      if (best == -1 || key[i] < key[best] || (key[i] == key[best] && i < best))
+        best = i;
+    }
+
+    const int d = RCPSPex.activities[best - 1].duration;
+    int es = 0;
+    for (short p : RCPSPex.backword_dependencies[best - 1])
+      es = std::max(es, finish[p]);
+
+    int t = es;
+    if (d > 0) {
+      for (;;) {
+        bool fits = true;
+        for (int k = 0; k < numRes && fits; ++k) {
+          const short dem = demandByRes[best][k];
+          if (dem == 0) continue;
+          for (int tau = t; tau < t + d; ++tau)
+            if (cap[k][tau] < dem) { t = tau + 1; fits = false; break; }
+        }
+        if (fits) break;
+      }
+      for (int k = 0; k < numRes; ++k) {
+        const short dem = demandByRes[best][k];
+        if (dem == 0) continue;
+        for (int tau = t; tau < t + d; ++tau)
+          cap[k][tau] -= dem;
+      }
+    }
+
+    finish[best] = t + d;
+    makespan = std::max(makespan, finish[best]);
+    ++scheduled;
+  }
+  return makespan;
+}
+
+int computeSGSUpperBound() {
+  const int n = (int)RCPSPex.activities.size();
+  const int numRes = (int)RCPSPex.resources.size();
+  if (!demandMatrixInitialized) initializeDemandMatrix();
+
+  int horizon = 1;
+  for (const auto &act : RCPSPex.activities) horizon += act.duration;
+
+  // Backward CPM pass for LF (ids topologically ordered => reverse id order)
+  std::vector<int> LF(n + 1, horizon);
+  for (int i = n; i >= 1; --i) {
+    int minSuccLS = horizon;
+    for (short s : RCPSPex.dependencies[i - 1])
+      minSuccLS = std::min(minSuccLS, LF[s] - (int)RCPSPex.activities[s - 1].duration);
+    LF[i] = minSuccLS;
+  }
+
+  // Total-successor counts for MTS via reverse-topological bitset union
+  std::vector<std::bitset<MAX_ACTIVITIES>> succSet(n + 1);
+  for (int i = n; i >= 1; --i)
+    for (short s : RCPSPex.dependencies[i - 1]) {
+      succSet[i].set(s);
+      succSet[i] |= succSet[s];
+    }
+
+  // Priority keys, all phrased as "smaller = schedule first"
+  std::vector<double> lft(n + 1), lst(n + 1), mts(n + 1), lpt(n + 1), grd(n + 1);
+  for (int i = 1; i <= n; ++i) {
+    const int d = RCPSPex.activities[i - 1].duration;
+    double work = 0;
+    for (int k = 0; k < numRes; ++k) work += (double)d * demandByRes[i][k];
+    lft[i] = LF[i];
+    lst[i] = LF[i] - d;
+    mts[i] = -(double)succSet[i].count();
+    lpt[i] = -(double)d;
+    grd[i] = -work;
+  }
+
+  int best = INT_MAX;
+  for (const auto *key : {&lft, &lst, &mts, &lpt, &grd})
+    best = std::min(best, runSerialSGS(*key));
+  return best;
+}
+
 // ============================================================================
 // TT2 — TTPNR (Lublin, Atzmon, Cohen — SoCS 2026)
 // All code below sourced verbatim from origin/ido.

@@ -40,6 +40,9 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 | `--heuristic H` | `cp` (Critical Path), `lbcs` (Lower Bound CS), `lbcc` (Lower Bound CC) | cp |
 | `--dp` | Use DP preprocessing for heuristic (default) | enabled |
 | `--no-dp` | Disable DP preprocessing (use original heuristic) | |
+| `--dominance` | Cutset-style dominance pruning at node generation (TT2 only) | disabled |
+| `--dominance-pop` | `--dominance` + re-check when a node is popped for expansion | disabled |
+| `--ub-prune` | Prune `g+h > UB` using a root serial-SGS schedule (TT2 only) | disabled |
 | `--output-folder F` | Output folder path | data |
 | `--output-file F` | Output filename | auto-generated |
 | `--tag TAG` | Tag to append to filename | (none) |
@@ -71,7 +74,9 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 
 Results are written as CSV to the `data/` folder. Use `--output-folder` or `--output-file` to customize.
 
-CSV columns: `Group, Exam, Time, Solved, Makespan, NodesExpanded, NodesTouched, PathLength, Method, ProblemType, Heuristic`
+CSV columns: `Group, Exam, Time, Solved, Makespan, NodesExpanded, NodesTouched, PathLength, Method, ProblemType, Heuristic` — TT2 rows append `dominance_pruned, dominance_pop_pruned, ub_pruned`.
+
+Note: each Driver invocation truncates its output CSV at startup — use one output file per invocation when batching runs.
 
 The Heuristic column includes DP status (e.g., `CP_DP` or `CP_NoDP`).
 

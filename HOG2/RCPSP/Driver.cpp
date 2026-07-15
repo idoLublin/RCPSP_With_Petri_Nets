@@ -57,6 +57,15 @@ bool useDominancePop = false;
 // UB is still found by the search itself).
 bool useUBPrune = false;
 
+// Dominance rules DR3/DR4 (Liu, Jin, Zhou & Hu 2023), TT2 only. Default off;
+// --dr3/--dr4. Checked inside RCPSP_TT2::GetSuccessors (need sibling context).
+// DR3 is structurally inert in the SM2 model (kept for parity); DR4 is the
+// effective one (child-generation dominance). Counters reset per instance.
+bool useDR3 = false;
+bool useDR4 = false;
+uint64_t dr3Pruned = 0;
+uint64_t dr4Pruned = 0;
+
 // Global optimal makespan map for validation
 std::map<std::pair<int,int>, int> optimalMakespan;
 
@@ -171,6 +180,8 @@ void printUsage(const char* programName) {
               << "  --dominance        Enable cutset-style dominance pruning (TT2 only)\n"
               << "  --dominance-pop    Dominance pruning + pop-time re-check (implies --dominance)\n"
               << "  --ub-prune         Prune g+h > UB from a root SGS schedule (TT2 only)\n"
+              << "  --dr3              Dominance rule 3: node-branching dominance (TT2; inert in SM2)\n"
+              << "  --dr4              Dominance rule 4: child-generation dominance (TT2)\n"
               << "  --use-cs           [DEPRECATED] Same as --heuristic lbcs\n"
               << "  --no-cs            [DEPRECATED] Same as --heuristic cp\n"
               << "  --no-sort          Disable result sorting\n"
@@ -281,6 +292,10 @@ Config parseArgs(int argc, char* argv[]) {
             useDominancePop = true;
         } else if (arg == "--ub-prune") {
             useUBPrune = true;
+        } else if (arg == "--dr3") {
+            useDR3 = true;
+        } else if (arg == "--dr4") {
+            useDR4 = true;
         } else if (arg == "--diagnose") {
             config.diagnose = true;
         } else if (arg == "--no-header") {
@@ -554,6 +569,10 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     // returned 50 vs optimum 49 without it; correct 49 with it).
     astar.SetReopenNodes(true);
 
+    // Reset per-instance DR3/DR4 counters (globals read inside GetSuccessors).
+    dr3Pruned = 0;
+    dr4Pruned = 0;
+
     // Cutset-style dominance pruning (DominanceTT2.h). The table lives on the
     // stack of this solve call, so per-instance freshness is automatic.
     TT2DominanceTable domTable;
@@ -656,6 +675,10 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     if (useUBPrune) {
         std::cout << "UB pruned: " << ubPruned << " (UB=" << ubValue << ")" << std::endl;
     }
+    if (useDR3 || useDR4) {
+        std::cout << "Dominance rules: dr3Pruned=" << dr3Pruned
+                  << " dr4Pruned=" << dr4Pruned << std::endl;
+    }
     {
         struct rusage ru;
         getrusage(RUSAGE_SELF, &ru);
@@ -676,7 +699,9 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
          << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag << ","
          << domTable.pruned << ","
          << domTable.popPruned << ","
-         << ubPruned
+         << ubPruned << ","
+         << dr3Pruned << ","
+         << dr4Pruned
          << "\n";
 
     return 0;
@@ -867,7 +892,7 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
 // ============================================================================
 // Columns 12-14 (dominance_pruned, dominance_pop_pruned, ub_pruned) are
 // written by the TT2 solver only; TP/TT rows end after Heuristic.
-const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,dominance_pruned,dominance_pop_pruned,ub_pruned";
+const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,dominance_pruned,dominance_pop_pruned,ub_pruned,dr3_pruned,dr4_pruned";
 
 // ============================================================================
 // Main Solver Runner

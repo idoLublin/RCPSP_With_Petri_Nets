@@ -9,6 +9,8 @@
 #include "HeuristicTypes.h"
 #include "../utils//GLUtil.h"
 #include <functional>
+#include <algorithm>
+#include <climits>
 
 using namespace P_RCPSP;
 
@@ -43,6 +45,13 @@ double computeLBIP0(int currentMakespan);
 // Forward declarations for LBrc heuristic (Klein & Scholl 1999, LB2)
 void initializeLBRC();
 double computeLBRC(int currentMakespan);
+
+// Dominance rules DR3/DR4 (Liu, Jin, Zhou & Hu 2023), TT2 only. Default off;
+// toggled by --dr3/--dr4. Counters defined in Driver.cpp, reset per instance.
+extern bool useDR3;
+extern bool useDR4;
+extern uint64_t dr3Pruned;
+extern uint64_t dr4Pruned;
 
 // Global DP toggle (defined in Driver.cpp)
 extern bool useDPHeuristic;
@@ -907,6 +916,81 @@ inline RCPSP_TT2::RCPSP_TT2() {
 }
 
 
+// DR3/DR4 helper (Liu, Jin, Zhou & Hu 2023, adapted to the TT2 SM2 model with no
+// transfer times, multi-capacity resources). Sound "non-delaying" test:
+//
+//   cand is non-delaying  <=>  cand FINISHES (deltaCand + p_cand) no later than
+//   the earliest possible START of every other unscheduled activity h that
+//   shares at least one resource with cand.
+//
+// If cand completes before any resource-sharing activity could start, its
+// resource usage overlaps nobody, so scheduling it at its earliest offset can
+// delay nothing (non-sharers are unaffected; cand's own successors only benefit
+// from cand starting as early as possible). This mirrors BOTH lines of the
+// paper's condition (*): eligible sharers h use their computed earliest offset
+// s1_h (from availAtParent); NOT-yet-eligible sharers use a precedence-only DP
+// lower bound on their start (the recurrence getForwardHcostDP uses) - the line
+// the previous (unsound) implementation dropped. Conservative vs the paper's
+// unit-capacity closed form: costs pruning power, never correctness.
+// All offsets are relative to the parent's current time g(alpha).
+inline bool tt2_isNonDelaying(const RCPSPState_TT2 &parent, short cand, short deltaCand,
+                              const std::vector<std::pair<short, short>> &availAtParent) {
+  const int n = (int)petri.Transitions.size();
+  const int candFinish = (int)deltaCand + RCPSPex.activities[cand - 1].duration;
+
+  // 1. Demand bitmask per activity over the K (<=4) resources; resource order
+  //    follows RCPSPex.resources. Built per call: O(n*K) with tiny K.
+  const int K = (int)RCPSPex.resources.size();
+  static thread_local std::vector<uint8_t> resMask;
+  resMask.assign(n + 1, 0);
+  for (int k = 0; k < K; ++k) {
+    const std::string &resName = RCPSPex.resources[k].first;
+    for (int id = 1; id <= n; ++id) {
+      const auto &dem = RCPSPex.activities[id - 1].resource_demands;
+      auto it = dem.find(resName);
+      if (it != dem.end() && it->second > 0) resMask[id] |= (uint8_t)(1u << k);
+    }
+  }
+  const uint8_t candMask = resMask[cand];
+  if (candMask == 0) return true; // uses no resources -> cannot block anyone
+
+  // 2. Residual remaining time for active tasks (for the DP below).
+  static thread_local std::array<short, MAX_ACTIVITIES> activeRemaining;
+  activeRemaining.fill(-1);
+  for (const auto &[id, remaining] : parent.activeTransitionIndices)
+    activeRemaining[id] = remaining;
+
+  // 3. Eligible activities' earliest offsets (paper's s1_h) for quick lookup.
+  static thread_local std::array<int, MAX_ACTIVITIES> eligibleOffset;
+  eligibleOffset.fill(-1);
+  for (const auto &[h, dh] : availAtParent) eligibleOffset[h] = dh;
+
+  // 4. Precedence-only earliest-start DP over unscheduled activities (ids are
+  //    in topological order, same recurrence as getForwardHcostDP):
+  //    estStart[h] = max over preds (finished -> 0, active -> remaining,
+  //                                  unscheduled -> estStart[pred] + p_pred).
+  static thread_local std::array<int, MAX_ACTIVITIES> estStart;
+  for (int id = 1; id <= n; ++id) {
+    if (parent.finishedActivitiys[id] != 0 || activeRemaining[id] != -1) continue; // scheduled
+    int s = 0;
+    for (int dep : RCPSPex.backword_dependencies[id - 1]) {
+      int predFinish;
+      if (parent.finishedActivitiys[dep] != 0)      predFinish = 0;
+      else if (activeRemaining[dep] != -1)          predFinish = activeRemaining[dep];
+      else                                          predFinish = estStart[dep] + RCPSPex.activities[dep - 1].duration;
+      if (predFinish > s) s = predFinish;
+    }
+    estStart[id] = s;
+
+    // 5. The non-delaying check, fused into the same pass: h unscheduled,
+    //    shares a resource with cand -> cand must finish by h's earliest start.
+    if (id == cand || (resMask[id] & candMask) == 0) continue;
+    const int startLB = (eligibleOffset[id] >= 0) ? eligibleOffset[id] : estStart[id];
+    if (candFinish > startLB) return false;
+  }
+  return true;
+}
+
 inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
   //auto startS1 = std::chrono::high_resolution_clock::now();
   // Scratch vector reused across calls (search is single-threaded per instance)
@@ -932,8 +1016,41 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
+  // DR3 (node-branching dominance): prune this node if some eligible activity
+  // could be scheduled strictly before the just-scheduled activity j(node)
+  // without delaying others. In the SM2/earliest-feasible model j(node) started
+  // at the current time and every eligible offset is >= 0, so s2_i >= s_{j(node)}
+  // always -> the condition (offset < 0) never holds. Flag-gated + counted for
+  // parity with the paper; dr3Pruned stays 0 by construction (see verification).
+  if (useDR3 && !avilableTransitionIndices.empty()) {
+    for (const auto &[i, di] : avilableTransitionIndices) {
+      if (di < 0 && tt2_isNonDelaying(nodeID, i, di, avilableTransitionIndices)) {
+        ++dr3Pruned;
+        neighbors.clear();
+        return;
+      }
+    }
+  }
+
+  // DR4 (child-generation dominance): if a non-delaying activity i* can start
+  // strictly earlier than a candidate l, then branching on l is dominated by
+  // branching on i* -> skip child l. deltaStar = smallest earliest-offset that is
+  // non-delaying (found by scanning candidates in increasing offset); children
+  // with offset > deltaStar are pruned. The earliest survivors are always kept,
+  // so >= 1 child remains and the search stays complete.
+  int deltaStar = INT_MAX;
+  if (useDR4 && avilableTransitionIndices.size() > 1) {
+    std::vector<std::pair<short, short>> byOffset(avilableTransitionIndices);
+    std::sort(byOffset.begin(), byOffset.end(),
+              [](const std::pair<short,short> &a, const std::pair<short,short> &b){ return a.second < b.second; });
+    for (const auto &[i, di] : byOffset) {
+      if (tt2_isNonDelaying(nodeID, i, di, avilableTransitionIndices)) { deltaStar = di; break; }
+    }
+  }
+
   neighbors.reserve(neighbors.size() + avilableTransitionIndices.size());
   for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+    if (useDR4 && Timedelta > deltaStar) { ++dr4Pruned; continue; }
     neighbors.emplace_back(nodeID, transId, Timedelta, 1);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();

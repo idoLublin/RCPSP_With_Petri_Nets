@@ -9,6 +9,11 @@
 #include "../utils//GLUtil.h"
 #include <functional>
 #include "petriclasses.h"
+#include "DominanceCBS.h"   // DR5 cutset dominance (guarded by setting.use_dr5)
+
+// h returned for a DR5-dominated node: large enough that A* never expands it,
+// finite so nothing downstream trips on inf arithmetic.
+inline constexpr double DR5_DOMINATED_H = 1e9;
 // #include "Globals.h"
 using namespace P_RCPSP;
 
@@ -2123,6 +2128,32 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       neighbors.emplace_back(nodeID, actIdx, nodeID.t);
     }
   }
+  // Bell & Park (1990) state dominance against the global table, checked ONCE per
+  // generated child — their Descendants procedure, Line 8:
+  //   IF New-RVST-and-Sched-Set(...) And Not(State-Dominated(...)) THEN keep
+  // A dominated child is dropped outright, so it is never added to OPEN and never
+  // expanded. Off unless setting.use_dr5.
+  if (setting.use_dr5) {
+    // Parent's (A_s, RVST). nodeID.compute_h_and_RVS() has already run (HCost).
+    const CBSCutsetKey<N> pkey = cbs_cutset_key<N>(nodeID, RCPSPex.activities);
+    for (int i = 0; i < (int)neighbors.size(); ) {
+      neighbors[i].compute_h_and_RVS();          // sets t_first / A_s for the child
+      bool drop = false;
+      if (neighbors[i].found_conflict) {         // conflict-free child is a goal — never prune
+        const CBSCutsetKey<N> ckey = cbs_cutset_key<N>(neighbors[i], RCPSPex.activities);
+        // Descendants Line 8: only a child whose RVST AND scheduled set both differ
+        // from the parent's is a real state to remember and compare. Anything else is
+        // an intermediate state — skip it entirely, or the parent (always <= its own
+        // child) would dominate it and wipe out the subtree.
+        const bool is_real_descendant = (ckey.rvst != pkey.rvst) && !(ckey.bits == pkey.bits);
+        if (is_real_descendant)
+          drop = get_cbs_dominance_table<N>().check_and_insert(neighbors[i], RCPSPex.activities);
+      }
+      if (drop) neighbors.erase(neighbors.begin() + i);
+      else      i++;
+    }
+  }
+
 if (setting.use_dominance){
     // Dominance pruning
     auto dominates = [](const RCPSPState_CBS<N>& a, const RCPSPState_CBS<N>& b) {
@@ -2207,8 +2238,15 @@ template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   // std::cout << "H: ";
   // return .0;
-  return state1.compute_h_and_RVS();//return h_cost
+  const double h = state1.compute_h_and_RVS();//return h_cost
 
+  // NOTE: the Bell & Park dominance check used to live here. It was moved to
+  // GetSuccessors (see below) because TemplateAStar calls HCost an unpredictable
+  // number of times per node, and the check both reads AND writes the table — so
+  // table contents depended on A*'s evaluation order rather than on which states
+  // were actually generated. B&P check dominance once per generated child, in
+  // their Descendants procedure; GetSuccessors is the faithful place for it.
+  return h;
 
   // return state1.h_cost;
 }

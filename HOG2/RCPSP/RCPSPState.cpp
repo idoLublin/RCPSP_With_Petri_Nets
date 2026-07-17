@@ -3658,8 +3658,13 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
             this->t      = best_t;
             resourceType = best_resource;
             found_conflict = true;
+            // DR5: here the branched-on conflict IS the earliest one.
+            t_first = best_t;
+            first_conflict_pool = rvs_activities_pool;
         } else {
             found_conflict = false;
+            t_first = -1;
+            first_conflict_pool.clear();
         }
         return 0;
     }
@@ -3676,6 +3681,11 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
     ConflictKey<N>        best_key;
     std::vector<short> best_jobs;
     bool         found_any     = false;
+    // DR5: earliest conflict, tracked alongside the prioritized one. The scan below
+    // is exhaustive (the score==1 early-exits are commented out), so the true
+    // minimum over all conflicts is seen.
+    short        first_t       = std::numeric_limits<short>::max();
+    std::vector<short> first_jobs;
     std::vector<std::pair<std::vector<short>, short>> cardinal_conflicts;
     // std::vector<std::pair<short,short>> cardinal_pairs;
     std::vector<MDA> best_mdas;
@@ -3710,6 +3720,9 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
             }
 
             if (total_demand <= res.capacity) continue;
+            // DR5: a real conflict at time t — remember the earliest one seen,
+            // independently of how it scores for prioritization.
+            if (t < first_t) { first_t = t; first_jobs = current_jobs; }
             // std::cout << resIdx <<":"<<t<< std::endl;
             //
             // for (short job: current_jobs){
@@ -3882,6 +3895,9 @@ done:
     t              = best_t;
     resourceType   = best_resource;
     found_conflict = found_any;
+    // DR5: the earliest conflict, which may differ from the prioritized one above.
+    t_first        = found_any ? first_t : (short)-1;
+    first_conflict_pool = std::move(first_jobs);
     is_size2_conflict = (best_jobs.size() == 2);
     rvs_activities_pool = std::move(best_jobs);
     conflict_solutions = std::move(best_mdas);

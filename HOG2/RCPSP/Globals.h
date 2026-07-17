@@ -144,7 +144,8 @@ struct CBSConfig {
     bool use_conflict_prioritization = true;
     bool use_first_conflict          = false;
     bool use_ancestor_branching          = false;
-    bool use_dominance          = false;
+    bool use_dominance          = false;   // existing: sibling-only pruning among a parent's children
+    bool use_dr5                = false;   // DR5 cutset dominance vs. a global table (DominanceCBS.h)
     bool use_pair_decomposition         = false;
     bool use_greed_conflic_resultion_asstimation=false;
     bool use_MDA_sets=true;

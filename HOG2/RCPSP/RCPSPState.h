@@ -278,10 +278,17 @@ template<short N>
 class RCPSPState_CBS {
 public:
     std::array<short, N> start_times;
-     mutable short t;
+     mutable short t;                    // time of the conflict CBS branches on (prioritized, or first)
      mutable short resourceType;
      mutable bool  found_conflict      = false;
      mutable short conflict_number=0;
+
+     // DR5 (DominanceCBS.h): the EARLIEST conflict, tracked separately from the
+     // branched-on conflict above. The schedule is conflict-free before t_first,
+     // so t_first — not t — is the time the cutset reduction is taken at. Kept
+     // independent of prioritization so DR5 works in either conflict mode.
+     mutable short t_first = -1;                      // earliest conflict time (t*), -1 if none
+     mutable std::vector<short> first_conflict_pool;  // participants of the earliest conflict
 
      mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
 

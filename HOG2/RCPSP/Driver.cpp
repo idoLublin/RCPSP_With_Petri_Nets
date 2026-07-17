@@ -1206,6 +1206,7 @@ template<int N>
 int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const std::string& problemType) {
     debug_cardinal_num = 0;
     reset_mda_cache<N>();
+    get_cbs_dominance_table<N>().clear();   // DR5 table is per-instance
     getRCPSP(RCPSPex, group, exam, problemType);
     resource_info.clear();
     downstream.clear();
@@ -1834,6 +1835,135 @@ void runNonMinimalDelayTest() {
     std::cout << "\nResults: " << filename << "\n";
 }
 
+// Sweep one exam across a range of parameter groups, into a single CSV. Walks the
+// whole NC x RF x RS grid quickly instead of grinding exam-by-exam through group 1,
+// which is what correctness validation actually needs.
+void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam) {
+    applyConfigNum(cfg);
+    std::string f = getNextFilename("new_results",
+        "output_sweep_" + ptype + "_cfg" + std::to_string(cfg) + "_e" + std::to_string(exam) + "_", ".csv");
+    { std::ofstream h(f);
+      h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+        << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
+        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+    for (int g = startG; g <= endG; g++) {
+        std::cout << "\n=== sweep cfg" << cfg << " group " << g << " exam " << exam << " ===\n";
+        solveRCPSP_CBS(g, exam, f, ptype);
+    }
+    std::cout << "\nsweep done -> " << f << std::endl;
+}
+
+// ── DR5/B&P dominance diagnostics ────────────────────────────────────────────
+// solve_from_state: exact optimal makespan of the subtree rooted at an arbitrary
+// state, with dominance OFF. Lets us test the dominance CLAIM directly:
+// "S dominates S'" asserts optimum(S) <= optimum(S'). Any dumped pair violating
+// that is a concrete counterexample to the rule as implemented.
+template<short N>
+int solve_from_state(const std::vector<int>& starts) {
+    const bool saved = setting.use_dr5;
+    setting.use_dr5 = false;
+    reset_mda_cache<N>();
+
+    RCPSP_CBS<N> env;
+    RCPSPState_CBS<N> s;
+    for (int i = 0; i < (int)starts.size() && i < N; i++) s.start_times[i] = (short)starts[i];
+    // Repair precedence consistency. A no-op for real dumped states (already
+    // consistent, and propagate only pushes forward), but it makes hand-built
+    // test vectors legal instead of silently garbage.
+    s.propagate(0);
+    s.rvs_activities_pool.clear();
+    s.added_precedences.clear();
+
+    RCPSPState_CBS<N> goal = s;
+    goal.start_times[g_sink_id] = 0;
+    goal.resourceType = -1;
+    goal.rvs_activities_pool.clear();
+
+    TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> astar;
+    std::vector<RCPSPState_CBS<N>> path;
+    astar.GetPath(&env, s, goal, path);
+
+    const int sink = (int)RCPSPex.activities.size() - 1;
+    const RCPSPState_CBS<N>& fin = path.empty() ? s : path.back();
+    setting.use_dr5 = saved;
+    return fin.start_times[sink] + RCPSPex.activities[sink].duration;
+}
+
+// Driver_x verifydom <type> <group> <exam> <cfg> <pairsfile>
+void runVerifyDom(const std::string& ptype, int group, int exam, int cfg,
+                  const std::string& pairsFile) {
+    setProblemSize(ptype);
+    getRCPSP(RCPSPex, group, exam, ptype);
+    resource_info.clear(); downstream.clear(); upstream.clear();
+    precomputeDownstream(); precomputeUpstream(); precomputeResourceInfo();
+    applyConfigNum(cfg);
+
+    // SELF-TEST the instrument before trusting it. Solving from the root must
+    // reproduce the known optimum; solving from a deliberately delayed schedule
+    // must get worse. If either fails, solve_from_state is ignoring the start
+    // times it is given and any "0 violations" verdict is meaningless.
+    {
+        // The genuine root is the default-constructed state's earliest-start
+        // schedule, NOT an all-zeros vector (which violates precedence).
+        RCPSPState_CBS<32> rootState;
+        std::vector<int> root(RCPSPex.activities.size());
+        for (int i = 0; i < (int)root.size(); i++) root[i] = rootState.start_times[i];
+
+        int optRoot = solve_from_state<32>(root);
+        int known   = getOptimalMakespan(group, exam, ptype);
+
+        std::vector<int> shifted = root;
+        shifted[1] = root[1] + 15;             // pin activity 1 late; must not help
+        int optShifted = solve_from_state<32>(shifted);
+
+        std::cout << "[self-test] optimum(root)=" << optRoot << "  known optimum=" << known
+                  << "  optimum(act1 pinned +15)=" << optShifted << std::endl;
+        if (optRoot != known)
+            std::cout << "[self-test] FAIL: cannot reproduce the known optimum from the root — "
+                         "verifier is unsound, ignore its verdict.\n";
+        else if (optShifted < optRoot)
+            std::cout << "[self-test] FAIL: pinning IMPROVED the makespan — start_times ignored.\n";
+        else
+            std::cout << "[self-test] PASS: verifier reproduces the optimum and respects start_times.\n";
+    }
+
+    std::ifstream in(pairsFile);
+    if (!in.is_open()) { std::cerr << "cannot open " << pairsFile << "\n"; return; }
+
+    auto parse = [](const std::string& csv) {
+        std::vector<int> v; std::stringstream ss(csv); std::string tok;
+        while (std::getline(ss, tok, ',')) if (!tok.empty()) v.push_back(std::atoi(tok.c_str()));
+        return v;
+    };
+
+    std::string line;
+    int checked = 0, violations = 0;
+    while (std::getline(in, line)) {
+        if (line.empty()) continue;
+        std::stringstream ss(line);
+        std::string rvstS, domS, prunedS;
+        std::getline(ss, rvstS, ';'); std::getline(ss, domS, ';'); std::getline(ss, prunedS, ';');
+        std::vector<int> dom = parse(domS), pruned = parse(prunedS);
+        if (dom.empty() || pruned.empty()) continue;
+
+        int optDom    = solve_from_state<32>(dom);
+        int optPruned = solve_from_state<32>(pruned);
+        ++checked;
+        if (checked <= 8)
+            std::cout << "pair " << checked << ": optimum(dominating)=" << optDom
+                      << "  optimum(pruned)=" << optPruned << "\n";
+        if (optDom > optPruned) {
+            ++violations;
+            std::cout << "VIOLATION #" << violations << "  rvst=" << rvstS
+                      << "  optimum(dominating)=" << optDom
+                      << " > optimum(pruned)=" << optPruned << "\n";
+            std::cout << "  dominating: " << domS << "\n  pruned    : " << prunedS << "\n";
+            if (violations >= 3) break;
+        }
+    }
+    std::cout << "\nverifydom: checked=" << checked << " violations=" << violations << std::endl;
+}
+
 int main(int argc, char* argv[]) {
     // Usage:
     //   Driver_bench <size> <cfg>    — CBS: single config, for parallel runs
@@ -1844,9 +1974,52 @@ int main(int argc, char* argv[]) {
     //
     // <size> : j30 | j60 | j90 | j120
     // <cfg>  : 1..8  (1=Baseline, 2=Prio, 3=H, 4=MDA, 5=Prio+H, 6=Prio+MDA, 7=H+MDA, 8=All)
+    //
+    // env RCPSP_DR5=1 : enable DR5 cutset dominance (DominanceCBS.h) on top of the
+    //                   chosen config. Off by default, and applyConfig() never touches
+    //                   it, so the 8 configs above are unchanged unless this is set.
+    //                   Env rather than a flag because argv is positional here.
+    // Rule selection is independent of the on/off flag, so it also applies to the
+    // diagnostic modes below (which enable dominance directly).
+    if (const char* r = std::getenv("RCPSP_DOM_RULE")) {
+        const std::string rs(r);
+        g_dom_rule = (rs == "dr5")  ? DOM_DR5
+                   : (rs == "dr5s") ? DOM_DR5S
+                   : (rs == "both") ? DOM_BOTH
+                                    : DOM_BP;
+    }
+    if (const char* e = std::getenv("RCPSP_DR5")) {
+        setting.use_dr5 = (std::atoi(e) != 0);
+        std::cout << "State dominance: " << (setting.use_dr5 ? "ON" : "OFF") << "  rule="
+                  << (g_dom_rule == DOM_DR5 ? "DR5" : g_dom_rule == DOM_DR5S ? "DR5S"
+                      : g_dom_rule == DOM_BOTH ? "B&P+DR5S" : "Bell&Park")
+                  << std::endl;
+    }
     if (argc >= 2) {
         std::string arg1 = argv[1];
-        if (arg1 == "nmd_test") {
+        if (arg1 == "sweep") {
+            // sweep <type> <cfg> <startGroup> <endGroup> <exam>
+            if (argc < 7) { std::cerr << "Usage: sweep <type> <cfg> <startG> <endG> <exam>\n"; return 1; }
+            runSweep(argv[2], std::atoi(argv[3]), std::atoi(argv[4]), std::atoi(argv[5]), std::atoi(argv[6]));
+        } else if (arg1 == "dumpdom") {
+            // dumpdom <type> <group> <exam> <cfg> <outfile> — run one instance with
+            // dominance ON, appending every prune pair to <outfile>.
+            if (argc < 7) { std::cerr << "Usage: dumpdom <type> <group> <exam> <cfg> <outfile>\n"; return 1; }
+            applyConfigNum(std::atoi(argv[5]));
+            setting.use_dr5 = true;
+            g_dom_dump_path = argv[6];
+            std::remove(g_dom_dump_path.c_str());
+            std::string f = getNextFilename("new_results", "output_dumpdom_", ".csv");
+            { std::ofstream h(f); h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
+                 << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
+                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+            solveRCPSP_CBS(std::atoi(argv[3]), std::atoi(argv[4]), f, argv[2]);
+            std::cout << "prune pairs -> " << g_dom_dump_path << std::endl;
+        } else if (arg1 == "verifydom") {
+            // verifydom <type> <group> <exam> <cfg> <pairsfile>
+            if (argc < 7) { std::cerr << "Usage: verifydom <type> <group> <exam> <cfg> <pairsfile>\n"; return 1; }
+            runVerifyDom(argv[2], std::atoi(argv[3]), std::atoi(argv[4]), std::atoi(argv[5]), argv[6]);
+        } else if (arg1 == "nmd_test") {
             runNonMinimalDelayTest();
         } else if (arg1 == "resume") {
             // Usage: Driver_bench resume <problemType> <cfg> <startGroup> <startExam>

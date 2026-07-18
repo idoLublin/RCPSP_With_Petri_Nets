@@ -3608,63 +3608,95 @@ template<short N>
 void reset_mda_cache() {
     get_mda_cache<N>().clear();
 }
+// Light scan: earliest conflict only, no scoring/MDA work. Sweep-line per
+// resource: activities enter the running set at their start, leave at their
+// finish, and demand is maintained incrementally — O(K log K) per resource
+// instead of the old O(events x K) rescan. Visit order (resources ascending,
+// event times ascending, strict-< improvement with early break) is IDENTICAL
+// to the original first-conflict scan, so it finds the exact same conflict.
+template<short N>
+bool RCPSPState_CBS<N>::compute_first_conflict(short& res_out) const {
+    short best_t        = std::numeric_limits<short>::max();
+    short best_resource = -1;
+    std::vector<short> best_jobs;
+
+    std::vector<short> events, by_start, by_finish;
+    std::vector<char>  running;
+
+    for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
+        const ResourceInfo& res = resource_info[resIdx];
+        const int K = (int)res.activity_indices.size();
+        if (K == 0) continue;
+
+        auto startOf  = [&](short j) { return start_times[res.activity_indices[j]]; };
+        auto finishOf = [&](short j) {
+            return (short)(start_times[res.activity_indices[j]] +
+                           RCPSPex.activities[res.activity_indices[j]].duration);
+        };
+
+        events.clear();
+        by_start.resize(K); by_finish.resize(K);
+        running.assign(K, 0);
+        for (short j = 0; j < K; j++) {
+            events.push_back(startOf(j));
+            by_start[j] = by_finish[j] = j;
+        }
+        std::sort(events.begin(), events.end());
+        events.erase(std::unique(events.begin(), events.end()), events.end());
+        std::sort(by_start.begin(),  by_start.end(),  [&](short a, short b){ return startOf(a)  < startOf(b);  });
+        std::sort(by_finish.begin(), by_finish.end(), [&](short a, short b){ return finishOf(a) < finishOf(b); });
+
+        int p = 0, q = 0;
+        short demand = 0;
+        for (short t : events) {
+            if (t >= best_t) break; // can't beat current best in this resource
+
+            while (q < K && finishOf(by_finish[q]) <= t) {   // retire finished
+                short j = by_finish[q++];
+                if (running[j]) { running[j] = 0; demand -= res.demands[j]; }
+            }
+            while (p < K && startOf(by_start[p]) <= t) {     // admit started
+                short j = by_start[p++];
+                if (finishOf(j) > t) { running[j] = 1; demand += res.demands[j]; }
+            }
+
+            if (demand <= res.capacity) continue;
+
+            // Earliest conflict across all resources. Materialize members in
+            // ascending activity_indices order — same as the old rescan built.
+            best_t        = t;
+            best_resource = (short)resIdx;
+            best_jobs.clear();
+            for (short j = 0; j < K; j++)
+                if (running[j]) best_jobs.push_back(res.activity_indices[j]);
+            break; // earliest in this resource found, move to next
+        }
+    }
+
+    if (best_resource != -1) {
+        t_first = best_t;
+        first_conflict_pool = std::move(best_jobs);
+        res_out = best_resource;
+        return true;
+    }
+    t_first = -1;
+    first_conflict_pool.clear();
+    return false;
+}
+
 template<short N>
 short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
     if (!setting.use_conflict_prioritization && setting.use_first_conflict) {
         rvs_activities_pool.clear();
-        short best_t        = std::numeric_limits<short>::max();
-        short best_resource = -1;
-        std::vector<short> best_jobs;
-
-        for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
-            const ResourceInfo& res = resource_info[resIdx];
-
-            std::vector<short> events;
-            events.reserve(res.activity_indices.size());
-            for (short actIdx : res.activity_indices)
-                events.push_back(start_times[actIdx]);
-            std::sort(events.begin(), events.end());
-            events.erase(std::unique(events.begin(), events.end()), events.end());
-
-            for (short t : events) {
-                if (t >= best_t) break; // can't beat current best in this resource
-
-                short total_demand = 0;
-                std::vector<short> current_jobs;
-
-                for (int j = 0; j < (int)res.activity_indices.size(); j++) {
-                    short actIdx = res.activity_indices[j];
-                    short start  = start_times[actIdx];
-                    short finish = start + RCPSPex.activities[actIdx].duration;
-                    if (start <= t && finish > t) {
-                        total_demand += res.demands[j];
-                        current_jobs.push_back(actIdx);
-                    }
-                }
-
-                if (total_demand <= res.capacity) continue;
-
-                // Earliest conflict across all resources
-                best_t        = t;
-                best_resource = resIdx;
-                best_jobs     = std::move(current_jobs);
-                break; // earliest in this resource found, move to next
-            }
-        }
-
-        if (best_resource != -1) {
-            rvs_activities_pool = std::move(best_jobs);
-            this->t      = best_t;
-            resourceType = best_resource;
+        short res_out = -1;
+        if (compute_first_conflict(res_out)) {
+            rvs_activities_pool = first_conflict_pool;
+            this->t        = t_first;
+            resourceType   = res_out;
             found_conflict = true;
-            // DR5: here the branched-on conflict IS the earliest one.
-            t_first = best_t;
-            first_conflict_pool = rvs_activities_pool;
         } else {
             found_conflict = false;
-            t_first = -1;
-            first_conflict_pool.clear();
         }
         return 0;
     }
@@ -3690,36 +3722,59 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
     // std::vector<std::pair<short,short>> cardinal_pairs;
     std::vector<MDA> best_mdas;
 
-    // conflict searching
+    // conflict searching — sweep-line per resource (see compute_first_conflict):
+    // running set and demand maintained incrementally across ascending events
+    // instead of rescanning every activity per event. Visit order and the
+    // materialized current_jobs (ascending activity_indices order) are IDENTICAL
+    // to the original rescan, so scoring and tie-breaks are unchanged.
+    std::vector<short> sweep_events, sweep_by_start, sweep_by_finish;
+    std::vector<char>  sweep_running;
+    std::vector<short> current_jobs;
 
     for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
         const ResourceInfo& res = resource_info[resIdx];
+        const int K = (int)res.activity_indices.size();
+        if (K == 0) continue;
 
-        std::vector<short> events;
-        events.reserve(res.activity_indices.size());
-        for (short actIdx : res.activity_indices)
-            events.push_back(start_times[actIdx]);
-        std::sort(events.begin(), events.end());
-        events.erase(std::unique(events.begin(), events.end()), events.end());
+        auto startOf  = [&](short j) { return start_times[res.activity_indices[j]]; };
+        auto finishOf = [&](short j) {
+            return (short)(start_times[res.activity_indices[j]] +
+                           RCPSPex.activities[res.activity_indices[j]].duration);
+        };
 
-        for (short t : events) {
+        sweep_events.clear();
+        sweep_by_start.resize(K); sweep_by_finish.resize(K);
+        sweep_running.assign(K, 0);
+        for (short j = 0; j < K; j++) {
+            sweep_events.push_back(startOf(j));
+            sweep_by_start[j] = sweep_by_finish[j] = j;
+        }
+        std::sort(sweep_events.begin(), sweep_events.end());
+        sweep_events.erase(std::unique(sweep_events.begin(), sweep_events.end()), sweep_events.end());
+        std::sort(sweep_by_start.begin(),  sweep_by_start.end(),  [&](short a, short b){ return startOf(a)  < startOf(b);  });
+        std::sort(sweep_by_finish.begin(), sweep_by_finish.end(), [&](short a, short b){ return finishOf(a) < finishOf(b); });
 
-            std::vector<short> current_jobs;
-            current_jobs.clear();
-            short total_demand = 0;
+        int sweep_p = 0, sweep_q = 0;
+        short total_demand = 0;
 
-            for (int j = 0; j < (int)res.activity_indices.size(); j++) {
-                short actIdx = res.activity_indices[j];
-                short start  = start_times[actIdx];
-                short finish = start + RCPSPex.activities[actIdx].duration;
+        for (short t : sweep_events) {
 
-                if (start <= t && finish > t) {
-                    total_demand += res.demands[j];
-                    current_jobs.push_back(actIdx);
-                }
+            while (sweep_q < K && finishOf(sweep_by_finish[sweep_q]) <= t) {   // retire finished
+                short j = sweep_by_finish[sweep_q++];
+                if (sweep_running[j]) { sweep_running[j] = 0; total_demand -= res.demands[j]; }
+            }
+            while (sweep_p < K && startOf(sweep_by_start[sweep_p]) <= t) {     // admit started
+                short j = sweep_by_start[sweep_p++];
+                if (finishOf(j) > t) { sweep_running[j] = 1; total_demand += res.demands[j]; }
             }
 
             if (total_demand <= res.capacity) continue;
+
+            // conflict: materialize members in ascending activity_indices order
+            // (same order the old rescan produced)
+            current_jobs.clear();
+            for (short j = 0; j < K; j++)
+                if (sweep_running[j]) current_jobs.push_back(res.activity_indices[j]);
             // DR5: a real conflict at time t — remember the earliest one seen,
             // independently of how it scores for prioritization.
             if (t < first_t) { first_t = t; first_jobs = current_jobs; }
@@ -3770,9 +3825,20 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 }
                 float score = mdas.empty() ? 0.0f : (float)cardinal_count / (float)mdas.size();
 
-                bool is_better = !found_any
-                    || (setting.use_conflict_prioritization && (score > best_score))
-                    || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                bool is_better;
+                if (g_use_hybrid && setting.use_conflict_prioritization && found_any) {
+                    // Hybrid: cardinality only decides between cardinal (score==1)
+                    // and non-cardinal conflicts; among non-cardinals branch on the
+                    // EARLIEST (advances t*, keeps dominance eligible).
+                    const bool cand_card = (score >= 1.0f), best_card = (best_score >= 1.0f);
+                    if (cand_card != best_card) is_better = cand_card;
+                    else if (cand_card)         is_better = (t < best_t);
+                    else                        is_better = (t < best_t);
+                } else {
+                    is_better = !found_any
+                        || (setting.use_conflict_prioritization && (score > best_score))
+                        || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                }
                 if (setting.use_conflict_prioritization && score == 1.0f) {
                     cardinal_conflicts.push_back({current_jobs, min_cardinal_cost});
                 }
@@ -3833,9 +3899,16 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 // else                                           type = ConflictType::NON_CARDINAL;
                 float score = (float)costly / (float)current_jobs.size();
                 conflict_number++;
-                bool is_better = !found_any
-                    || (setting.use_conflict_prioritization && score > best_score)
-                    || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                bool is_better;
+                if (g_use_hybrid && setting.use_conflict_prioritization && found_any) {
+                    const bool cand_card = (score >= 1.0f), best_card = (best_score >= 1.0f);
+                    if (cand_card != best_card) is_better = cand_card;
+                    else                        is_better = (t < best_t);
+                } else {
+                    is_better = !found_any
+                        || (setting.use_conflict_prioritization && score > best_score)
+                        || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                }
                 if (is_better) {
                     best_jobs     = current_jobs;
                     best_t        = t;
@@ -4686,6 +4759,49 @@ bool RCPSPState_CBS<N>::isLeftShiftable() const {
     }
     return false;
 }
+template<short N>
+bool RCPSPState_CBS<N>::left_shift_prunable() const {
+    if (t_first < 0) return false;
+    const int n = (int)RCPSPex.activities.size();
+    for (int i = 0; i < n; i++) {
+        const short dur = RCPSPex.activities[i].duration;
+        if (dur == 0) continue;                       // dummies (source/sink)
+        const short s = start_times[i];
+        if (s == 0) continue;
+        if (s + dur > t_first) continue;              // not in the scheduled set
+
+        // precedence-earliest (predecessors are also scheduled-set => frozen)
+        short earliest = 0;
+        for (short dep : RCPSPex.backword_dependencies[i]) {
+            int d = dep - 1;
+            earliest = std::max(earliest,
+                (short)(start_times[d] + RCPSPex.activities[d].duration));
+        }
+        if (s <= earliest) continue;                  // no idle gap
+
+        // one-unit shift feasible? need spare capacity at time s-1 on every
+        // resource i uses. Usage at s-1 only decreases in descendants (starts
+        // only grow), so feasible-now implies feasible-forever.
+        bool ok = true;
+        for (int r = 0; r < (int)resource_info.size() && ok; r++) {
+            const ResourceInfo& res = resource_info[r];
+            auto it = res.demand_lookup.find((short)i);
+            if (it == res.demand_lookup.end() || it->second == 0) continue;
+            short usage = 0;
+            for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+                short a = res.activity_indices[j];
+                if ((int)a == i) continue;
+                short sa = start_times[a];
+                if (sa <= s - 1 && sa + RCPSPex.activities[a].duration > s - 1)
+                    usage += res.demands[j];
+            }
+            if (usage + it->second > res.capacity) ok = false;
+        }
+        if (ok) return true;    // persistent gap + feasible shift => prunable
+    }
+    return false;
+}
+
 template<short N>
 bool RCPSPState_CBS<N>::dominates(const RCPSPState_CBS& other) const {
     for (int i = 0; i < RCPSPex.activities.size(); i++)

@@ -188,7 +188,12 @@ inline size_t getcomper3(const RCPSPState_BAP& state, double g) {
 // size_t getcomper2(const RCPSPState_CBS& state) {
 // 	return state.RVS.size();
 //}
-std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+// ido lublin: per-search wall-clock limit. The deadline is re-armed at the top
+// of every InitializeSearch from astar_timeout_seconds, so this initializer is
+// only a fallback; set astar_timeout_seconds (e.g. from env RCPSP_TIMEOUT_S in
+// the driver) BEFORE GetPath to change the per-instance budget.
+long long astar_timeout_seconds = 300;
+std::chrono::steady_clock::time_point timeout = std::chrono::steady_clock::now() + std::chrono::seconds(300);
 //ido lublin 28.4 A*
 
 
@@ -500,7 +505,7 @@ template <class state, class action, class environment, class openList>
 bool TemplateAStar<state,action,environment,openList>::InitializeSearch(environment *_env, const state& from, const state& to, std::vector<state> &thePath)
 {
 	//****ido lublin 10.4.25 timeout
-	timeout = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+	timeout = std::chrono::steady_clock::now() + std::chrono::seconds(astar_timeout_seconds);
 	//***************
 
 

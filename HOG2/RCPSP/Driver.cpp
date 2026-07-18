@@ -54,6 +54,7 @@ namespace fs = std::filesystem;
 
 void runBenchmark(const std::string& problemType);
 void runSingleConfig(const std::string& problemType, int configNum);
+inline int serialSGS_makespan();   // feasible-schedule UB seed (defined below)
 void runBenchmarkTT2(const std::string& problemType);
 void applyConfigNum(int n);
 void runConfigResume(const std::string& filename, const std::string& problemType, int startGroup, int startExam);
@@ -1214,6 +1215,17 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     precomputeDownstream();
     precomputeUpstream();
     precomputeResourceInfo();
+
+    // ── Upper-bound pruning: per-instance reset + SGS seed ──
+    g_incumbent = std::numeric_limits<short>::max();
+    g_ub_pruned = 0;
+    LB = 0;   // proven-LB accumulator (TemplateAStar: LB = max(LB, popped f))
+    if (g_use_ub) {
+        int sgs = serialSGS_makespan();
+        if (sgs > 0) g_incumbent = (short)sgs;
+        std::cout << "UB seed (SGS): " << sgs << std::endl;
+    }
+
     RCPSP_CBS<N> as1;
 
     RCPSPState_CBS<N> first;
@@ -1232,6 +1244,26 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     long peakMemKB = getPeakMemoryKB();
 
     int makespan = 0;
+
+    // ── UB: no goal popped, but if OPEN exhausted (not timeout) under an
+    // incumbent, every subtree with makespan >= incumbent was soundly pruned
+    // and the incumbent schedule itself is therefore optimal. On timeout,
+    // report the proven LB / incumbent-UB gap.
+    bool ub_exhaust_optimal = false;
+    if (g_use_ub && path.empty() && !first.rvs_activities_pool.empty()) {
+        const bool timed_out = elapsed.count() >= 0.98 * (double)astar_timeout_seconds;
+        if (!timed_out && g_incumbent < std::numeric_limits<short>::max()) {
+            makespan = g_incumbent;
+            ub_exhaust_optimal = true;
+            std::cout << "UB-exhaust: OPEN emptied under incumbent " << (int)g_incumbent
+                      << " -> incumbent is optimal (ub_pruned=" << g_ub_pruned << ")\n";
+        } else if (timed_out) {
+            short root_mk = first.start_times[g_sink_id];
+            std::cout << "TIMEOUT gap: LB=" << (root_mk + LB) << " UB="
+                      << (g_incumbent == std::numeric_limits<short>::max() ? -1 : (int)g_incumbent)
+                      << " (ub_pruned=" << g_ub_pruned << ")\n";
+        }
+    }
 
     if (!path.empty() || first.rvs_activities_pool.empty()) {
         RCPSPState_CBS<N>& finalState = path.empty() ? first : path.back();
@@ -1268,7 +1300,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
 
     if (problemType == "j30") {
         int opt = getOptimalMakespan(group, exam, problemType);
-        bool solved = (!path.empty() || first.rvs_activities_pool.empty());
+        bool solved = (!path.empty() || first.rvs_activities_pool.empty() || ub_exhaust_optimal);
         bool correct = (makespan == opt);
 
         file << (correct ? "True" : "False") << ","
@@ -1426,7 +1458,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
         }
     } else {
         Bounds b = getBounds(group, exam, problemType);
-        bool solved = (!path.empty() || first.rvs_activities_pool.empty());
+        bool solved = (!path.empty() || first.rvs_activities_pool.empty() || ub_exhaust_optimal);
         bool correct = b.optimal_known ? (makespan == b.lb) : (makespan >= b.lb && makespan <= b.ub);
 
         file << (b.optimal_known ? (correct ? "True" : "False") : "Unknown") << ","
@@ -1443,7 +1475,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
         }
     }
     file << p.NC << "," << p.RF << "," << p.RS << ","
-         << ((!path.empty() || first.rvs_activities_pool.empty()) ? "True" : "False") << ","
+         << ((!path.empty() || first.rvs_activities_pool.empty() || ub_exhaust_optimal) ? "True" : "False") << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
@@ -1835,6 +1867,84 @@ void runNonMinimalDelayTest() {
     std::cout << "\nResults: " << filename << "\n";
 }
 
+// Serial SGS with latest-start priority: builds a FEASIBLE schedule (precedence
+// + resources respected) and returns its makespan — a valid upper bound for the
+// incumbent. Activities are placed in precedence-feasible order, each at its
+// earliest resource-feasible start. O(n^2 * horizon) worst case, run once per
+// instance at the root.
+inline int serialSGS_makespan() {
+    const int n = (int)RCPSPex.activities.size();
+    if (n == 0) return 0;
+
+    // CPM latest starts (priority rule): reuse a forward pass for horizon.
+    std::vector<int> es(n, 0);
+    for (int i = 0; i < n; i++)                       // PSPLIB order: preds have smaller index
+        for (int dep : RCPSPex.backword_dependencies[i]) {
+            int d = dep - 1;
+            es[i] = std::max(es[i], es[d] + RCPSPex.activities[d].duration);
+        }
+    int horizon = 0;
+    for (int i = 0; i < n; i++) horizon += std::max(1, (int)RCPSPex.activities[i].duration);
+
+    std::vector<int> ls(n, horizon);
+    ls[n-1] = es[n-1];                                // schedule sink by CPM as anchor for priorities
+    for (int i = n - 2; i >= 0; i--) {
+        int m = horizon;
+        for (int succ : RCPSPex.dependencies[i]) m = std::min(m, ls[succ - 1]);
+        ls[i] = m - RCPSPex.activities[i].duration;
+    }
+
+    // resource usage over time
+    const int R = (int)resource_info.size();
+    std::vector<std::vector<short>> used(R, std::vector<short>(horizon + 1, 0));
+
+    std::vector<int> start(n, -1);
+    std::vector<char> done(n, 0);
+    for (int placed = 0; placed < n; placed++) {
+        // pick unscheduled activity with all preds scheduled, min latest start
+        int pick = -1;
+        for (int i = 0; i < n; i++) {
+            if (done[i]) continue;
+            bool ready = true;
+            for (int dep : RCPSPex.backword_dependencies[i])
+                if (!done[dep - 1]) { ready = false; break; }
+            if (ready && (pick == -1 || ls[i] < ls[pick])) pick = i;
+        }
+        if (pick == -1) return -1;                    // shouldn't happen (DAG)
+
+        int t0 = 0;
+        for (int dep : RCPSPex.backword_dependencies[pick]) {
+            int d = dep - 1;
+            t0 = std::max(t0, start[d] + RCPSPex.activities[d].duration);
+        }
+        const int dur = RCPSPex.activities[pick].duration;
+        // demands of `pick` per resource
+        std::vector<short> dem(R, 0);
+        for (int r = 0; r < R; r++) {
+            auto it = resource_info[r].demand_lookup.find((short)pick);
+            if (it != resource_info[r].demand_lookup.end()) dem[r] = it->second;
+        }
+        int t = t0;
+        while (true) {
+            bool ok = true;
+            for (int r = 0; r < R && ok; r++) {
+                if (dem[r] == 0) continue;
+                for (int u = t; u < t + dur; u++)
+                    if (used[r][u] + dem[r] > resource_info[r].capacity) { ok = false; break; }
+            }
+            if (ok) break;
+            t++;
+            if (t + dur > horizon) return -1;         // defensive; horizon is sufficient
+        }
+        start[pick] = t;
+        done[pick] = 1;
+        for (int r = 0; r < R; r++)
+            if (dem[r] > 0)
+                for (int u = t; u < t + dur; u++) used[r][u] += dem[r];
+    }
+    return start[n-1] + RCPSPex.activities[n-1].duration;
+}
+
 // Sweep one exam across a range of parameter groups, into a single CSV. Walks the
 // whole NC x RF x RS grid quickly instead of grinding exam-by-exam through group 1,
 // which is what correctness validation actually needs.
@@ -1988,6 +2098,29 @@ int main(int argc, char* argv[]) {
                    : (rs == "both") ? DOM_BOTH
                                     : DOM_BP;
     }
+    // Optional cap on dominance-table entries per table (memory bound); the table
+    // keeps checking above the cap, it just stops storing. 0 or negative = unlimited.
+    if (const char* c = std::getenv("RCPSP_DOM_CAP")) {
+        long cap = std::atol(c);
+        g_dom_store_cap = (cap > 0) ? cap : std::numeric_limits<long>::max();
+    }
+    // Per-instance wall-clock budget (seconds); default 300 as on the server.
+    // Local testing uses smaller values so heavy instances stay cheap.
+    if (const char* t = std::getenv("RCPSP_TIMEOUT_S")) {
+        long long ts = std::atoll(t);
+        if (ts > 0) { astar_timeout_seconds = ts; std::cout << "Timeout: " << ts << "s\n"; }
+    }
+    // Experiment flags (all default off; see Globals.h)
+    if (const char* e = std::getenv("RCPSP_UB"))        g_use_ub        = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_LEFTSHIFT")) g_use_leftshift = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_BIDIR"))     g_use_bidir     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_HYBRID"))    g_use_hybrid    = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_LEAN"))      g_use_lean      = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_HGREED"))    setting.use_greed_conflic_resultion_asstimation = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_INLINE"))    g_use_inline    = std::atoi(e) != 0;
+    if (g_use_ub || g_use_leftshift || g_use_bidir || g_use_hybrid)
+        std::cout << "Experiments: UB=" << g_use_ub << " LEFTSHIFT=" << g_use_leftshift
+                  << " BIDIR=" << g_use_bidir << " HYBRID=" << g_use_hybrid << std::endl;
     if (const char* e = std::getenv("RCPSP_DR5")) {
         setting.use_dr5 = (std::atoi(e) != 0);
         std::cout << "State dominance: " << (setting.use_dr5 ? "ON" : "OFF") << "  rule="

@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <limits>
 #include "petriclasses.h"
 
 using namespace P_RCPSP;
@@ -175,5 +176,22 @@ inline CBSConfig       setting;
 // ── Debug ─────────────────────────────────────────────────────────
 inline long            debug_cardinal_num = 0;
 inline bool            allcorrect         = true;
+
+// ── Upper-bound pruning (env RCPSP_UB=1) ─────────────────────────
+// g_incumbent: makespan of the best FEASIBLE schedule known (SGS seed at the
+// root, tightened whenever a conflict-free child appears). Children whose
+// makespan >= g_incumbent are dropped (B&P Descendants Line 4): propagate only
+// pushes forward, so their whole subtree is >= incumbent, which we already hold.
+// If OPEN exhausts without a goal, the incumbent IS the optimum.
+inline bool  g_use_ub     = false;
+inline short g_incumbent  = std::numeric_limits<short>::max();
+inline long  g_ub_pruned  = 0;
+
+// ── Experiment flags (each off by default; env-driven) ───────────
+inline bool  g_use_leftshift = false;  // RCPSP_LEFTSHIFT=1: drop left-shiftable children
+inline bool  g_use_bidir     = false;  // RCPSP_BIDIR=1: new states also kill dominated stored states
+inline bool  g_use_hybrid    = false;  // RCPSP_HYBRID=1: prio falls back to earliest conflict when best score < 1
+inline bool  g_use_lean      = false;  // RCPSP_LEAN=1: strip conflict vectors from OPEN/CLOSED copies (memory for time)
+inline bool  g_use_inline    = false;  // RCPSP_INLINE=1: expand intermediate children in place (B&P Descendants recursion)
 
 #endif // GLOBALS_H

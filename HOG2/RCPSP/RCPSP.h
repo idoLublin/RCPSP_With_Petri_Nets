@@ -2093,39 +2093,76 @@ static const std::array<short, 32> optimal_37_1 = {
 template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
-  if (setting.use_MDA_sets) {
-    if (setting.use_MDA_cache) {
-      // nodeID.computeLatestStarts(latest_starts);
-      // need current_jobs for cost — reconstruct from key? or store separately?
-      if (setting.use_strong_constraints && nodeID.is_size2_conflict) {
-        short A = nodeID.rvs_activities_pool[0];
-        short B = nodeID.rvs_activities_pool[1];
-        neighbors.emplace_back(nodeID, A, B, nodeID.t);
-        neighbors.emplace_back(nodeID, B, A, nodeID.t);
-      }
-      else{
-        const auto& sets = get_mda_cache<N>().at(nodeID.conflict_key);      // std::array<short, N> latest_starts = {};
-        for (const auto& set : sets) {
-           neighbors.emplace_back(nodeID, set, nodeID.t);
+  // Bidirectional dominance: a state whose table entry was retired by a later
+  // dominating state expands to nothing — its subtree is covered elsewhere.
+  if (g_use_bidir && setting.use_dr5 &&
+      get_cbs_dominance_table<N>().is_killed(nodeID))
+    return;
+
+  // Self-heal: states enter OPEN with their heavy conflict vectors stripped
+  // (see HCost). Recompute them on demand at expansion; deterministic, so the
+  // regenerated fields are identical to what was stripped.
+  if (nodeID.found_conflict && nodeID.rvs_activities_pool.empty())
+    nodeID.compute_h_and_RVS();
+
+  // Child generation for one parent, shared by the normal path and the inline
+  // (B&P Descendants) recursion below. Requires parent's full conflict fields.
+  auto gen_children = [](const RCPSPState_CBS<N>& par, std::vector<RCPSPState_CBS<N>>& out) {
+    if (setting.use_MDA_sets) {
+      if (setting.use_MDA_cache) {
+        if (setting.use_strong_constraints && par.is_size2_conflict) {
+          short A = par.rvs_activities_pool[0];
+          short B = par.rvs_activities_pool[1];
+          out.emplace_back(par, A, B, par.t);
+          out.emplace_back(par, B, A, par.t);
         }
+        else {
+          const auto& sets = get_mda_cache<N>().at(par.conflict_key);
+          for (const auto& set : sets)
+            out.emplace_back(par, set, par.t);
+        }
+      }
+      else {
+        for (const MDA& mda : par.conflict_solutions)
+          out.emplace_back(par, mda.activities, par.t);
       }
     }
     else {
-      for (const MDA& mda : nodeID.conflict_solutions) {
-        neighbors.emplace_back(nodeID, mda.activities, nodeID.t);
-      }
+      if (par.rvs_activities_pool.empty()) return;
+      std::span<const short> acts = par.rvs_activities_pool;
+      for (short j = 0; j < (short)par.rvs_activities_pool.size(); j++)
+        out.emplace_back(par, acts[j], par.t);
     }
+  };
 
-  }
-  else {
-    if (nodeID.rvs_activities_pool.empty()) return;
+  gen_children(nodeID, neighbors);
 
-    std::span<const short> acts = nodeID.rvs_activities_pool;
-
-    // Generate children
-    for (short j = 0; j < nodeID.rvs_activities_pool.size(); j++) {
-      short actIdx = acts[j];
-      neighbors.emplace_back(nodeID, actIdx, nodeID.t);
+  // RCPSP_INLINE: B&P's Descendants recursion. An intermediate child (same
+  // RVST and scheduled set as the expanded node) is not enqueued to OPEN —
+  // it is expanded in place, and only REAL descendants (or goals) are emitted.
+  // Local dedup by exact start_times; depth-bounded with a sound fallback
+  // (emit as a normal child) if the intermediate layer explodes.
+  if (g_use_inline && (setting.use_MDA_sets ? true : !nodeID.rvs_activities_pool.empty())) {
+    const CBSCutsetKey<N> ipkey = cbs_cutset_key<N>(nodeID, RCPSPex.activities);
+    std::vector<RCPSPState_CBS<N>> work = std::move(neighbors);
+    neighbors.clear();
+    std::unordered_set<std::array<short, N>, CBSStateArrHash<N>> seen;
+    size_t inlined = 0;
+    const size_t INLINE_LIMIT = 4096;
+    while (!work.empty()) {
+      RCPSPState_CBS<N> s = std::move(work.back());
+      work.pop_back();
+      if (!seen.insert(s.start_times).second) continue;      // local duplicate
+      if (g_use_ub && s.start_times[g_sink_id] >= g_incumbent) { ++g_ub_pruned; continue; }
+      short ru = -1;
+      const bool hc = s.compute_first_conflict(ru);
+      if (!hc) { neighbors.push_back(std::move(s)); continue; }   // goal child
+      const CBSCutsetKey<N> ck = cbs_cutset_key<N>(s, RCPSPex.activities);
+      const bool real = (ck.rvst != ipkey.rvst) && !(ck.bits == ipkey.bits);
+      if (real || ++inlined > INLINE_LIMIT) { neighbors.push_back(std::move(s)); continue; }
+      // intermediate: expand in place (needs the branched-on conflict => full scan)
+      s.compute_h_and_RVS();
+      gen_children(s, work);
     }
   }
   // Bell & Park (1990) state dominance against the global table, checked ONCE per
@@ -2133,25 +2170,54 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   //   IF New-RVST-and-Sched-Set(...) And Not(State-Dominated(...)) THEN keep
   // A dominated child is dropped outright, so it is never added to OPEN and never
   // expanded. Off unless setting.use_dr5.
-  if (setting.use_dr5) {
+  if (setting.use_dr5 || g_use_ub || g_use_leftshift) {
     // Parent's (A_s, RVST). nodeID.compute_h_and_RVS() has already run (HCost).
-    const CBSCutsetKey<N> pkey = cbs_cutset_key<N>(nodeID, RCPSPex.activities);
-    for (int i = 0; i < (int)neighbors.size(); ) {
-      neighbors[i].compute_h_and_RVS();          // sets t_first / A_s for the child
+    const CBSCutsetKey<N> pkey = setting.use_dr5
+        ? cbs_cutset_key<N>(nodeID, RCPSPex.activities) : CBSCutsetKey<N>{};
+    size_t w = 0;   // compaction write index (single pass, no O(k^2) erase)
+    for (size_t i = 0; i < neighbors.size(); i++) {
       bool drop = false;
-      if (neighbors[i].found_conflict) {         // conflict-free child is a goal — never prune
-        const CBSCutsetKey<N> ckey = cbs_cutset_key<N>(neighbors[i], RCPSPex.activities);
-        // Descendants Line 8: only a child whose RVST AND scheduled set both differ
-        // from the parent's is a real state to remember and compare. Anything else is
-        // an intermediate state — skip it entirely, or the parent (always <= its own
-        // child) would dominate it and wipe out the subtree.
-        const bool is_real_descendant = (ckey.rvst != pkey.rvst) && !(ckey.bits == pkey.bits);
-        if (is_real_descendant)
-          drop = get_cbs_dominance_table<N>().check_and_insert(neighbors[i], RCPSPex.activities);
+
+      // UB pruning (B&P Descendants Line 4): propagate only pushes start times
+      // forward, so every solution in this child's subtree has makespan >= the
+      // child's own — and we already hold a feasible schedule at g_incumbent.
+      if (g_use_ub && neighbors[i].start_times[g_sink_id] >= g_incumbent) {
+        drop = true; ++g_ub_pruned;
       }
-      if (drop) neighbors.erase(neighbors.begin() + i);
-      else      i++;
+
+      if (!drop) {
+        // LIGHT scan only: the dominance key needs just t_first + the earliest
+        // conflict pool + start_times. The full compute_h_and_RVS (scoring, MDA,
+        // heuristic) runs later — via HCost, and only for children A* actually
+        // keeps as new nodes. Duplicates that A* will discard never pay for it.
+        short res_unused = -1;
+        const bool has_conflict = neighbors[i].compute_first_conflict(res_unused);
+        if (!has_conflict) {
+          // conflict-free child = feasible schedule: tighten the incumbent,
+          // and keep the child (it is a goal for A*) — never prune it.
+          if (g_use_ub)
+            g_incumbent = std::min(g_incumbent, neighbors[i].start_times[g_sink_id]);
+        } else if (g_use_leftshift && neighbors[i].left_shift_prunable()) {
+          // Persistent precedence-idle gap with a feasible shift: no descendant
+          // is an active schedule; a sibling branch holds the active optimum.
+          drop = true;
+        } else if (setting.use_dr5) {
+          const CBSCutsetKey<N> ckey = cbs_cutset_key<N>(neighbors[i], RCPSPex.activities);
+          // Descendants Line 8: only a child whose RVST AND scheduled set both differ
+          // from the parent's is a real state to remember and compare. Anything else is
+          // an intermediate state — skip it entirely, or the parent (always <= its own
+          // child) would dominate it and wipe out the subtree.
+          const bool is_real_descendant = (ckey.rvst != pkey.rvst) && !(ckey.bits == pkey.bits);
+          if (is_real_descendant)
+            drop = get_cbs_dominance_table<N>().check_and_insert(neighbors[i], RCPSPex.activities);
+        }
+      }
+      if (!drop) {
+        if (w != i) neighbors[w] = std::move(neighbors[i]);
+        w++;
+      }
     }
+    neighbors.resize(w);
   }
 
 if (setting.use_dominance){
@@ -2229,6 +2295,15 @@ if (setting.use_dominance){
     //             << std::endl;
     // }
   // }
+
+  // Lean mode: strip the (now-consumed) heavy vectors from the expanded
+  // node's CLOSED copy as well; the self-heal at the top regenerates them if
+  // this node is ever re-expanded.
+  if (g_use_lean) {
+    nodeID.rvs_activities_pool.clear();
+    nodeID.first_conflict_pool.clear();
+    nodeID.conflict_solutions.clear();
+  }
 }
 template<short N>
 inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const {
@@ -2238,7 +2313,22 @@ template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   // std::cout << "H: ";
   // return .0;
+  // compute_h_and_RVS is expensive and state-deterministic; cache its result so
+  // repeat HCost calls on the same state object (or copies of it) are free.
+  if (state1.h_cached) return state1.h_cache;
   const double h = state1.compute_h_and_RVS();//return h_cost
+  state1.h_cache  = h;
+  state1.h_cached = true;
+  // RCPSP_LEAN=1: strip the heavy per-conflict vectors before this state is
+  // copied into OPEN (TemplateAStar calls HCost right before AddOpenNode).
+  // GetSuccessors self-heals by recomputing at expansion; fields are state-
+  // deterministic, so the search is unchanged. Off by default: costs ~15-30%
+  // time for a modest memory cut (-4% cfg1, ~-23%/node on MDA-heavy configs).
+  if (g_use_lean) {
+    state1.rvs_activities_pool.clear();
+    state1.first_conflict_pool.clear();
+    state1.conflict_solutions.clear();
+  }
 
   // NOTE: the Bell & Park dominance check used to live here. It was moved to
   // GetSuccessors (see below) because TemplateAStar calls HCost an unpredictable

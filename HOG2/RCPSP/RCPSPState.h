@@ -290,6 +290,12 @@ public:
      mutable short t_first = -1;                      // earliest conflict time (t*), -1 if none
      mutable std::vector<short> first_conflict_pool;  // participants of the earliest conflict
 
+     // HCost cache: compute_h_and_RVS is expensive and state-deterministic, so
+     // the env caches its result here after the first call. Fresh child states
+     // start invalid (member initializer), so a copy never inherits a stale h.
+     mutable double h_cache  = 0;
+     mutable bool   h_cached = false;
+
      mutable std::vector<short> rvs_activities_pool; //activies in the conflict -- off if useing MDA
 
      mutable std::vector<MDA> conflict_solutions;//need to enable-- if we use MDA cache it stay empty
@@ -299,6 +305,16 @@ public:
      mutable  bool is_size2_conflict = false;
 
     short compute_h_and_RVS() const;
+
+    // Light scan: find ONLY the earliest resource conflict (t*, participants,
+    // resource) without any scoring/MDA work. Sets t_first/first_conflict_pool
+    // and returns whether a conflict exists; res_out gets the resource index
+    // (unchanged if no conflict). Deliberately does NOT touch t / resourceType /
+    // found_conflict / rvs_activities_pool — those belong to the branched-on
+    // conflict, written by the full compute_h_and_RVS. Semantics are identical
+    // to the earliest conflict the full scans find.
+    bool compute_first_conflict(short& res_out) const;
+
     void propagate_with_strong_form_0();
     short compute_start_recursive(short act, std::array<bool, N>& visited);
 
@@ -311,6 +327,16 @@ public:
     RCPSPState_CBS(const RCPSPState_CBS& prev, short from, short to, short conflict_t);
 
     bool isLeftShiftable() const;
+
+    // Sound left-shift pruning test (B&P/Schrage), restricted to what provably
+    // persists in every descendant: an activity of the SCHEDULED SET (finish <=
+    // t_first) idle w.r.t. its precedence-earliest start whose one-unit left
+    // shift is resource-feasible. Scheduled-set starts are frozen (future
+    // conflicts sit at t >= t_first) and usage at s-1 only decreases, so the
+    // gap never closes: no descendant is an active schedule. NOTE: unlike
+    // isLeftShiftable(), this checks RESOURCE feasibility of the shift —
+    // without it every CBS delay would be flagged.
+    bool left_shift_prunable() const;
     bool dominates(const RCPSPState_CBS& other) const;
     std::span<const short> get_conflict_activities(const Conflict& c) const {
         return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);

@@ -25,6 +25,7 @@
 #include "../../HOG2/generic/BAE.h"
 #include "RCPSP.h"
 #include "DominanceTT2.h"
+#include "DominanceTT.h"
 
 namespace fs = std::filesystem;
 
@@ -56,6 +57,15 @@ bool useDominancePop = false;
 // prune generated nodes with g + h > UB (strict, so an optimum equal to the
 // UB is still found by the search itself).
 bool useUBPrune = false;
+
+// Dominance pruning (TT only): port of Liu et al. (2023) dominance rules to the
+// TT (absolute-date) solver. --tt-dr enables all of DR1+DR2 (generation-time,
+// in RCPSP_TT::GetSuccessors) + DR5 (cutset table, DominanceTT.h) + the pop-time
+// DR5 re-check at once; the individual sub-flags exist for ablation/bisection.
+bool ttDR1 = false;
+bool ttDR2 = false;
+bool ttDR5 = false;
+bool ttDR5Pop = false;
 
 // Global optimal makespan map for validation
 std::map<std::pair<int,int>, int> optimalMakespan;
@@ -171,6 +181,9 @@ void printUsage(const char* programName) {
               << "  --dominance        Enable cutset-style dominance pruning (TT2 only)\n"
               << "  --dominance-pop    Dominance pruning + pop-time re-check (implies --dominance)\n"
               << "  --ub-prune         Prune g+h > UB from a root SGS schedule (TT2 only)\n"
+              << "  --tt-dr            Enable all Liu-style dominance rules DR1+DR2+DR5 (TT only)\n"
+              << "  --tt-dr1/2/5       Individual TT dominance sub-rules (for ablation)\n"
+              << "  --tt-dr5-pop       TT DR5 + pop-time re-check (implies --tt-dr5)\n"
               << "  --use-cs           [DEPRECATED] Same as --heuristic lbcs\n"
               << "  --no-cs            [DEPRECATED] Same as --heuristic cp\n"
               << "  --no-sort          Disable result sorting\n"
@@ -281,6 +294,21 @@ Config parseArgs(int argc, char* argv[]) {
             useDominancePop = true;
         } else if (arg == "--ub-prune") {
             useUBPrune = true;
+        } else if (arg == "--tt-dr" || arg == "--tt-dominance") {
+            // Combined: all Liu-style dominance rules for the TT solver.
+            ttDR1 = true;
+            ttDR2 = true;
+            ttDR5 = true;
+            ttDR5Pop = true;
+        } else if (arg == "--tt-dr1") {
+            ttDR1 = true;
+        } else if (arg == "--tt-dr2") {
+            ttDR2 = true;
+        } else if (arg == "--tt-dr5") {
+            ttDR5 = true;
+        } else if (arg == "--tt-dr5-pop") {
+            ttDR5 = true;   // pop check requires the table
+            ttDR5Pop = true;
         } else if (arg == "--diagnose") {
             config.diagnose = true;
         } else if (arg == "--no-header") {
@@ -467,6 +495,30 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
     // bound is admissible but inconsistent (observed: TT2+lbip0 on j30 g1 e9
     // returned 50 vs optimum 49 without it; correct 49 with it).
     astar.SetReopenNodes(true);
+
+    // DR1/DR2 generation-time dominance run inside RCPSP_TT::GetSuccessors
+    // (they need the parent's eligible set). Stack-local env => per-instance
+    // fresh counters.
+    as1.dr1Enabled = ttDR1;
+    as1.dr2Enabled = ttDR2;
+
+    // DR5 cutset-style dominance (DominanceTT.h). The table lives on this
+    // solve's stack, so per-instance freshness is automatic.
+    TTDominanceTable domTable;
+    if (ttDR5) {
+        astar.SetGeneratePruner([&domTable, &astar](const RCPSPState_TT &s, double g) {
+            return domTable.IsDominated(s, g, astar.openClosedList);
+        });
+        astar.SetOnOpenAdded([&domTable, &astar](uint64_t id) {
+            domTable.Insert(id, astar.openClosedList);
+        });
+        if (ttDR5Pop) {
+            astar.SetExpandPruner([&domTable, &astar](uint64_t id) {
+                return domTable.IsDominatedAtPop(id, astar.openClosedList);
+            });
+        }
+    }
+
     std::vector<RCPSPState_TT> path;
 
     std::chrono::duration<double> elapsed;
@@ -518,6 +570,21 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
 
     std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+    if (ttDR1 || ttDR2) {
+        std::cout << "DR1 pruned: " << as1.dr1Pruned
+                  << "  DR2 pruned: " << as1.dr2Pruned << std::endl;
+    }
+    if (ttDR5) {
+        std::cout << "TT DR5: pruned=" << domTable.pruned
+                  << " popPruned=" << domTable.popPruned
+                  << " checks=" << domTable.checks
+                  << " popChecks=" << domTable.popChecks
+                  << " comparisons=" << domTable.comparisons
+                  << " inserts=" << domTable.inserts
+                  << " thinned=" << domTable.thinned
+                  << " buckets=" << domTable.BucketCount()
+                  << " maxBucket=" << domTable.maxBucket << std::endl;
+    }
 
     std::string dpTag = useDPHeuristic ? "_DP" : "_NoDP";
     std::ofstream file(filename, std::ios::app);
@@ -529,7 +596,11 @@ int solveRCPSP_TT(int group, int exam, const std::string& filename, const std::s
          << path.size() << ","
          << "TT" << ","
          << problemType << ","
-         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag
+         << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag << ","
+         << as1.dr1Pruned << ","
+         << as1.dr2Pruned << ","
+         << domTable.pruned << ","
+         << domTable.popPruned
          << "\n";
 
     return 0;

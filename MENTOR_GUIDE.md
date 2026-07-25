@@ -106,7 +106,29 @@ for h in cp lbcs lbcc lbip0 lbmax; do
 done
 ```
 
-### 4.3 Time-limit knob
+### 4.3 TT with dominance rules (DR1 + DR2 + DR5)
+
+Same as the TT sweeps in §4.1 / §4.2, with `--tt-dr` added to turn the dominance rules on.
+
+```bash
+# j30 + TT + dominance (5 heuristics)
+for h in cp lbcs lbcc lbip0 lbmax; do
+    ./build/Driver --group-start 1 --group-end 48 \
+        --method tt --heuristic $h --problem-type j30 --tt-dr \
+        --output-folder data/real_data --tag mentor_j30_ttdr_$h
+done
+
+# j60 + TT + dominance (5 heuristics, slower)
+for h in cp lbcs lbcc lbip0 lbmax; do
+    ./build/Driver --group-start 1 --group-end 48 \
+        --method tt --heuristic $h --problem-type j60 --tt-dr \
+        --output-folder data/real_data --tag mentor_j60_ttdr_$h
+done
+```
+
+To run a single rule instead of all three, swap `--tt-dr` for one of `--tt-dr1`, `--tt-dr2`, `--tt-dr5`, or `--tt-dr5-pop`.
+
+### 4.4 Time-limit knob
 
 Default is **300 seconds per instance**. To give j60 instances more budget at the cost of total wall time:
 
@@ -114,7 +136,7 @@ Default is **300 seconds per instance**. To give j60 instances more budget at th
 ./build/Driver ... --time-limit 600   # 10 minutes per instance
 ```
 
-### 4.4 Running in `tmux` (recommended for long sweeps)
+### 4.5 Running in `tmux` (recommended for long sweeps)
 
 ```bash
 tmux new -s rcpsp

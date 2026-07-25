@@ -591,6 +591,14 @@ public:
   bool InvertAction(int &a) const;
   std::vector<RCPSPState_TT> GetSuccessors(const RCPSPState_TT &nodeID) const;
   double GCost(const RCPSPState_TT &node, const int &act) const override;
+
+  // DR1/DR2 generation-time dominance (Liu, Jin, Zhou & Hu, C&OR 151 (2023)
+  // 106097, dominance rules 1 & 2; see GetSuccessors). Counters are mutable
+  // because GetSuccessors is const; the search is single-threaded per instance.
+  bool dr1Enabled = false;
+  bool dr2Enabled = false;
+  mutable uint64_t dr1Pruned = 0;
+  mutable uint64_t dr2Pruned = 0;
 };
 
 inline RCPSP_TT::RCPSP_TT() {
@@ -622,7 +630,49 @@ inline void RCPSP_TT::GetSuccessors(const RCPSPState_TT &nodeID, std::vector<RCP
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
   neighbors.reserve(neighbors.size() + avilableTransitionIndices.size());
+
+  // DR1/DR2 generation-time dominance (Liu, Jin, Zhou & Hu, C&OR 151 (2023)
+  // 106097, dominance rules 1 & 2), adapted to TT's absolute-date SM2 firing.
+  //
+  // TT schedules each eligible activity at its earliest feasible absolute start
+  // `ef`. Liu's SM1 would instead place it at max(ef, prevStart), where
+  // prevStart is the start of the parent's last-scheduled activity. SM1 + DR2
+  // collapses: if ef < prevStart the SM1 placement is left-shiftable back to ef
+  // (non-active) and DR2 prunes it; every surviving child keeps ef unchanged, so
+  // no scheduler change is needed and the flag-off baseline is untouched.
+  //
+  //   DR2: prune child scheduling u at ef_u iff ef_u < prevStart (non-active).
+  //   DR1: prune child u iff ef_u == prevStart and u < prevId (a reordered
+  //        duplicate of the parent's last activity; canonical order breaks it).
+  //
+  // Together they force strictly increasing id within each equal-start group,
+  // giving Liu's one-to-one activity-list <-> active-schedule correspondence.
+  //
+  // (prevStart, prevId) derive from the parent state's absolute finish dates —
+  // no state fields added, so nothing leaks into the hash/equality identity.
+  short prevStart = -1, prevId = -1;
+  bool hasScheduled = false;
+  if (dr1Enabled || dr2Enabled) {
+    for (int i = 1; i <= petri.Transitions.size(); i++) {
+      if (nodeID.finishedActivitiys[i] == -1) continue;
+      hasScheduled = true;
+      short s_i = nodeID.finishedActivitiys[i] - petri.Transitions[i - 1].duration;
+      if (s_i > prevStart || (s_i == prevStart && i > prevId)) {
+        prevStart = s_i;
+        prevId = i;
+      }
+    }
+  }
+
   for (const auto& [transId, firingTime] : avilableTransitionIndices) {
+    if (dr2Enabled && hasScheduled && firingTime < prevStart) {
+      ++dr2Pruned;
+      continue;
+    }
+    if (dr1Enabled && hasScheduled && firingTime == prevStart && transId < prevId) {
+      ++dr1Pruned;
+      continue;
+    }
     neighbors.emplace_back(nodeID, transId, firingTime);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();

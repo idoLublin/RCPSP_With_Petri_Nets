@@ -83,6 +83,8 @@ def config_label(row):
     label = f"{row['model']} {row['heuristic']}"
     if row["config"] == "dom":
         label += " +dom"
+    elif row["config"] == "ttdr":
+        label += " +dr"
     elif row["config"].startswith("lber_"):
         label += f" ({row['config'].split('_')[1]})"
     return label
@@ -191,12 +193,17 @@ def main():
     ap.add_argument("--machine", default="university",
                     help="only rows from this machine ('all' disables); "
                          "default university")
+    ap.add_argument("--model", default="TT2",
+                    help="only rows from this model ('all' disables); default "
+                         "TT2 — TT-vs-TT2 figures come from compare_models.py")
     args = ap.parse_args()
 
     plt.rcParams.update(STYLE)
     rows = load(args.master)
     if args.machine != "all":
         rows = [r for r in rows if r.get("machine", "university") == args.machine]
+    if args.model != "all":
+        rows = [r for r in rows if r["model"] == args.model]
 
     best_by_set = {}
 

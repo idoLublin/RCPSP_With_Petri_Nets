@@ -74,6 +74,11 @@ def classify(path: Path):
         return f"lber_d{m.group('d')}", ""
     m = BASE_RE.match(name)
     if m:
+        # TT runs from the university machine encode the flavor in the tag:
+        # "ttdr" = Liu dominance rules DR1/DR2/DR5 on, "nodom" = plain TT
+        tag = m.group("tag")
+        if "ttdr" in tag:
+            return "ttdr", m.group("date")
         return "base", m.group("date")
     return None
 
@@ -105,7 +110,7 @@ def parse_file(path: Path, config: str, run_date: str, machine: str):
                 "model": petri_type,
                 "heuristic": heuristic,
                 "config": config,
-                "dominance": config == "dom",
+                "dominance": config in ("dom", "ttdr"),
                 "solved": solved,
                 "makespan": makespan if solved else "",
                 "time": float(time_s),

@@ -41,6 +41,8 @@ def config_label(row):
     label = f"{row['model']} {row['heuristic']}"
     if row["config"] == "dom":
         label += " +dom"
+    elif row["config"] == "ttdr":
+        label += " +dr"
     elif row["config"].startswith("lber_"):
         label += f" ({row['config'].split('_')[1]})"
     return label
@@ -106,8 +108,9 @@ def write_ablation(set_name, configs):
     """Heuristics present both as 'MODEL H' and 'MODEL H +dom'."""
     pairs = []
     for label in sorted(configs, key=lambda l: configs[l]["order"]):
-        if label.endswith(" +dom") and label[:-5] in configs:
-            pairs.append((label[:-5], label))
+        for suffix in (" +dom", " +dr"):
+            if label.endswith(suffix) and label[:-len(suffix)] in configs:
+                pairs.append((label[:-len(suffix)], label))
     if not pairs:
         return None
 

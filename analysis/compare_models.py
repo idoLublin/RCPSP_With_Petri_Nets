@@ -57,7 +57,7 @@ def geomean(values):
 
 def load(path):
     with open(path, newline="") as fh:
-        return [r for r in csv.DictReader(fh) if r["config"] == "base"]
+        return list(csv.DictReader(fh))
 
 
 def save(fig, stem):
@@ -68,22 +68,27 @@ def save(fig, stem):
     print(f"  wrote figures/{stem}.png + .svg")
 
 
-def compare_set(set_name, rows):
-    # {model: {heuristic: {(g,e): row}}}
+def compare_set(set_name, rows, tt_config="base", tt2_config="base",
+                stem_suffix="", title_note="no dominance rules"):
+    # {model: {heuristic: {(g,e): row}}}; university rows overwrite laptop
+    # rows for the same instance (sort puts laptop first)
     data = defaultdict(lambda: defaultdict(dict))
-    machines = defaultdict(set)
-    for r in rows:
-        if r["set"] != set_name or r["model"] not in ("TT", "TT2"):
+    wanted = {"TT": tt_config, "TT2": tt2_config}
+    for r in sorted(rows, key=lambda r: r["machine"] == "university"):
+        if (r["set"] != set_name or r["model"] not in wanted
+                or r["config"] != wanted[r["model"]]):
             continue
         data[r["model"]][r["heuristic"]][(r["group"], r["exam"])] = r
-        machines[r["model"]].add(r["machine"])
+    machines = {m: {r["machine"] for hd in data[m].values() for r in hd.values()}
+                for m in data}
     common_heurs = [h for h in HEUR_ORDER
                     if h in data["TT"] and h in data["TT2"]]
     if not common_heurs:
-        print(f"{set_name}: no heuristic present in both TT and TT2, skipped")
+        print(f"{set_name}{stem_suffix}: no heuristic present in both TT and "
+              "TT2, skipped")
         return
 
-    same_machine = machines["TT"] == machines["TT2"]
+    same_machine = machines.get("TT") == machines.get("TT2")
     time_caveat = ("" if same_machine else
                    f" TT ran on {'/'.join(sorted(machines['TT']))}, TT2 on "
                    f"{'/'.join(sorted(machines['TT2']))} — time ratios compare "
@@ -118,12 +123,13 @@ def compare_set(set_name, rows):
         })
 
     TABLES_DIR.mkdir(parents=True, exist_ok=True)
-    with open(TABLES_DIR / f"tt_vs_tt2_{set_name}.csv", "w", newline="") as fh:
+    stem = f"tt_vs_tt2{stem_suffix}_{set_name}"
+    with open(TABLES_DIR / f"{stem}.csv", "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=table_rows[0].keys())
         w.writeheader()
         w.writerows(table_rows)
 
-    md = [f"### {set_name.upper()}: TT (TTPN) vs TT2 (TTPNR), no dominance rules, "
+    md = [f"### {set_name.upper()}: TT (TTPN) vs TT2 (TTPNR), {title_note}, "
           "300 s timeout", "",
           "| Heuristic | TT solved | TT2 solved | Both | Node ratio TT/TT2 (geo-mean) | Time ratio TT/TT2 (geo-mean) |",
           "|---|---:|---:|---:|---:|---:|"]
@@ -133,8 +139,8 @@ def compare_set(set_name, rows):
                   f"| {r['geomean_time_ratio_TT_over_TT2']} |")
     md += ["", f"_Ratios are geometric means over commonly-solved instances; "
            f"ratio > 1 means TT expands more / is slower.{time_caveat}_", ""]
-    (TABLES_DIR / f"tt_vs_tt2_{set_name}.md").write_text("\n".join(md))
-    print(f"  wrote tables/tt_vs_tt2_{set_name}.csv + .md")
+    (TABLES_DIR / f"{stem}.md").write_text("\n".join(md))
+    print(f"  wrote tables/{stem}.csv + .md")
 
     # grouped bars: solved per heuristic, TT vs TT2
     fig, ax = plt.subplots(figsize=(4.8, 3.0))
@@ -153,9 +159,9 @@ def compare_set(set_name, rows):
     ax.set_ylabel("instances solved (of 480)")
     ax.set_ylim(0, 500)
     ax.axhline(480, color="0.6", linewidth=0.8, linestyle=(0, (1, 2)))
-    ax.set_title(f"{set_name.upper()}: solved, TT vs TT2 (300 s)")
+    ax.set_title(f"{set_name.upper()}: solved, TT vs TT2 (300 s)\n({title_note})")
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0))
-    save(fig, f"tt_vs_tt2_solved_{set_name}")
+    save(fig, f"tt_vs_tt2{stem_suffix}_solved_{set_name}")
 
     # log-log scatter of expanded nodes on commonly-solved instances
     fig, ax = plt.subplots(figsize=(3.8, 3.8))
@@ -176,7 +182,7 @@ def compare_set(set_name, rows):
     ax.set_ylabel("TT2 expanded nodes")
     ax.set_title(f"{set_name.upper()}: nodes per instance\n(below diagonal = TT2 expands fewer)")
     ax.legend(loc="upper left", handletextpad=0.2)
-    save(fig, f"tt_vs_tt2_nodes_{set_name}")
+    save(fig, f"tt_vs_tt2{stem_suffix}_nodes_{set_name}")
 
 
 def main():
@@ -189,7 +195,14 @@ def main():
     rows = load(args.master)
     for set_name in args.sets:
         print(f"{set_name}:")
+        # plain models, no dominance rules on either side
         compare_set(set_name, rows)
+        # each model with its own dominance rules: TT + Liu DR1/DR2/DR5 vs
+        # TT2 + cutset/pop/UB pruning
+        compare_set(set_name, rows, tt_config="ttdr", tt2_config="dom",
+                    stem_suffix="_rules",
+                    title_note="each with its dominance rules (TT: Liu DR, "
+                               "TT2: cutset+UB)")
 
 
 if __name__ == "__main__":

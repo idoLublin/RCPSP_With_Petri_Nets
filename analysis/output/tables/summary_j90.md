@@ -2,6 +2,11 @@
 
 | Configuration | Solved | Avg time on solved (s) | Avg expanded on solved |
 |---|---:|---:|---:|
+| TT CP +dr | 161 | 39.69 | 562,058 |
+| TT LBCC +dr | 135 | 52.49 | 449,977 |
+| TT LBIP0 +dr | 140 | 38.30 | 620,928 |
+| TT LBMAX +dr | 161 | 37.48 | 562,058 |
+| TT LBCS +dr | 158 | 42.33 | 491,876 |
 | TT2 CP | 182 | 8.75 | 402,611 |
 | TT2 LBCC | 179 | 10.44 | 255,676 |
 | TT2 LBIP0 | 183 | 8.49 | 400,479 |

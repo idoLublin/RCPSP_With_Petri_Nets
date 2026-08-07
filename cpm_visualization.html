@@ -473,8 +473,8 @@ const tabs = [
   { key: "cpm",  label: "LB\u1D04\u1D18 (CPM)", builder: buildCPMSteps,
     phaseLabels: { forward: "Forward Pass", backward: "Backward Pass", critical: "Critical Path", gantt: "Gantt Chart" },
     formulas: [
-      { label: "Forward Pass", text: "ES(i) = max{EF(j) | j \u2208 pred(i)} \u00B7 EF(i) = ES(i) + d\u1D62" },
-      { label: "Backward Pass", text: "LF(i) = min{LS(j) | j \u2208 succ(i)} \u00B7 LS(i) = LF(i) \u2212 d\u1D62" },
+      { label: "Forward Pass", text: "ES(i) = max{EF(j) | j \u2208 pred(i)} ,\u00A0\u00A0\u00A0 EF(i) = ES(i) + d\u1D62" },
+      { label: "Backward Pass", text: "LF(i) = min{LS(j) | j \u2208 succ(i)} ,\u00A0\u00A0\u00A0 LS(i) = LF(i) \u2212 d\u1D62" },
       { label: "Slack", text: "Slack(i) = LF(i) \u2212 EF(i) = LS(i) \u2212 ES(i)" },
       { label: "Critical Path", text: "All activities where Slack(i) = 0" },
     ],
@@ -818,7 +818,7 @@ function App() {
   return (
     <div className="container">
       <h1 className="hero-title">RCPSP Lower Bounds</h1>
-      <p className="hero-sub">Interactive step-by-step visualization &middot; Coelho &amp; Vanhoucke (2018)</p>
+      <p className="hero-sub">Interactive step-by-step visualization</p>
 
       {/* Top-level tabs: CPM / LBCS / LBCC */}
       <div className="tab-row">

@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>LBip - Incompatible Pairs Lower Bound</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+body{
+  background:#FFFFFF;
+  font-family:-apple-system,BlinkMacSystemFont,'Helvetica Neue',system-ui,sans-serif;
+  color:#222;min-height:100vh;overflow-x:hidden;
+}
+.container{max-width:1000px;margin:0 auto;padding:36px 24px 60px}
+
+.card{
+  background:#F7F7F7;border:1px solid #DDD;border-radius:12px;
+  padding:24px;margin-bottom:20px;
+}
+
+.hero-title{font-size:34px;font-weight:700;text-align:center;margin-bottom:4px;color:#222}
+.hero-sub{text-align:center;color:#888;font-size:15px;margin-bottom:28px}
+.section-title{font-size:18px;font-weight:600;margin-bottom:12px}
+
+/* Dataset tabs */
+.tab-row{display:flex;gap:0;justify-content:center;margin-bottom:8px}
+.tab-btn{
+  padding:10px 32px;border:1.5px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:15px;
+  font-weight:600;transition:all 0.2s;font-family:inherit;
+}
+.tab-btn:first-child{border-radius:8px 0 0 8px}
+.tab-btn:last-child{border-radius:0 8px 8px 0}
+.tab-btn:not(:first-child){border-left:none}
+.tab-btn:hover{background:#EEE}
+.tab-btn.active{color:#222;background:#E8E8E8;border-color:#999}
+.tab-sub{text-align:center;color:#999;font-size:12.5px;margin-bottom:16px}
+
+/* Sub-phase pills */
+.pill-row{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-bottom:18px}
+.pill{
+  padding:8px 20px;border-radius:100px;border:1.5px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:13px;
+  font-weight:500;transition:all 0.2s;font-family:inherit;
+}
+.pill:hover{background:#EEE;border-color:#AAA}
+.pill.active{color:#222;border-color:#333;background:#E8E8E8}
+
+.nbtn{
+  padding:7px 14px;border-radius:8px;border:1px solid #CCC;
+  background:#F7F7F7;color:#888;cursor:pointer;font-size:13px;
+  font-weight:500;transition:all 0.2s;font-family:inherit;
+}
+.nbtn:hover:not(:disabled){background:#EEE;color:#222}
+.nbtn:disabled{opacity:0.25;cursor:default}
+
+.play-btn{
+  width:34px;height:34px;border-radius:50%;border:2px solid #333;
+  background:transparent;color:#333;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;font-size:13px;
+  transition:all 0.2s;font-family:inherit;
+}
+.play-btn:hover{background:#EEE}
+.play-btn.playing{background:#EEE}
+
+.step-text{font-size:15px;line-height:1.9;color:#222}
+.step-final{font-weight:600}
+
+.tail-chip{
+  padding:8px 16px;border-radius:8px;border:1px solid #CCC;
+  background:#FFF;font-size:13px;color:#222;
+}
+.tail-chip.hl{border-color:#2563EB;background:#EBF5FF;border-width:1.5px}
+
+.kb-hint{
+  position:fixed;bottom:16px;right:16px;z-index:100;
+  background:#F7F7F7ee;border:1px solid #DDD;border-radius:10px;
+  padding:10px 16px;font-size:11px;color:#999;
+  pointer-events:none;text-align:left;
+}
+
+svg text{user-select:none;-webkit-user-select:none;pointer-events:none}
+
+:fullscreen .container{max-width:1300px;padding:50px 40px}
+:fullscreen .hero-title{font-size:44px}
+:fullscreen .step-text{font-size:18px}
+</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useMemo, useCallback, useEffect, useRef } = React;
+
+const C = {
+  black: "#222",
+  gray: "#888",
+  lightGray: "#CCC",
+  blue: "#2563EB",
+  red: "#DC2626",
+  border: "#999",
+  nodeFill: "#FAFAFA",
+  nodeHLFill: "#EBF5FF",
+  critFill: "#FEF2F2",
+};
+
+/* ── Datasets ── */
+const datasets = [
+  {
+    key: "cv",
+    label: "Example A",
+    sub: "4 activities, a = 10 — the same network as cpm_visualization.html",
+    cap: 10,
+    activities: [
+      { id: 0, name: "Start", dur: 0, res: 0, pred: [] },
+      { id: 1, name: "1",     dur: 10, res: 2, pred: [0] },
+      { id: 2, name: "2",     dur: 6,  res: 7, pred: [0] },
+      { id: 3, name: "3",     dur: 4,  res: 10, pred: [1] },
+      { id: 4, name: "4",     dur: 8,  res: 6,  pred: [1, 2] },
+      { id: 5, name: "End",   dur: 0,  res: 0,  pred: [3, 4] },
+    ],
+    positions: {
+      0: { x: 80,  y: 200 },
+      1: { x: 280, y: 100 },
+      2: { x: 280, y: 310 },
+      3: { x: 520, y: 100 },
+      4: { x: 520, y: 260 },
+      5: { x: 720, y: 200 },
+    },
+    viewH: 420,
+    arcBends: {},
+    resultNote: "On this network LBCC = 19 and LBCS = 22 — LBip reaches the true optimum 22.",
+  },
+  {
+    key: "ks",
+    label: "Example B — 5-job unit test",
+    sub: "5 jobs, a = 4 — worked instance for verifying an implementation (expected LBip = 10)",
+    cap: 4,
+    activities: [
+      { id: 0, name: "Start", dur: 0, res: 0, pred: [] },
+      { id: 1, name: "1",     dur: 3, res: 2, pred: [0] },
+      { id: 2, name: "2",     dur: 4, res: 3, pred: [0] },
+      { id: 3, name: "3",     dur: 5, res: 2, pred: [1] },
+      { id: 4, name: "4",     dur: 2, res: 3, pred: [0] },
+      { id: 5, name: "5",     dur: 3, res: 1, pred: [2] },
+      { id: 6, name: "End",   dur: 0, res: 0, pred: [3, 4, 5] },
+    ],
+    positions: {
+      0: { x: 70,  y: 140 },
+      1: { x: 250, y: 70 },
+      2: { x: 250, y: 230 },
+      3: { x: 490, y: 70 },
+      4: { x: 250, y: 390 },
+      5: { x: 490, y: 230 },
+      6: { x: 700, y: 320 },
+    },
+    viewH: 460,
+    arcBends: { "1-4": 150 },
+    resultNote: "But the true optimum here is 14: jobs 1, 2, 3, 4 are PAIRWISE incompatible (see the table of pairs above), so all four must run one after another — 3+4+5+2 = 14. A pairwise bound can never see a conflict of three or more jobs at once; that is where node-packing bounds (Klein & Scholl's LB4) take over.",
+  },
+];
+
+/* ── CPM Algorithms (identical to cpm_visualization.html) ── */
+function computeForwardPass(acts) {
+  const ES = {}, EF = {};
+  for (const a of [...acts].sort((x, y) => x.id - y.id)) {
+    ES[a.id] = a.pred.length === 0 ? 0 : Math.max(...a.pred.map(p => EF[p]));
+    EF[a.id] = ES[a.id] + a.dur;
+  }
+  return { ES, EF };
+}
+
+function computeBackwardPass(acts, makespan) {
+  const LF = {}, LS = {};
+  const succs = {};
+  for (const a of acts) succs[a.id] = [];
+  for (const a of acts) for (const p of a.pred) succs[p].push(a.id);
+  for (const a of [...acts].sort((x, y) => y.id - x.id)) {
+    LF[a.id] = succs[a.id].length === 0 ? makespan : Math.min(...succs[a.id].map(s => LS[s]));
+    LS[a.id] = LF[a.id] - a.dur;
+  }
+  return { LS, LF };
+}
+
+function computeSlackAndCP(acts, ES, EF, LS, LF) {
+  const slack = {};
+  const cp = new Set();
+  for (const a of acts) {
+    slack[a.id] = LF[a.id] - EF[a.id];
+    if (slack[a.id] === 0) cp.add(a.id);
+  }
+  return { slack, cp };
+}
+
+function getSuccs(acts) {
+  const succs = {};
+  for (const a of acts) succs[a.id] = [];
+  for (const a of acts) for (const p of a.pred) succs[p].push(a.id);
+  return succs;
+}
+
+/* Transitive closure: reach[i] = set of all activities that must come after i */
+function getTransitiveReach(acts) {
+  const succs = getSuccs(acts);
+  const reach = {};
+  const dfs = (u, seen) => {
+    for (const v of succs[u]) {
+      if (!seen.has(v)) { seen.add(v); dfs(v, seen); }
+    }
+  };
+  for (const a of acts) {
+    const seen = new Set();
+    dfs(a.id, seen);
+    reach[a.id] = seen;
+  }
+  return reach;
+}
+
+/* ── LBip Step Builder (mirrors initializeLBIP0 in HOG2/RCPSP/RCPSPState.cpp) ── */
+function buildLBIPSteps(ds) {
+  const acts = ds.activities;
+  const cap = ds.cap;
+  const bendFor = (i, j) => ds.arcBends[`${i.id}-${j.id}`] || ds.arcBends[`${j.id}-${i.id}`];
+  const { ES, EF } = computeForwardPass(acts);
+  const LBCP = Math.max(...acts.map(a => EF[a.id]));
+  const { LS, LF } = computeBackwardPass(acts, LBCP);
+  const { slack, cp } = computeSlackAndCP(acts, ES, EF, LS, LF);
+  const reach = getTransitiveReach(acts);
+  const real = acts.filter(a => a.dur > 0);
+
+  const base = {
+    esShow: { ...ES }, efShow: { ...EF }, lsShow: { ...LS }, lfShow: { ...LF },
+    slackShow: { ...slack }, cpHighlight: true,
+  };
+
+  const steps = [];
+
+  /* Phase 1: CPM recap */
+  const cpNames = [...cp].map(id => acts.find(a => a.id === id).name).join(" → ");
+  steps.push({
+    phase: "recap", highlight: cp, ...base,
+    text: `LBip starts from CPM. LBᴄᴘ = ${LBCP}, Critical Path = ${cpNames}. From the forward pass we keep ES(j), from the backward pass LF(j). Resource capacity a = ${cap}. LBip will now look for pairs of activities that can never overlap. (In Klein & Scholl's paper LBᴄᴘ is called LB1, ES(j) is the head αⱼ, and the tail below is ∂ⱼ.)`,
+  });
+
+  /* Phase 2: tails */
+  const tail = {};
+  for (const a of real) tail[a.id] = LBCP - LF[a.id];
+
+  steps.push({
+    phase: "tail", highlight: new Set(), ...base, tails: {},
+    text: `tail(j) = LBᴄᴘ − LF(j): the minimum time that must still pass between the moment j finishes and the end of the project. Even if j finishes as late as possible (at LF(j)), its remaining successors need LBᴄᴘ − LF(j) more time units.`,
+  });
+  const runTail = {};
+  for (const a of real) {
+    runTail[a.id] = tail[a.id];
+    steps.push({
+      phase: "tail", highlight: new Set([a.id]), ...base, tails: { ...runTail },
+      text: `Activity ${a.name}: tail(${a.name}) = LBᴄᴘ − LF(${a.name}) = ${LBCP} − ${LF[a.id]} = ${tail[a.id]}.${tail[a.id] === 0 ? ` (${a.name} sits at the end of the network — nothing must run after it.)` : ` (After ${a.name} finishes, at least ${tail[a.id]} time units of successors remain.)`}`,
+    });
+  }
+
+  /* Phase 3: pair scan */
+  steps.push({
+    phase: "pairs", highlight: new Set(real.map(a => a.id)), ...base, tails: { ...tail },
+    text: `Scan every unordered pair of real activities (${real.length} activities → ${real.length * (real.length - 1) / 2} pairs). Skip a pair if transitive precedence already orders it (CPM already knows that order), or if the two activities fit together on every resource (rᵢ + rⱼ ≤ a). What survives: pairs that can NEVER overlap, but whose order is still free.`,
+  });
+
+  const incompatiblePairs = [];
+  for (let x = 0; x < real.length; x++) {
+    for (let y = x + 1; y < real.length; y++) {
+      const i = real[x], j = real[y];
+      const ordered = reach[i.id].has(j.id) || reach[j.id].has(i.id);
+      if (ordered) {
+        const dir = reach[i.id].has(j.id) ? `${i.name} → ${j.name}` : `${j.name} → ${i.name}`;
+        steps.push({
+          phase: "pairs", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+          pairArc: { a: i.id, b: j.id, mode: "skip", label: "ordered", bend: bendFor(i, j) },
+          text: `Pair (${i.name}, ${j.name}): precedence already forces ${dir}. The forward pass has already stretched the schedule around this order — the pair can add nothing new. Skip.`,
+        });
+        continue;
+      }
+      const sum = i.res + j.res;
+      if (sum <= cap) {
+        steps.push({
+          phase: "pairs", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+          pairArc: { a: i.id, b: j.id, mode: "skip", label: `${i.res}+${j.res} ≤ ${cap} ✓`, bend: bendFor(i, j) },
+          text: `Pair (${i.name}, ${j.name}): unordered, but compatible — together they need r = ${i.res} + ${j.res} = ${sum} ≤ a = ${cap}, so they CAN run in parallel. No forced order exists. Skip.`,
+        });
+        continue;
+      }
+      incompatiblePairs.push([i, j]);
+      steps.push({
+        phase: "pairs", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+        pairArc: { a: i.id, b: j.id, mode: "both", label: `${i.res}+${j.res} > ${cap} ✗`, bend: bendFor(i, j) },
+        text: `Pair (${i.name}, ${j.name}): unordered AND incompatible — together they need r = ${i.res} + ${j.res} = ${sum} > a = ${cap}, so they can never overlap. One must completely finish before the other starts — but which one? We don't know. Keep for analysis.`,
+      });
+    }
+  }
+
+  /* Phase 4: analysis of each incompatible pair */
+  const orient = (i, j) => ({
+    i, j, es: ES[i.id], d1: i.dur, d2: j.dur, tl: tail[j.id],
+    len: ES[i.id] + i.dur + j.dur + tail[j.id],
+  });
+  const mkRow = (o, capped) => ({
+    label: `${o.i.name} → ${o.j.name}`,
+    iName: o.i.name, jName: o.j.name,
+    es: o.es, d1: o.d1, d2: o.d2, tl: o.tl, len: o.len, capped,
+  });
+
+  const allLens = incompatiblePairs.flatMap(([i, j]) => [orient(i, j).len, orient(j, i).len]);
+  const maxT = Math.max(LBCP, ...(allLens.length ? allLens : [LBCP]));
+
+  let best = LBCP, bestPair = null;
+  const pairResults = [];
+
+  for (const [i, j] of incompatiblePairs) {
+    const f = orient(i, j), b = orient(j, i);
+    const cf = Math.max(LBCP, f.len), cb = Math.max(LBCP, b.len);
+    const pb = Math.min(cf, cb);
+
+    steps.push({
+      phase: "analysis", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+      pairArc: { a: i.id, b: j.id, mode: "forward", label: `try ${i.name} → ${j.name}`, bend: bendFor(i, j) },
+      pathChart: { rows: [mkRow(f, cf)], lb1: LBCP, maxT },
+      text: `Try order ${i.name} → ${j.name}: at best, ${i.name} starts at ES(${i.name}) = ${f.es}, runs d = ${f.d1}; only then ${j.name} runs d = ${f.d2}; after ${j.name} at least tail(${j.name}) = ${f.tl} remains. Total path = ${f.es} + ${f.d1} + ${f.d2} + ${f.tl} = ${f.len}.${f.len < LBCP ? ` That is below LBᴄᴘ — the critical path is longer anyway, so cap: max(${LBCP}, ${f.len}) = ${cf}.` : ` This order forces the project to take at least ${f.len}.`}`,
+    });
+
+    steps.push({
+      phase: "analysis", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+      pairArc: { a: i.id, b: j.id, mode: "backward", label: `try ${j.name} → ${i.name}`, bend: bendFor(i, j) },
+      pathChart: { rows: [mkRow(f, cf), mkRow(b, cb)], lb1: LBCP, maxT },
+      text: `Try the other order ${j.name} → ${i.name}: ${j.name} starts at ES(${j.name}) = ${b.es}, runs d = ${b.d1}; then ${i.name} runs d = ${b.d2}; then tail(${i.name}) = ${b.tl}. Total path = ${b.es} + ${b.d1} + ${b.d2} + ${b.tl} = ${b.len}.${b.len < LBCP ? ` Below LBᴄᴘ, so cap: max(${LBCP}, ${b.len}) = ${cb}.` : ` This order forces at least ${b.len}.`}`,
+    });
+
+    steps.push({
+      phase: "analysis", highlight: new Set([i.id, j.id]), ...base, tails: { ...tail },
+      pairArc: { a: i.id, b: j.id, mode: "both", label: `min(${cf}, ${cb})`, bend: bendFor(i, j) },
+      pathChart: { rows: [mkRow(f, cf), mkRow(b, cb)], lb1: LBCP, maxT, minIdx: cf <= cb ? 0 : 1 },
+      text: `Every schedule must pick ONE of the two orders — and it may pick the cheaper one. So the only guarantee is the smaller of the two: bound(${i.name}, ${j.name}) = min(${cf}, ${cb}) = ${pb}.${cf === cb ? " (Both orders cost the same — the pair forces this length no matter what.)" : ""}`,
+    });
+
+    if (pb > best) { best = pb; bestPair = [i, j]; }
+    pairResults.push({ i, j, pb, f, b, cf, cb });
+  }
+
+  /* Phase 5: result */
+  const totalW = real.reduce((s, a) => s + a.dur * a.res, 0);
+  const lbrc = Math.ceil(totalW / cap);
+  const bestRes = bestPair ? pairResults.find(p => p.i === bestPair[0] && p.j === bestPair[1]) : null;
+  steps.push({
+    phase: "result",
+    highlight: bestPair ? new Set([bestPair[0].id, bestPair[1].id]) : cp,
+    ...base, tails: { ...tail },
+    pairArc: bestPair ? { a: bestPair[0].id, b: bestPair[1].id, mode: "both", label: `forces ${best}`, bend: bestPair ? bendFor(bestPair[0], bestPair[1]) : undefined } : null,
+    pathChart: bestRes ? { rows: [mkRow(bestRes.f, bestRes.cf), mkRow(bestRes.b, bestRes.cb)], lb1: LBCP, maxT, minIdx: bestRes.cf <= bestRes.cb ? 0 : 1 } : null,
+    text: `LBip = max(LBᴄᴘ, ${pairResults.map(p => `bound(${p.i.name},${p.j.name})`).join(", ")}) = max(${LBCP}, ${pairResults.map(p => p.pb).join(", ")}) = ${best}.${bestPair ? ` The pair (${bestPair[0].name}, ${bestPair[1].name}) can never overlap, and either order forces the project to at least ${best}. Compare: LBᴄᴘ = ${LBCP}, LBᵣᴄ = ⌈${totalW}/${cap}⌉ = ${lbrc}, LBip = ${best}. ${ds.resultNote}` : ""}`,
+    isFinal: true,
+  });
+
+  return { steps, phases: ["recap", "tail", "pairs", "analysis", "result"] };
+}
+
+const phaseLabels = {
+  recap: "CPM Recap", tail: "Tails", pairs: "Pair Scan",
+  analysis: "Pair Analysis", result: "Result",
+};
+
+const formulas = [
+  { label: "tail", text: "tail(j) = LBᴄᴘ − LF(j) — least time between finishing j and finishing the project" },
+  { label: "Incompatible pair", text: "(i, j) unordered by transitive precedence, and ∃ resource k: rᵢₖ + rⱼₖ > aₖ" },
+  { label: "Forced path", text: "len(i → j) = ES(i) + dᵢ + dⱼ + tail(j), capped below by LBᴄᴘ" },
+  { label: "Pair bound", text: "bound(i, j) = min( len(i → j), len(j → i) ) — the schedule may pick the cheaper order" },
+  { label: "LBip", text: "LBip = max( LBᴄᴘ, max over incompatible pairs bound(i, j) )" },
+  { label: "In the solver", text: "Computed once at initialization (initializeLBIP0); per state h = max(0, LBip − g). Used as max(LBᴄᴘ, LBip)." },
+  { label: "Paper notation", text: "Klein & Scholl (1999): LBip = LB10, LBᴄᴘ = LB1, ES(j) = head αⱼ, tail(j) = tail ∂ⱼ" },
+];
+
+/* ── SVG Components ── */
+function CPMArrow({ fromId, toId, acts, pos, isCriticalEdge, isHighlighted }) {
+  const fp = pos[fromId], tp = pos[toId];
+  const fromAct = acts.find(a => a.id === fromId);
+  const toAct = acts.find(a => a.id === toId);
+  const W = 140, H = 96, R = 30;
+  const fromDummy = fromAct.dur === 0, toDummy = toAct.dur === 0;
+  const dx = tp.x - fp.x, dy = tp.y - fp.y;
+  const angle = Math.atan2(dy, dx);
+  let sx, sy, ex, ey;
+  if (fromDummy) { sx = fp.x + R * Math.cos(angle); sy = fp.y + R * Math.sin(angle); }
+  else { sx = fp.x + W / 2; sy = fp.y + Math.max(-H/2, Math.min(H/2, dy * 0.3)); }
+  if (toDummy) { ex = tp.x - R * Math.cos(angle); ey = tp.y - R * Math.sin(angle); }
+  else { ex = tp.x - W / 2; ey = tp.y; }
+  const color = isCriticalEdge ? C.red : isHighlighted ? C.blue : C.lightGray;
+  const sw = isCriticalEdge ? 3 : isHighlighted ? 2 : 1.5;
+  const mid = isCriticalEdge ? "ah-crit" : isHighlighted ? "ah-hl" : "ah-def";
+  return <line x1={sx} y1={sy} x2={ex} y2={ey} stroke={color} strokeWidth={sw} markerEnd={`url(#${mid})`} />;
+}
+
+/* Dashed curved arc between the two activities of the pair under discussion */
+function PairArc({ arc, pos }) {
+  if (!arc) return null;
+  const pa = pos[arc.a], pb = pos[arc.b];
+  const dx = pb.x - pa.x, dy = pb.y - pa.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const ux = dx / dist, uy = dy / dist;
+  // trim to the node-rectangle boundary (half-size 70x48) plus a small pad
+  const trimX = ux !== 0 ? 70 / Math.abs(ux) : Infinity;
+  const trimY = uy !== 0 ? 48 / Math.abs(uy) : Infinity;
+  const trim = Math.min(trimX, trimY) + 5;
+  const sx = pa.x + ux * trim, sy = pa.y + uy * trim;
+  const ex = pb.x - ux * trim, ey = pb.y - uy * trim;
+  // control point: midpoint pushed perpendicular
+  const mx = (sx + ex) / 2, my = (sy + ey) / 2;
+  const px = -uy, py = ux;
+  const bend = arc.bend || 46;
+  const cx = mx + px * bend, cy = my + py * bend;
+  // label position on the curve
+  const lx = mx + px * (bend * 0.8), ly = my + py * (bend * 0.8);
+
+  const isSkip = arc.mode === "skip";
+  const color = isSkip ? "#AAA" : C.red;
+  const markerStart = arc.mode === "backward" || arc.mode === "both" ? "url(#pa-start)" : undefined;
+  const markerEnd = arc.mode === "forward" || arc.mode === "both" ? "url(#pa-end)" : undefined;
+
+  return (
+    <g>
+      <path d={`M${sx},${sy} Q${cx},${cy} ${ex},${ey}`} fill="none"
+        stroke={color} strokeWidth={isSkip ? 1.5 : 2.2} strokeDasharray="7 4"
+        markerStart={isSkip ? undefined : markerStart} markerEnd={isSkip ? undefined : markerEnd} />
+      {arc.label && (
+        <g>
+          <rect x={lx - 42} y={ly - 11} width={84} height={20} rx={10}
+            fill="#FFFFFFee" stroke={color} strokeWidth={1} />
+          <text x={lx} y={ly + 3.5} textAnchor="middle" fill={isSkip ? "#888" : C.red}
+            fontSize={10.5} fontWeight={600}>{arc.label}</text>
+        </g>
+      )}
+    </g>
+  );
+}
+
+function CPMNode({ act, step, pos }) {
+  const p = pos[act.id];
+  const x = p.x, y = p.y;
+  const isHL = step.highlight.has(act.id);
+  const isCrit = step.cpHighlight && step.slackShow[act.id] === 0;
+  const W = 140, H = 96, R = 30;
+
+  if (act.dur === 0) {
+    const fill = isCrit ? C.critFill : isHL ? C.nodeHLFill : C.nodeFill;
+    const stroke = isCrit ? C.red : isHL ? C.blue : C.lightGray;
+    const sw = isCrit ? 3 : isHL ? 2.5 : 1.5;
+    const es = step.esShow[act.id], ls = step.lsShow[act.id];
+    return (
+      <g>
+        <circle cx={x} cy={y} r={R} fill={fill} stroke={stroke} strokeWidth={sw} />
+        <text x={x} y={y+1} textAnchor="middle" dominantBaseline="middle" fill={C.black} fontSize={15} fontWeight={700}>{act.name}</text>
+        {es !== undefined && <text x={x} y={y+R+16} textAnchor="middle" fill={C.blue} fontSize={11} fontWeight={500}>ES={es} EF={step.efShow[act.id]}</text>}
+        {ls !== undefined && <text x={x} y={y+R+30} textAnchor="middle" fill={C.black} fontSize={11} fontWeight={500}>LS={ls} LF={step.lfShow[act.id]}</text>}
+      </g>
+    );
+  }
+
+  const fill = isCrit ? C.critFill : isHL ? C.nodeHLFill : C.nodeFill;
+  const stroke = isHL ? C.blue : isCrit ? C.red : "#BBB";
+  const sw = isHL ? 2.5 : isCrit ? 2.5 : 1;
+  const es = step.esShow[act.id], ef = step.efShow[act.id], ls = step.lsShow[act.id], lf = step.lfShow[act.id], sl = step.slackShow[act.id];
+  const topH = 26, lc = "#CCC";
+  const tl = step.tails ? step.tails[act.id] : undefined;
+
+  return (
+    <g>
+      <rect x={x-W/2} y={y-H/2} width={W} height={H} rx={6} fill={fill} stroke={stroke} strokeWidth={sw} />
+      <line x1={x-W/2} y1={y-H/2+topH} x2={x+W/2} y2={y-H/2+topH} stroke={lc} strokeWidth={0.8} />
+      <line x1={x-W/2} y1={y+H/2-topH} x2={x+W/2} y2={y+H/2-topH} stroke={lc} strokeWidth={0.8} />
+      <line x1={x-W/6} y1={y-H/2} x2={x-W/6} y2={y-H/2+topH} stroke={lc} strokeWidth={0.5} />
+      <line x1={x+W/6} y1={y-H/2} x2={x+W/6} y2={y-H/2+topH} stroke={lc} strokeWidth={0.5} />
+      <line x1={x-W/6} y1={y+H/2-topH} x2={x-W/6} y2={y+H/2} stroke={lc} strokeWidth={0.5} />
+      <line x1={x+W/6} y1={y+H/2-topH} x2={x+W/6} y2={y+H/2} stroke={lc} strokeWidth={0.5} />
+      <text x={x-W/3} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>ES</text>
+      <text x={x} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>d</text>
+      <text x={x+W/3} y={y-H/2+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>EF</text>
+      <text x={x-W/3} y={y-H/2+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{es}</text>
+      <text x={x} y={y-H/2+21} textAnchor="middle" fill={C.black} fontSize={13} fontWeight={600}>{act.dur}</text>
+      <text x={x+W/3} y={y-H/2+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{ef}</text>
+      <text x={x} y={y - 6} textAnchor="middle" dominantBaseline="middle" fill={C.black} fontSize={20} fontWeight={700}>{act.name}</text>
+      <text x={x} y={y + 10} textAnchor="middle" fill={tl !== undefined ? C.black : C.gray} fontSize={11} fontWeight={500}>
+        r={act.res}{tl !== undefined ? `  tail=${tl}` : ""}
+      </text>
+      <text x={x-W/3} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>LS</text>
+      <text x={x} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>Slack</text>
+      <text x={x+W/3} y={y+H/2-topH+9} textAnchor="middle" fill="#999" fontSize={8} fontWeight={500}>LF</text>
+      <text x={x-W/3} y={y+H/2-topH+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{ls}</text>
+      <text x={x} y={y+H/2-topH+21} textAnchor="middle" fill={sl===0?C.red:C.black} fontSize={14} fontWeight={700}>{sl}</text>
+      <text x={x+W/3} y={y+H/2-topH+21} textAnchor="middle" fill={C.blue} fontSize={14} fontWeight={700}>{lf}</text>
+    </g>
+  );
+}
+
+function CPMGraph({ acts, step, pos, viewH }) {
+  const edges = [];
+  acts.forEach(a => a.pred.forEach(p => edges.push({ from: p, to: a.id })));
+  return (
+    <svg viewBox={`0 0 800 ${viewH || 420}`} style={{ width: "100%", maxWidth: 800, display: "block", margin: "0 auto" }}>
+      <defs>
+        <marker id="ah-def" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.lightGray}/></marker>
+        <marker id="ah-hl" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.blue}/></marker>
+        <marker id="ah-crit" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.red}/></marker>
+        <marker id="pa-end" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><polygon points="0,0 10,4 0,8" fill={C.red}/></marker>
+        <marker id="pa-start" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto"><polygon points="10,0 0,4 10,8" fill={C.red}/></marker>
+      </defs>
+      {edges.map((e, i) => {
+        const bothHL = step.highlight.has(e.from) && step.highlight.has(e.to);
+        const isCE = step.cpHighlight && step.slackShow[e.from] === 0 && step.slackShow[e.to] === 0;
+        return <CPMArrow key={i} fromId={e.from} toId={e.to} acts={acts} pos={pos} isCriticalEdge={isCE} isHighlighted={bothHL} />;
+      })}
+      {acts.map(a => <CPMNode key={a.id} act={a} step={step} pos={pos} />)}
+      <PairArc arc={step.pairArc} pos={pos} />
+    </svg>
+  );
+}
+
+/* Forced-path chart: each row is one orientation of the pair, drawn as
+   ES-wait + d_i + d_j + tail segments on a shared time axis, with LB1 marked. */
+function PairPathChart({ chart }) {
+  const { rows, lb1, maxT, minIdx } = chart;
+  const left = 96, top = 20, chartW = 460;
+  const rowH = 62, barH = 26;
+  const axisY = top + rows.length * rowH;
+  const totalH = axisY + 42;
+  const T = maxT + 2;
+  const tW = chartW / T;
+  const toX = t => left + t * tW;
+
+  const seg = (x0, len, kind, label, dim) => {
+    if (len <= 0) return null;
+    const w = len * tW;
+    const styles = {
+      es:   { fill: "none",     stroke: "#BBB",   dash: "4 3", txt: "#888" },
+      d1:   { fill: C.nodeHLFill, stroke: C.blue, dash: null,  txt: C.blue },
+      d2:   { fill: C.critFill, stroke: C.red,    dash: null,  txt: C.red },
+      tail: { fill: "none",     stroke: "#BBB",   dash: "4 3", txt: "#888" },
+    }[kind];
+    return (
+      <g opacity={dim ? 0.35 : 1}>
+        <rect x={x0} y={0} width={w} height={barH} rx={3}
+          fill={styles.fill} stroke={styles.stroke} strokeWidth={1.2} strokeDasharray={styles.dash || undefined} />
+        {w > 26 && <text x={x0 + w / 2} y={barH / 2 + 3.5} textAnchor="middle" fill={styles.txt} fontSize={10} fontWeight={600}>{label}</text>}
+      </g>
+    );
+  };
+
+  return (
+    <svg viewBox={`0 0 640 ${totalH}`} style={{ width: "100%", maxWidth: 640, display: "block", margin: "0 auto" }}>
+      {/* grid + time axis */}
+      {Array.from({ length: T + 1 }, (_, t) => (
+        <g key={t}>
+          <line x1={toX(t)} y1={top - 6} x2={toX(t)} y2={axisY + 4} stroke="#EEE" strokeWidth={0.5} />
+          {t % 2 === 0 && <text x={toX(t)} y={axisY + 18} textAnchor="middle" fill="#999" fontSize={9}>{t}</text>}
+        </g>
+      ))}
+      <line x1={left} y1={axisY} x2={left + chartW} y2={axisY} stroke="#CCC" strokeWidth={0.8} />
+      <text x={left + chartW / 2} y={totalH - 4} textAnchor="middle" fill="#888" fontSize={10}>Time</text>
+
+      {/* LBcp marker */}
+      <line x1={toX(lb1)} y1={top - 12} x2={toX(lb1)} y2={axisY} stroke="#999" strokeWidth={1.4} strokeDasharray="6 3" />
+      <text x={toX(lb1)} y={top - 16} textAnchor="middle" fill="#666" fontSize={10.5} fontWeight={600}>LBᴄᴘ={lb1}</text>
+
+      {/* rows */}
+      {rows.map((r, idx) => {
+        const y = top + idx * rowH + (rowH - barH) / 2 - 4;
+        const dim = minIdx !== undefined && idx !== minIdx;
+        const isMin = minIdx !== undefined && idx === minIdx;
+        let t = 0;
+        const parts = [];
+        parts.push(seg(toX(t), r.es, "es", `wait ES=${r.es}`, dim)); t += r.es;
+        parts.push(seg(toX(t), r.d1, "d1", `Act ${r.iName} (d=${r.d1})`, dim)); t += r.d1;
+        parts.push(seg(toX(t), r.d2, "d2", `Act ${r.jName} (d=${r.d2})`, dim)); t += r.d2;
+        parts.push(seg(toX(t), r.tl, "tail", `tail=${r.tl}`, dim)); t += r.tl;
+        return (
+          <g key={idx} transform={`translate(0,${y})`}>
+            <text x={left - 10} y={barH / 2 + 3.5} textAnchor="end" fill={C.black} fontSize={12.5} fontWeight={600} opacity={dim ? 0.4 : 1}>
+              {r.label}
+            </text>
+            {parts}
+            <text x={toX(r.len) + 8} y={barH / 2 + 3.5} fill={dim ? "#AAA" : C.black} fontSize={11.5} fontWeight={700}>
+              {r.len < lb1 ? `= ${r.len} → ${r.capped}` : `= ${r.len}`}
+            </text>
+            {isMin && (
+              <text x={left - 10} y={barH / 2 + 17} textAnchor="end" fill={C.red} fontSize={10} fontWeight={700}>min ✓</text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function StepNavigator({ steps, stepIdx, setStepIdx, isPlaying, setIsPlaying }) {
+  const s = steps[stepIdx];
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <span style={{ fontSize: 13, color: "#888", fontWeight: 500 }}>Step {stepIdx + 1} / {steps.length}</span>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <button className="nbtn" onClick={() => setStepIdx(0)} disabled={stepIdx === 0}>{"⏮"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(Math.max(0, stepIdx - 1))} disabled={stepIdx === 0}>{"◀ Prev"}</button>
+          <button className={`play-btn${isPlaying ? " playing" : ""}`} onClick={() => setIsPlaying(!isPlaying)}>{isPlaying ? "⏸" : "▶"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(Math.min(steps.length - 1, stepIdx + 1))} disabled={stepIdx === steps.length - 1}>{"Next ▶"}</button>
+          <button className="nbtn" onClick={() => setStepIdx(steps.length - 1)} disabled={stepIdx === steps.length - 1}>{"⏭"}</button>
+        </div>
+      </div>
+      <div style={{ width: "100%", height: 3, background: "#EEE", borderRadius: 2, marginBottom: 12 }}>
+        <div style={{ width: `${((stepIdx + 1) / steps.length) * 100}%`, height: "100%", background: "#333", borderRadius: 2, transition: "width 0.3s" }} />
+      </div>
+      <p className={`step-text${s.isFinal ? " step-final" : ""}`}>{s.text}</p>
+    </div>
+  );
+}
+
+/* ── App ── */
+function App() {
+  const [dsIdx, setDsIdx] = useState(window.location.hash === "#ks" ? 1 : 0);
+  const [stepIdx, setStepIdx] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const playRef = useRef(null);
+
+  const ds = datasets[dsIdx];
+  const built = useMemo(() => buildLBIPSteps(ds), [dsIdx]);
+  const steps = built.steps;
+  const subPhases = built.phases;
+  const clampedStep = Math.min(stepIdx, steps.length - 1);
+  const curStep = steps[clampedStep];
+  const curPhase = curStep.phase;
+  const realActs = ds.activities.filter(a => a.dur > 0);
+
+  const switchDs = useCallback((i) => { setDsIdx(i); setStepIdx(0); setIsPlaying(false); }, []);
+
+  const jumpToPhase = useCallback((phaseKey) => {
+    const idx = steps.findIndex(s => s.phase === phaseKey);
+    if (idx >= 0) setStepIdx(idx);
+  }, [steps]);
+
+  useEffect(() => {
+    if (isPlaying) {
+      playRef.current = setInterval(() => {
+        setStepIdx(prev => {
+          if (prev >= steps.length - 1) { setIsPlaying(false); return prev; }
+          return prev + 1;
+        });
+      }, 3500);
+    }
+    return () => { if (playRef.current) clearInterval(playRef.current); };
+  }, [isPlaying, steps.length]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (e.key === "ArrowRight") { e.preventDefault(); setStepIdx(p => Math.min(steps.length - 1, p + 1)); }
+      else if (e.key === "ArrowLeft") { e.preventDefault(); setStepIdx(p => Math.max(0, p - 1)); }
+      else if (e.key === " ") { e.preventDefault(); setIsPlaying(p => !p); }
+      else if (e.key === "f" || e.key === "F") {
+        if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+        else document.exitFullscreen?.();
+      }
+      else if (e.key === "Tab") { e.preventDefault(); switchDs((dsIdx + 1) % datasets.length); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [steps, dsIdx]);
+
+  return (
+    <div className="container">
+      <h1 className="hero-title">LBip — Incompatible Pairs</h1>
+
+      {/* Dataset tabs */}
+      <div className="tab-row">
+        {datasets.map((d, i) => (
+          <button key={d.key} className={`tab-btn${dsIdx === i ? " active" : ""}`}
+            onClick={() => switchDs(i)}>
+            {d.label}
+          </button>
+        ))}
+      </div>
+      <p className="tab-sub">{ds.sub}</p>
+
+      {/* Sub-phase pills */}
+      <div className="pill-row">
+        {subPhases.map(pk => (
+          <button key={pk} className={`pill${curPhase === pk ? " active" : ""}`}
+            onClick={() => jumpToPhase(pk)}>
+            {phaseLabels[pk] || pk}
+          </button>
+        ))}
+      </div>
+
+      {/* Network graph */}
+      <div className="card">
+        <h2 className="section-title">Project Network (AoN)<span style={{ fontWeight: 400, fontSize: 14, color: "#888", marginLeft: 12 }}>Resource availability a = {ds.cap}</span></h2>
+        <CPMGraph acts={ds.activities} step={curStep} pos={ds.positions} viewH={ds.viewH} />
+      </div>
+
+      {/* Tail values */}
+      {curStep.tails && Object.keys(curStep.tails).length > 0 && (
+        <div className="card">
+          <h2 className="section-title" style={{ fontSize: 15 }}>Tails: tail(j) = LBᴄᴘ − LF(j)</h2>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            {realActs.map(a => curStep.tails[a.id] !== undefined && (
+              <div key={a.id} className={`tail-chip${curStep.highlight.has(a.id) ? " hl" : ""}`}>
+                <strong>Act {a.name}</strong>: LF={curStep.lfShow[a.id]} → tail={curStep.tails[a.id]}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Forced-path chart */}
+      {curStep.pathChart && (
+        <div className="card">
+          <h2 className="section-title">Forced Path Length: ES(i) + dᵢ + dⱼ + tail(j)</h2>
+          <PairPathChart chart={curStep.pathChart} />
+        </div>
+      )}
+
+      {/* Step navigator */}
+      <StepNavigator steps={steps} stepIdx={clampedStep} setStepIdx={setStepIdx}
+        isPlaying={isPlaying} setIsPlaying={setIsPlaying} />
+
+      {/* Formal definitions */}
+      <div className="card" style={{ marginTop: 14 }}>
+        <h3 className="section-title" style={{ fontSize: 15 }}>Formal Definitions</h3>
+        <div style={{ fontSize: 14, lineHeight: 2.0, color: "#444" }}>
+          {formulas.map((f, i) => (
+            <p key={i}><strong>{f.label}:</strong> {f.text}</p>
+          ))}
+        </div>
+      </div>
+
+      <div className="kb-hint">
+        <strong>Keys:</strong> &larr;&rarr; step &middot; Tab switch example &middot; Space play &middot; F fullscreen
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

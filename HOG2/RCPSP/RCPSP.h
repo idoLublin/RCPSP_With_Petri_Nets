@@ -951,6 +951,11 @@ public:
   bool InvertAction(int &a) const;
   std::vector<RCPSPState_TT2> GetSuccessors(const RCPSPState_TT2 &nodeID) const;
   double GCost(const RCPSPState_TT2 &node, const int &act) const override;
+
+  // DR4 delayed-start dominance (see GetSuccessors). Counter is mutable
+  // because GetSuccessors is const; the search is single-threaded per instance.
+  bool dr4Enabled = false;
+  mutable uint64_t dr4Pruned = 0;
 };
 
 inline RCPSP_TT2::RCPSP_TT2() {
@@ -983,7 +988,39 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
   neighbors.reserve(neighbors.size() + avilableTransitionIndices.size());
+
+  // DR4 delayed-start dominance (Liu, Jin, Zhou & Hu, C&OR 151 (2023) 106097,
+  // dominance rule 4 — multi-capacity-safe core, adapted to TTPNR firing):
+  //
+  //   Prune the child that fires l at delta d_l iff some other eligible
+  //   transition i has  d_i < d_l  and  d_i + p_i <= d_l.
+  //
+  // Soundness (left-shift): in any completion of the pruned branch no
+  // unstarted activity begins before g+d_l, and i starts at some t >= g+d_l.
+  // Moving i to start at g+d_i is feasible (i was fireable at d_i from this
+  // state's pools; nothing else consumes tokens before g+d_l) and i returns
+  // its resources by g+d_i+p_i <= g+d_l, so l and everything later are
+  // unaffected while i's successors are only enabled earlier. The resulting
+  // equal-or-better schedule is reachable through the sibling branch (i, d_i).
+  // Completeness: the strict d_i < d_l means the minimum-delta child is never
+  // pruned, and "i prunes l" strictly decreases delta, so a surviving
+  // dominating branch always exists (induction on delta).
   for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+    if (dr4Enabled) {
+      bool dominated = false;
+      for (const auto& [otherId, otherDelta] : avilableTransitionIndices) {
+        if (otherId == transId || otherDelta >= Timedelta)
+          continue;
+        if (otherDelta + petri.Transitions[otherId - 1].duration <= Timedelta) {
+          dominated = true;
+          break;
+        }
+      }
+      if (dominated) {
+        ++dr4Pruned;
+        continue;
+      }
+    }
     neighbors.emplace_back(nodeID, transId, Timedelta, 1);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();

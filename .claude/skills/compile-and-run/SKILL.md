@@ -43,6 +43,7 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 | `--dominance` | Cutset-style dominance pruning at node generation (TT2 only) | disabled |
 | `--dominance-pop` | `--dominance` + re-check when a node is popped for expansion | disabled |
 | `--ub-prune` | Prune `g+h > UB` using a root serial-SGS schedule (TT2 only) | disabled |
+| `--dr4` | DR4 delayed-start dominance at successor generation (TT2 only) | disabled |
 | `--tt-dr` | Enable all Liu-style dominance rules DR1+DR2+DR5 (TT only) | disabled |
 | `--tt-dr1` / `--tt-dr2` / `--tt-dr5` / `--tt-dr5-pop` | Individual TT dominance sub-rules (ablation) | disabled |
 | `--output-folder F` | Output folder path | data |
@@ -76,7 +77,7 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 
 Results are written as CSV to the `data/` folder. Use `--output-folder` or `--output-file` to customize.
 
-CSV columns: `Group, Exam, Time, Solved, Makespan, NodesExpanded, NodesTouched, PathLength, Method, ProblemType, Heuristic` — TT2 rows append `dominance_pruned, dominance_pop_pruned, ub_pruned`; TT rows with `--tt-dr*` append `dr1_pruned, dr2_pruned, dominance_pruned, dominance_pop_pruned`.
+CSV columns: `Group, Exam, Time, Solved, Makespan, NodesExpanded, NodesTouched, PathLength, Method, ProblemType, Heuristic` — TT2 rows append `dominance_pruned, dominance_pop_pruned, ub_pruned, dr4_pruned`; TT rows with `--tt-dr*` append `dr1_pruned, dr2_pruned, dominance_pruned, dominance_pop_pruned`.
 
 Note: each Driver invocation truncates its output CSV at startup — use one output file per invocation when batching runs.
 

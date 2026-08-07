@@ -58,6 +58,11 @@ bool useDominancePop = false;
 // UB is still found by the search itself).
 bool useUBPrune = false;
 
+// DR4 delayed-start dominance (TT2 only): skip firing l at delta d_l when
+// another eligible transition i has d_i < d_l and d_i + p_i <= d_l — the
+// sibling branch that starts i first dominates (see RCPSP_TT2::GetSuccessors).
+bool useDR4 = false;
+
 // Dominance pruning (TT only): port of Liu et al. (2023) dominance rules to the
 // TT (absolute-date) solver. --tt-dr enables all of DR1+DR2 (generation-time,
 // in RCPSP_TT::GetSuccessors) + DR5 (cutset table, DominanceTT.h) + the pop-time
@@ -181,6 +186,7 @@ void printUsage(const char* programName) {
               << "  --dominance        Enable cutset-style dominance pruning (TT2 only)\n"
               << "  --dominance-pop    Dominance pruning + pop-time re-check (implies --dominance)\n"
               << "  --ub-prune         Prune g+h > UB from a root SGS schedule (TT2 only)\n"
+              << "  --dr4              DR4 delayed-start dominance at successor generation (TT2 only)\n"
               << "  --tt-dr            Enable all Liu-style dominance rules DR1+DR2+DR5 (TT only)\n"
               << "  --tt-dr1/2/5       Individual TT dominance sub-rules (for ablation)\n"
               << "  --tt-dr5-pop       TT DR5 + pop-time re-check (implies --tt-dr5)\n"
@@ -294,6 +300,8 @@ Config parseArgs(int argc, char* argv[]) {
             useDominancePop = true;
         } else if (arg == "--ub-prune") {
             useUBPrune = true;
+        } else if (arg == "--dr4") {
+            useDR4 = true;
         } else if (arg == "--tt-dr" || arg == "--tt-dominance") {
             // Combined: all Liu-style dominance rules for the TT solver.
             ttDR1 = true;
@@ -654,6 +662,11 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
         });
     }
 
+    // DR4 delayed-start dominance runs inside GetSuccessors (needs the
+    // parent's full eligible-set-with-deltas, which only exists there).
+    // The environment is stack-local, so the counter is per-instance fresh.
+    as1.dr4Enabled = useDR4;
+
     std::vector<RCPSPState_TT2> path;
 
     std::chrono::duration<double> elapsed;
@@ -727,6 +740,9 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
     if (useUBPrune) {
         std::cout << "UB pruned: " << ubPruned << " (UB=" << ubValue << ")" << std::endl;
     }
+    if (useDR4) {
+        std::cout << "DR4 pruned: " << as1.dr4Pruned << std::endl;
+    }
     {
         struct rusage ru;
         getrusage(RUSAGE_SELF, &ru);
@@ -747,7 +763,8 @@ int solveRCPSP_TT2(int group, int exam, const std::string& filename, const std::
          << P_RCPSP::heuristicTypeToString(activeHeuristic) << dpTag << ","
          << domTable.pruned << ","
          << domTable.popPruned << ","
-         << ubPruned
+         << ubPruned << ","
+         << as1.dr4Pruned
          << "\n";
 
     return 0;
@@ -938,7 +955,7 @@ int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
 // ============================================================================
 // Columns 12-14 (dominance_pruned, dominance_pop_pruned, ub_pruned) are
 // written by the TT2 solver only; TP/TT rows end after Heuristic.
-const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,dominance_pruned,dominance_pop_pruned,ub_pruned";
+const std::string CSV_HEADER = "group,exam,time,finished,makespan,expand_number,generated_number,depth,PetriType,SetType,Heuristic,dominance_pruned,dominance_pop_pruned,ub_pruned,dr4_pruned";
 
 // ============================================================================
 // Main Solver Runner
@@ -958,6 +975,7 @@ void runSolver(const Config& config) {
     std::cout << "  DP Preprocessing: " << (config.useDP ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Dominance Pruning: " << (useDominance ? (useDominancePop ? "Enabled (+pop check)" : "Enabled") : "Disabled") << "\n";
     std::cout << "  UB Pruning: " << (useUBPrune ? "Enabled" : "Disabled") << "\n";
+    std::cout << "  DR4 Pruning: " << (useDR4 ? "Enabled" : "Disabled") << "\n";
     std::cout << "  Time Limit: " << config.timeLimit << " seconds\n";
     std::cout << "============================================\n\n";
 

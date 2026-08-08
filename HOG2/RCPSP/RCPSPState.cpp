@@ -1028,14 +1028,14 @@ void computeRootBound(int depth) {
   }
 
   lberRootBound = C;
-  // Persist tightened windows (only ever tighter, hence still valid lower
-  // bounds): erEST <- shaved release; tailAfter <- C - shaved deadline.
-  for (short j : ids) {
-    erEST[j] = erR[j];
-    int tnew = C - erD[j];
-    if (tnew > tailAfter[j])
-      tailAfter[j] = tnew;
-  }
+  // Do NOT persist the shaving-tightened windows into erEST[]/tailAfter[]:
+  // shaving proves "in any schedule with makespan <= C, j starts no earlier
+  // than erR[j] / finishes by erD[j]" — statements CONDITIONAL on the trial
+  // horizon C. Since lberRootBound is a lower bound, the true optimum can
+  // exceed C, in which case those windows exclude the optimal schedule and the
+  // per-node bounds become inadmissible (observed: j30 2:2 returned 53 instead
+  // of the optimal 51 at depth >= 3). Only the scalar lberRootBound — a valid
+  // unconditional lower bound — may be carried out of the root computation.
 }
 
 // Fast DP-based heuristic lookup

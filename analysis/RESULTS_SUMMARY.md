@@ -34,18 +34,20 @@ DR1/DR2/DR5.
   parameter group. Solved makespans validated against published optima
   (`data/j30opt.sm`) / lower-bound files.
 - TT results on the university machine: full 5-heuristic × 3-set sweeps with
-  the Liu dominance rules ("+dr"), plus plain-TT (no rules) LBCS/LBCC on j30.
-  Plain-TT CP/LBIP0 baselines on j30 come from earlier laptop sweeps (same
-  protocol; node counts machine-independent, their wall times indicative only).
+  the Liu dominance rules ("+dr"), plus plain-TT (no rules) runs: all 5
+  heuristics on j30, CP/LBCC/LBCS on j60, and LBCC/LBCS on j90. Plain-TT
+  makespans were validated against TT2's proven optima on all commonly
+  solved instances (exact match).
 
 ## 3. Headline results — instances solved (of 480), university machine
 
 | Configuration | j30 | j60 | j90 |
 |---|---:|---:|---:|
-| TT CP (no rules) | 369\* | — | — |
-| TT LBCC (no rules) | 388 | — | — |
-| TT LBIP0 (no rules) | 387\* | — | — |
-| TT LBCS (no rules) | 396 | — | — |
+| TT CP (no rules) | 391 | 192 | — |
+| TT LBCC (no rules) | 388 | 266 | **233** |
+| TT LBIP0 (no rules) | 391 | — | — |
+| TT LBMAX (no rules) | 391 | — | — |
+| TT LBCS (no rules) | 396 | 189 | 56 |
 | TT CP +dr | 392 | 277 | 161 |
 | TT LBCC +dr | 391 | 253 | 135 |
 | TT LBIP0 +dr | 391 | 261 | 140 |
@@ -60,12 +62,11 @@ DR1/DR2/DR5.
 | TT2 LBCS +dom | **480** | 299 | 208 |
 | TT2 LBMAX +dom | **480** | **301** | **209** |
 
-\* **Placeholder from local (laptop) runs** — plain-TT (no rules) sweeps on
-the university machine exist only for LBCS/LBCC on j30; the missing plain-TT
-CP and LBIP0 j30 numbers are taken from the earlier laptop sweeps (same 300 s
-protocol) until university runs replace them. Plain-TT j60/j90 was not run
-anywhere. Solved counts and node counts are machine-independent; only the
-wall times of starred entries are not comparable to the rest of the table.
+All table entries are university-machine measurements (no placeholders
+remain). Missing plain-TT combinations (LBIP0/LBMAX on j60/j90, CP on j90)
+were not run anywhere. Note the standout: **plain TT with LBCC solves 233 on
+j90 — the best j90 result of any configuration in the study**, ahead of
+TT2 LBMAX+dom (209); see §4/§5 for discussion.
 
 Average time / expanded nodes on solved instances (per set, selected):
 
@@ -94,34 +95,58 @@ harder instances, which is why their averages rise while solving more.)
 On j30, dominance pruning **closes the benchmark**: 480/480, every instance in
 under 26 s, ~13× faster and ~20× fewer nodes on average.
 
-The same ablation for TT and the Liu rules (university machine, j30):
+The same ablation for TT and the Liu rules (university machine):
 
-| Config | Solved (base, Δ) | Avg time (base) | Avg nodes (base) |
-|---|---|---|---|
-| TT LBCS +dr | 402 (396, **+6**) | 8.62 s (12.96) | 56,316 (674,546) |
-| TT LBCC +dr | 391 (388, **+3**) | 5.43 s (12.47) | 37,919 (529,237) |
+| Set | Config | Solved (base, Δ) | Avg time (base) | Avg nodes (base) |
+|---|---|---|---|---|
+| j30 | TT CP +dr | 392 (391, **+1**) | 5.33 s (11.93) | 37,880 (720,638) |
+| j30 | TT LBCC +dr | 391 (388, **+3**) | 5.43 s (12.47) | 37,919 (529,237) |
+| j30 | TT LBMAX +dr | 392 (391, **+1**) | 5.59 s (11.94) | 37,900 (720,637) |
+| j30 | TT LBCS +dr | 402 (396, **+6**) | 8.62 s (12.96) | 56,316 (674,546) |
+| j60 | TT CP +dr | 277 (192, **+85**) | 11.13 s (23.64) | 180,413 (531,391) |
+| j60 | TT LBCC +dr | 253 (266, **−13**) | 16.94 s (11.01) | 205,275 (225,363) |
+| j60 | TT LBCS +dr | 277 (189, **+88**) | 12.08 s (24.62) | 179,633 (440,024) |
+| j90 | TT LBCC +dr | 135 (233, **−98**) | 52.49 s (6.87) | 449,977 (110,386) |
+| j90 | TT LBCS +dr | 158 (56, **+102**) | 42.33 s (46.42) | 491,876 (589,432) |
 
-The Liu rules cut TT's expansions by ~12× on solved instances but add only
-+3–6 solved — far less than TT2's cutset rules add on j60/j90, and not enough
-to reach even TT2's no-dominance counts.
+The picture is strongly size- and heuristic-dependent. On j30 the Liu rules
+cut expansions ~12–19× but add only +1–6 solved (the set is nearly
+saturated). On j60/j90 they are a lifeline for CP and LBCS: **+85, +88 and
++102 solved** — the largest absolute dominance-rule gains measured in this
+study (TT2's cutset rules add +59/+60 on j60 and +27 on j90). **But they
+actively hurt LBCC: −13 on j60 and −98 on j90** — with the rules on, LBCC
+expands *more* nodes (450k vs 110k avg on j90) and runs far slower per
+instance. Why the rules interact so badly with LBCC specifically is an open
+question worth a diagnosis before the defense. Without rules, CP/LBCS
+collapse with size (LBCS 396 → 189 → 56) while LBCC degrades gracefully
+(388 → 266 → 233).
 
 ## 5. TT vs TT2 (model comparison)
 
-**No dominance rules, j30** (LBCS/LBCC: both models on the university machine,
-so time ratios are real; CP/LBIP0: TT side from laptop runs — solved/node
-figures valid, time ratio indicative only):
+**No dominance rules** (all university machine):
 
-| Heuristic | TT solved | TT2 solved | Both | Node ratio TT/TT2 (geo-mean) | Time ratio TT/TT2 (geo-mean) |
-|---|---:|---:|---:|---:|---:|
-| LBCS | 396 | 477 | 394 | 1.10 | 3.19 |
-| LBCC | 388 | 476 | 386 | 0.53 | 3.21 |
-| CP\* | 369 | 476 | 367 | 0.88 | 2.36 |
-| LBIP0\* | 387 | 476 | 385 | 0.43 | 3.67 |
+| Set | Heuristic | TT solved | TT2 solved | Both | Node ratio TT/TT2 (geo-mean) | Time ratio TT/TT2 (geo-mean) |
+|---|---|---:|---:|---:|---:|---:|
+| j30 | CP | 391 | 476 | 389 | 1.06 | 3.58 |
+| j30 | LBCC | 388 | 476 | 386 | 0.53 | 3.21 |
+| j30 | LBIP0 | 391 | 476 | 389 | 0.45 | 4.39 |
+| j30 | LBMAX | 391 | 476 | 389 | 1.06 | 3.76 |
+| j30 | LBCS | 396 | 477 | 394 | 1.10 | 3.19 |
+| j60 | CP | 192 | 241 | 160 | 6.36 | 0.69 |
+| j60 | LBCC | **266** | 236 | 219 | 0.15 | 0.20 |
+| j60 | LBCS | 189 | 240 | 156 | 5.69 | 1.09 |
+| j90 | LBCC | **233** | 179 | 155 | 0.29 | 0.70 |
+| j90 | LBCS | 56 | 181 | 34 | 27.9 | 14.5 |
 
-TT2 solves **+80 to +107 more instances** per heuristic and is ~3.2× faster
-per commonly-solved instance on identical hardware, with roughly comparable
-node counts — TT2's states are cheaper to process and its
-time-shift-invariant merging wins the hard tail where TT times out.
+On j30, TT2 dominates every heuristic (+80–89 solved, ~3× faster). On the
+larger sets the picture becomes **heuristic-dependent**: with CP/LBCS the
+gap widens in TT2's favor (LBCS: +51 on j60, +125 on j90, node ratio up to
+~28×) — but **with LBCC the direction flips**: plain TT solves +30 more
+than plain TT2 on j60 (266 vs 236) and +54 more on j90 (233 vs 179),
+expanding 3–7× *fewer* nodes and running ~1.4–5× faster per common
+instance. LBCC's guidance evidently synergizes with TT's absolute-date
+states on large instances; understanding this mechanism is an open question
+(same caveat as the LBCC+dr anomaly in §4).
 
 **Each model with its own dominance rules** (TT + Liu DR vs TT2 + cutset/UB,
 all university machine):
@@ -143,8 +168,10 @@ solved instances, and on j90 the node gap explodes to ~56×.
 
 An interesting crossover: **TT+dr (277) beats TT2-without-dominance (241) on
 j60** — good pruning rules on the weaker model outperform the stronger model
-without pruning — but TT+dr never reaches TT2+dom, and on j90 it even trails
-plain TT2 (161 vs 183).
+without pruning. The plain-TT j60 number explains it: the Liu rules carry TT
+from 189 to 277 (+88), more than covering the model gap. But TT+dr never
+reaches TT2+dom, and on j90 the model gap is too large for the rules to
+close: even +102 only lifts TT from 56 to 158, still below plain TT2 (181).
 
 ## 5b. Local (laptop) TT runs — full j30 sweeps, 300 s timeout
 
@@ -161,11 +188,11 @@ the university-machine tables above.
 | TT LBCS | 381 | 5.82 | 226,631 |
 | TT LBIP0 | 387 | 8.96 | 505,346 |
 
-Notes: these are the source of the starred placeholders in §3. The later
-university plain-TT runs solve more (LBCS 396 vs 381, LBCC 388 vs 361) —
-faster CPU plus solver improvements between February and August — so the
-laptop numbers are conservative lower bounds for TT's ability. Duplicate
-pruning (DP) barely matters on TT j30 (+1 solved).
+Notes: these are now purely historical (every §3 entry is a university
+measurement). The university plain-TT runs solve more (CP 391 vs 369, LBCS
+396 vs 381, LBCC 388 vs 361, LBIP0 391 vs 387) — faster CPU plus solver
+improvements between February and August. Duplicate pruning (DP) barely
+matters on TT j30 (+1 solved).
 
 ## 5c. Prior published results (context)
 
@@ -221,15 +248,22 @@ TPPN 219 → TTPN 354 (10 min) → TT+dr 402 → TT2+dom 480 (5 min).
 5. LBMAX ≈ CP in search behavior (identical node counts on j30/j90 — the hmax
    floor dominates; the same tie shows up in TT+dr: 277=277 on j60, 161=161
    on j90).
-6. TT2 structurally dominates TT with or without dominance rules: no-rules
-   +80–107 solved on j30 at ~3.2× speed on identical hardware; rules-vs-rules
-   TT2+dom beats TT+dr by +22 to +78 on every set.
-7. The Liu rules help TT far less than the cutset rules help TT2 (+3–6 on j30
-   vs closing the set; ~12× node cut but the hard tail stays out of reach).
-   Still, **TT+dr (277) beats plain TT2 (241) on j60** — pruning quality can
-   outweigh model quality — while on j90 TT+dr trails even plain TT2.
-8. Scaling: TT2+dom solves 100% of j30, ~63% of j60, ~44% of j90 within 300 s;
-   TT+dr manages 84% / 58% / 34%.
+6. TT2 dominates TT on j30 for every heuristic (+80–89 solved, ~3× faster on
+   identical hardware) and rules-vs-rules everywhere (TT2+dom beats TT+dr by
+   +22 to +78 on every set). But the no-rules comparison on large sets is
+   **heuristic-dependent**: with CP/LBCS TT2's lead grows to +125 on j90,
+   while **with LBCC plain TT beats plain TT2** (+30 on j60, +54 on j90)
+   with 3–7× fewer nodes.
+7. Rule-heuristic interaction is strong: the Liu rules add only +1–6 on j30
+   but **+85/+88 on j60 and +102 on j90 for CP/LBCS** — the largest rule
+   gains in the study (TT2's cutset rules: +3–4, +59–60, +27) — yet they
+   **hurt LBCC (−13 on j60, −98 on j90)**, where they inflate rather than
+   shrink the search. This explains the j60 crossover (TT+dr 277 > plain
+   TT2 241) and flags an open diagnosis question for LBCC.
+8. **The best j90 result in the entire study is plain TT with LBCC: 233/480
+   (49%)** — ahead of TT2 LBMAX+dom (209). Best-of-study per set:
+   j30 TT2+dom 480 (100%), j60 TT2 LBMAX+dom 301 (63%), j90 TT LBCC 233
+   (49%). Overall scaling of the flagship TT2+dom config: 100% / 63% / 44%.
 9. Obvious next experiment: **LBER + dominance** — dominance added +59/+60 on
    j60 for LBCS/LBMAX, and LBER starts from the best base count (242), so
    LBER+dom could plausibly exceed the current best 301.
@@ -240,13 +274,12 @@ TPPN 219 → TTPN 354 (10 min) → TT+dr 402 → TT2+dom 480 (5 min).
   (24 CSVs; one byte-identical duplicate dropped). Full coverage matrix in
   `analysis/output/coverage.md`.
 - TT results on the university machine: `.../tt/` — full +dr matrix
-  (5 heuristics × 3 sets) plus plain-TT LBCS/LBCC on j30.
+  (5 heuristics × 3 sets) plus plain-TT: all 5 heuristics on j30,
+  CP/LBCC/LBCS on j60, LBCC/LBCS on j90.
 - Gaps: TT2 dominance runs exist only for LBCS/LBMAX (notably missing:
-  LBER+dom); LBER d3 never run on j90; **plain-TT (no rules) missing on the
-  university machine for CP/LBIP0/LBMAX on j30 and for all of j60/j90** —
-  where needed, CP/LBIP0 j30 figures are filled from the old laptop sweeps
-  and marked as such (runner ready in `analysis/run_tt_sweep.sh` to close
-  this properly).
+  LBER+dom, and — given the j90 LBCC surprise — TT2 LBCC+dom); LBER d3
+  never run on j90; plain-TT LBIP0/LBMAX on j60/j90 and CP on j90 not run
+  anywhere (runner ready in `analysis/run_tt_sweep.sh`).
 - Local (laptop) TT j30 sweeps: `data/real_data/2026-02-0*_tt_*.csv` and
   `2026-05-30_..._tt_lbip0.csv` (§5b).
 - Prior-work numbers in §5c are quoted from the SoCS 2026 paper and the 2025
@@ -275,12 +308,13 @@ When the book or slides need a figure, reference it by exact filename:
 | `cactus_j90` | Same for j90; curves plateau low (~209 best) | Book results §: j90 figure (or merge with j60 in text) |
 | `solved_by_RS_j30/j60/j90` | Grouped bars: solved per Resource Strength level (0.2/0.5/0.7/1.0), one bar per configuration | Hardness analysis §6 — the RS gradient; j60 version is the most telling |
 | `solved_by_RF_j30/j60/j90` | Same broken down by Resource Factor | Hardness analysis, secondary (RF effect is milder) |
-| `tt_vs_tt2_solved_j30` | Paired bars TT vs TT2 per heuristic, no dominance rules (396→477 etc.) | Model-comparison §5, first half |
-| `tt_vs_tt2_nodes_j30` | Log-log scatter, expanded nodes per instance TT vs TT2 (no rules), diagonal reference | Model-comparison §5 — shows node parity + hard tail |
+| `tt_vs_tt2_solved_j30/j60/j90` | Paired bars TT vs TT2 per heuristic, no dominance rules (j30: 5 heuristics; j60/j90: LBCS only — 189 vs 240, 56 vs 181) | Model-comparison §5, first half; j90 version shows the widening gap |
+| `tt_vs_tt2_nodes_j30/j60/j90` | Log-log scatter, expanded nodes per instance TT vs TT2 (no rules), diagonal reference | Model-comparison §5 — node parity on j30, ~28× gap on j90 |
 | `tt_vs_tt2_rules_solved_j30/j60/j90` | Paired bars TT+dr vs TT2+dom (402 vs 480; 277 vs 301; 161 vs 209) | Model-comparison §5, rules-vs-rules; j60 version also illustrates the crossover discussion |
 | `tt_vs_tt2_rules_nodes_j30/j60/j90` | Log-log node scatter with each model's rules; j90 shows the ~56× node gap | Supplementary / appendix |
 
-Figures NOT yet generated (would need new runs or new script work): any
-TT-only cactus, any j60/j90 no-rules TT comparison (plain TT was never run
-there), and any figure involving SCIP/CBC (those numbers exist only as the
-§5c table quoted from the paper).
+The no-rules comparison figures cover the heuristics run in both models per
+set (j30: all five; j60: CP/LBCC/LBCS; j90: LBCC/LBCS) — the j90 solved
+chart shows the LBCC flip (233 vs 179). Figures NOT yet generated: any
+TT-only cactus, and any figure involving SCIP/CBC (those numbers exist only
+as the §5c table quoted from the paper).

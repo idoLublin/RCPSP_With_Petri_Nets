@@ -152,6 +152,10 @@ struct Config {
     // Diagnostic mode: solve one instance with CP, replay the optimal path
     // through every heuristic and report admissibility/consistency violations
     bool diagnose = false;
+
+    // Root-LB mode: evaluate every heuristic at the initial state only (no
+    // search) and write one CSV row per instance for root-bound comparison
+    bool rootLB = false;
 };
 
 // Forward declarations
@@ -319,6 +323,8 @@ Config parseArgs(int argc, char* argv[]) {
             ttDR5Pop = true;
         } else if (arg == "--diagnose") {
             config.diagnose = true;
+        } else if (arg == "--root-lb") {
+            config.rootLB = true;
         } else if (arg == "--no-header") {
             config.writeHeader = false;
         } else {
@@ -862,6 +868,77 @@ int diagnoseHeuristics(int group, int exam, const std::string& problemType) {
     return 0;
 }
 
+// ============================================================================
+// Root lower-bound evaluation (--root-lb)
+// ============================================================================
+// For every instance in the configured range, build ONLY the initial TT2 state
+// and evaluate each heuristic component on it — no search. Writes one CSV row
+// per instance so the heuristics' root bounds can be compared to the optimum.
+// Raw components are reported; a run with --heuristic H actually starts from
+// max(CP, HRES, raw_H), which is derivable from these columns.
+int evaluateRootLowerBounds(const Config& config) {
+    std::string filename = generateOutputFilename(config);
+    std::ofstream out(filename);
+    if (!out.is_open()) {
+        std::cerr << "Failed to open output file: " << filename << std::endl;
+        return 1;
+    }
+    out << "Group,Exam,CP,HRES,LBCS,LBCC,LBIP0,LBRC,"
+           "t_cp_us,t_hres_us,t_lbcs_us,t_lbcc_us,t_lbip0_us,t_lbrc_us\n";
+
+    for (int group = config.groupStart; group <= config.groupEnd; ++group) {
+        for (int exam = config.examStart; exam <= config.examEnd; ++exam) {
+            petri.reset();
+            RCPSPex.reset();
+            heuristicDPInitialized = false;
+            lbccInitialized = false;
+            lbip0Initialized = false;
+            lbrcInitialized = false;
+            demandMatrixInitialized = false;
+
+            getPetri(petri, group, exam, config.problemType);
+            getRCPSP(RCPSPex, group, exam, config.problemType);
+            if (petri.Transitions.empty()) {
+                std::cerr << "skip g" << group << " e" << exam << " (load failed)" << std::endl;
+                continue;
+            }
+
+            RCPSPState_TT2 root;
+            std::vector<short> unf;
+            for (int t = 1; t <= (int)petri.Transitions.size(); ++t)
+                if (!root.finishedActivitiys.test(t)) unf.push_back(t);
+
+            // Per-component timing includes each heuristic's one-time
+            // preprocessing (charged to the first component that triggers it).
+            auto timeIt = [](auto&& fn) {
+                auto t0 = std::chrono::steady_clock::now();
+                double v = fn();
+                auto t1 = std::chrono::steady_clock::now();
+                long us = std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count();
+                return std::make_pair(v, us);
+            };
+            auto [cpH, tCp]     = timeIt([&]{ return unf.empty() ? 0 : getForwardHcostDP(unf, root.activeTransitionIndices); });
+            auto [hres, tHres]  = timeIt([&]{ return unf.empty() ? 0 : getforwardResource(unf, root.activeTransitionIndices); });
+            auto [lbcs, tLbcs]  = timeIt([&]{ return unf.empty() ? 0 : computeLBCS(unf, root.activeTransitionIndices); });
+            auto [lbcc, tLbcc]  = timeIt([&]{ return unf.empty() ? 0 : computeCriticalCapacityLB(unf, root.activeTransitionIndices, root.g); });
+            auto [lbip0, tIp0]  = timeIt([&]{ return unf.empty() ? 0 : computeLBIP0(root.g); });
+            auto [lbrc, tLbrc]  = timeIt([&]{ return unf.empty() ? 0 : computeLBRC(root.g); });
+
+            out << group << "," << exam << ","
+                << cpH << "," << hres << "," << lbcs << ","
+                << lbcc << "," << lbip0 << "," << lbrc << ","
+                << tCp << "," << tHres << "," << tLbcs << ","
+                << tLbcc << "," << tIp0 << "," << tLbrc << "\n";
+            std::cout << "root-lb " << config.problemType << " g" << group << " e" << exam
+                      << ": cp=" << cpH << " hres=" << hres << " lbcs=" << lbcs
+                      << " lbcc=" << lbcc << " lbip0=" << lbip0 << " lbrc=" << lbrc << std::endl;
+        }
+    }
+    out.close();
+    std::cout << "Root LB results written to " << filename << std::endl;
+    return 0;
+}
+
 // NOTE: Bidirectional search - currently not working
 int solveRCPSP_Bi(int group, int exam, const std::string& filename) {
     std::cout << "started solving (Bi): " << group << ":" << exam << std::endl;
@@ -1052,6 +1129,10 @@ int main(int argc, char *argv[]) {
 
     if (config.diagnose) {
         return diagnoseHeuristics(config.groupStart, config.examStart, config.problemType);
+    }
+
+    if (config.rootLB) {
+        return evaluateRootLowerBounds(config);
     }
 
     runSolver(config);

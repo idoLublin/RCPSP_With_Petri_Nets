@@ -45,6 +45,7 @@ clang++ -std=c++17 -g HOG2/RCPSP/Driver.cpp -o build/Driver
 | `--ub-prune` | Prune `g+h > UB` using a root serial-SGS schedule (TT2 only) | disabled |
 | `--dr4` | DR4 delayed-start dominance at successor generation (TT2 only) | disabled |
 | `--tt-dr` | Enable all Liu-style dominance rules DR1+DR2+DR5 (TT only) | disabled |
+| `--root-lb` | Evaluate every heuristic at the initial state only (no search); one CSV row per instance with raw components CP,HRES,LBCS,LBCC,LBIP0,LBRC | disabled |
 | `--tt-dr1` / `--tt-dr2` / `--tt-dr5` / `--tt-dr5-pop` | Individual TT dominance sub-rules (ablation) | disabled |
 | `--output-folder F` | Output folder path | data |
 | `--output-file F` | Output filename | auto-generated |

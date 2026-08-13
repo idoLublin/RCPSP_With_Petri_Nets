@@ -1,6 +1,6 @@
 # Results coverage report
 
-Source rows: 24960 across 52 files.
+Source rows: 30240 across 63 files.
 Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is checked between node expansions).
 
 ## Coverage matrix
@@ -16,6 +16,8 @@ Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is c
 | j30 | TT | base | LBIP0 | laptop | 480 | 387 | 93 | 1266.8 | complete |
 | j30 | TT | base | LBIP0 | university | 480 | 391 | 89 | 309.1 | complete |
 | j30 | TT | base | LBMAX | university | 480 | 391 | 89 | 309.1 | complete |
+| j30 | TT | lber_d3 | LBER | university | 480 | 356 | 124 | 300.0 | complete |
+| j30 | TT | lber_d4 | LBER | university | 480 | 345 | 135 | 300.0 | complete |
 | j30 | TT | ttdr | CP | university | 480 | 392 | 88 | 300.0 | complete |
 | j30 | TT | ttdr | LBCC | university | 480 | 391 | 89 | 300.4 | complete |
 | j30 | TT | ttdr | LBCS | university | 480 | 402 | 78 | 300.0 | complete |
@@ -28,6 +30,9 @@ Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is c
 | j30 | TT2 | base | LBMAX | university | 480 | 476 | 4 | 300.0 | complete |
 | j30 | TT2 | dom | LBCS | university | 480 | 480 | 0 | 25.8 | complete |
 | j30 | TT2 | dom | LBMAX | university | 480 | 480 | 0 | 24.3 | complete |
+| j30 | TT2 | dom_dr4 | LBCC | university | 480 | 480 | 0 | 17.4 | complete |
+| j30 | TT2 | dom_dr4 | LBCS | university | 480 | 480 | 0 | 15.6 | complete |
+| j30 | TT2 | dom_dr4 | LBMAX | university | 480 | 480 | 0 | 14.7 | complete |
 | j30 | TT2 | lber_d3 | LBER | university | 480 | 477 | 3 | 300.0 | complete |
 | j60 | TT | base | CP | university | 480 | 192 | 288 | 308.8 | complete |
 | j60 | TT | base | LBCC | university | 480 | 266 | 214 | 308.9 | complete |
@@ -44,6 +49,9 @@ Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is c
 | j60 | TT2 | base | LBMAX | university | 480 | 241 | 239 | 307.9 | complete |
 | j60 | TT2 | dom | LBCS | university | 480 | 299 | 181 | 302.6 | complete |
 | j60 | TT2 | dom | LBMAX | university | 480 | 301 | 179 | 306.5 | complete |
+| j60 | TT2 | dom_dr4 | LBCC | university | 480 | 355 | 125 | 302.3 | complete |
+| j60 | TT2 | dom_dr4 | LBCS | university | 480 | 357 | 123 | 304.1 | complete |
+| j60 | TT2 | dom_dr4 | LBMAX | university | 480 | 359 | 121 | 304.6 | complete |
 | j60 | TT2 | lber_d3 | LBER | university | 480 | 242 | 238 | 305.1 | complete |
 | j90 | TT | base | LBCC | university | 480 | 233 | 247 | 302.7 | complete |
 | j90 | TT | base | LBCS | university | 480 | 56 | 424 | 304.3 | complete |
@@ -59,6 +67,9 @@ Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is c
 | j90 | TT2 | base | LBMAX | university | 480 | 182 | 298 | 307.1 | complete |
 | j90 | TT2 | dom | LBCS | university | 480 | 208 | 272 | 302.8 | complete |
 | j90 | TT2 | dom | LBMAX | university | 480 | 209 | 271 | 306.6 | complete |
+| j90 | TT2 | dom_dr4 | LBCC | university | 480 | 293 | 187 | 300.4 | complete |
+| j90 | TT2 | dom_dr4 | LBCS | university | 480 | 295 | 185 | 303.3 | complete |
+| j90 | TT2 | dom_dr4 | LBMAX | university | 480 | 295 | 185 | 309.2 | complete |
 
 ## Duplicate files (byte-identical, one kept)
 
@@ -82,7 +93,19 @@ Per-instance timeout: 300 s (overshoot up to ~10 s occurs because the limit is c
 - j90 / dom / LBCC: not run
 - j90 / dom / LBER: not run
 - j90 / dom / LBIP0: not run
+- j30 / dom_dr4 / CP: not run
+- j30 / dom_dr4 / LBER: not run
+- j30 / dom_dr4 / LBIP0: not run
+- j60 / dom_dr4 / CP: not run
+- j60 / dom_dr4 / LBER: not run
+- j60 / dom_dr4 / LBIP0: not run
+- j90 / dom_dr4 / CP: not run
+- j90 / dom_dr4 / LBER: not run
+- j90 / dom_dr4 / LBIP0: not run
 - j90 / lber_d3 / LBER: not run
+- j30 / lber_d4 / LBER: not run
+- j60 / lber_d4 / LBER: not run
+- j90 / lber_d4 / LBER: not run
 - j30 / ttdr / CP: not run
 - j30 / ttdr / LBCC: not run
 - j30 / ttdr / LBCS: not run

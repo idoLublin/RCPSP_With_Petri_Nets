@@ -1,0 +1,96 @@
+diff --git a/HOG2/RCPSP/Driver.cpp b/HOG2/RCPSP/Driver.cpp
+index 9b164cb..531b929 100644
+--- a/HOG2/RCPSP/Driver.cpp
++++ b/HOG2/RCPSP/Driver.cpp
+@@ -120,6 +120,9 @@ struct Config {
+ 
+     // Display help
+     bool showHelp = false;
++
++    // Root-LB mode: compute only the LBER root bound per instance (no search)
++    bool rootLB = false;
+ };
+ 
+ // Forward declarations
+@@ -242,6 +245,8 @@ Config parseArgs(int argc, char* argv[]) {
+             config.heuristic = P_RCPSP::stringToHeuristicType(argv[++i]);
+         } else if (arg == "--lber-mode" && i + 1 < argc) {
+             config.lberMode = argv[++i];
++        } else if (arg == "--root-lb") {
++            config.rootLB = true;
+         } else if (arg == "--lber-depth" && i + 1 < argc) {
+             config.lberDepth = std::stoi(argv[++i]);
+         } else if (arg == "--use-cs") {
+@@ -740,14 +745,70 @@ void runSolver(const Config& config) {
+ // ============================================================================
+ // Main Entry Point
+ // ============================================================================
++// ============================================================================
++// Root LBER evaluation (--root-lb): destructive LBER root bound per instance,
++// no search. One CSV row per instance; CP at root included as a cross-check.
++// ============================================================================
++extern thread_local int lberRootBound;
++
++int evaluateRootLBER(const Config& config) {
++    std::string filename = generateOutputFilename(config);
++    std::ofstream out(filename);
++    if (!out.is_open()) {
++        std::cerr << "Failed to open output file: " << filename << std::endl;
++        return 1;
++    }
++    out << "Group,Exam,LBER,CP\n";
++    lberMode = "root";
++    lberDepth = config.lberDepth;
++
++    for (int group = config.groupStart; group <= config.groupEnd; ++group) {
++        for (int exam = config.examStart; exam <= config.examEnd; ++exam) {
++            petri.reset();
++            RCPSPex.reset();
++            heuristicDPInitialized = false;
++            lbccInitialized = false;
++            energeticInitialized = false;
++            lberRootComputed = false;
++
++            getPetri(petri, group, exam, config.problemType);
++            getRCPSP(RCPSPex, group, exam, config.problemType);
++            if (petri.Transitions.empty()) {
++                std::cerr << "skip g" << group << " e" << exam << " (load failed)" << std::endl;
++                continue;
++            }
++            setSearchTimeout(config.timeLimit);
++
++            std::vector<short> unf;
++            for (int t = 1; t <= (int)petri.Transitions.size(); ++t) unf.push_back(t);
++            double cpH = getForwardHcostDP(unf, {});
++
++            computeRootBound(config.lberDepth);
++
++            out << group << "," << exam << "," << lberRootBound << "," << cpH << "\n";
++            out.flush();
++            std::cout << "root-lb " << config.problemType << " g" << group << " e" << exam
++                      << ": lber(d" << config.lberDepth << ")=" << lberRootBound
++                      << " cp=" << cpH << std::endl;
++        }
++    }
++    out.close();
++    std::cout << "LBER root results written to " << filename << std::endl;
++    return 0;
++}
++
+ int main(int argc, char *argv[]) {
+     Config config = parseArgs(argc, argv);
+-    
++
+     if (config.showHelp) {
+         printUsage(argv[0]);
+         return 0;
+     }
+-    
++
++    if (config.rootLB) {
++        return evaluateRootLBER(config);
++    }
++
+     runSolver(config);
+     return 0;
+ }

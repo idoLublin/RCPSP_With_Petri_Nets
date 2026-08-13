@@ -58,8 +58,10 @@ BASE_RE = re.compile(
 )
 # dom_j30_lbcs.csv / dom_j90_max.csv
 DOM_RE = re.compile(r"^dom_(?P<set>j\d+)_(?P<heur>\w+)\.csv$")
-# lber_j30_d4.csv / lber_j30_d3.csv — LBER at delta setting dN
-LBER_RE = re.compile(r"^lber_(?P<set>j\d+)_d(?P<d>\d+)\.csv$")
+# j60_dr4_lbcc.csv — TT2 with the full stack incl. DR4 delayed-start pruning
+DR4_RE = re.compile(r"^(?P<set>j\d+)_dr4_(?P<heur>\w+)\.csv$")
+# lber_j30_d3.csv (TT2) / lber_tt_j30_d3.csv (TT) — LBER at delta setting dN
+LBER_RE = re.compile(r"^lber_(?:tt_)?(?P<set>j\d+)_d(?P<d>\d+)\.csv$")
 
 MODEL_NAMES = {"tp": "TP", "tt": "TT", "tt2": "TT2"}
 
@@ -69,6 +71,8 @@ def classify(path: Path):
     name = path.name
     if DOM_RE.match(name):
         return "dom", ""
+    if DR4_RE.match(name):
+        return "dom_dr4", ""
     m = LBER_RE.match(name)
     if m:
         return f"lber_d{m.group('d')}", ""
@@ -110,7 +114,7 @@ def parse_file(path: Path, config: str, run_date: str, machine: str):
                 "model": petri_type,
                 "heuristic": heuristic,
                 "config": config,
-                "dominance": config in ("dom", "ttdr"),
+                "dominance": config in ("dom", "dom_dr4", "ttdr"),
                 "solved": solved,
                 "makespan": makespan if solved else "",
                 "time": float(time_s),
@@ -123,7 +127,8 @@ def parse_file(path: Path, config: str, run_date: str, machine: str):
                 "dr4_pruned": "",
                 "run_date": run_date,
                 "machine": machine,
-                "source_file": str(path.relative_to(REPO_ROOT)),
+                "source_file": str(path.relative_to(REPO_ROOT))
+                               if path.is_relative_to(REPO_ROOT) else str(path),
             }
             # dom files: 14 populated columns (15 with dr4_pruned in newer builds)
             if len(row) >= 14 and row[11].strip():

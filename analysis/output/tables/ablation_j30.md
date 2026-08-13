@@ -8,6 +8,8 @@
 | TT LBMAX +dr | 392 (391, +1) | 5.59 (11.94) | 37,900 (720,637) |
 | TT LBCS +dr | 402 (396, +6) | 8.62 (12.96) | 56,316 (674,546) |
 | TT2 LBMAX +dom | 480 (476, +4) | 0.36 (4.80) | 32,953 (642,996) |
+| TT2 LBMAX +dom+dr4 | 480 (480, +0) | 0.14 (0.36) | 16,035 (32,953) |
 | TT2 LBCS +dom | 480 (477, +3) | 0.37 (4.98) | 31,363 (637,239) |
+| TT2 LBCS +dom+dr4 | 480 (480, +0) | 0.15 (0.37) | 15,329 (31,363) |
 
 _Averages are over each configuration's solved instances only; configurations solving different subsets are not directly comparable on time/nodes. Time/node columns show the with-dominance value and the no-dominance value in parentheses._

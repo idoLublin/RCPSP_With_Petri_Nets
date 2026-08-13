@@ -1,7 +1,7 @@
 # RCPSP with Petri Nets — Final Experimental Results Summary
 
 Self-contained summary of all final benchmark results for the project book and
-presentation. Generated 2026-08-05 from the master results CSV
+presentation. Generated 2026-08-13 from the master results CSV
 (`analysis/output/master_results.csv`); regenerable end-to-end via the scripts
 in `analysis/` (see `analysis/README.md`).
 
@@ -21,8 +21,10 @@ Admissible heuristics evaluated (all include the `max(CP, h_res)` floor):
 **CP** (critical path), **LBCC**, **LBIP0**, **LBMAX** (= max(CP, LB_RC)),
 **LBCS** (cutset-based), **LBER** (evaluated at delta setting d3). Dominance
 pruning: for TT2, "+dom" = cutset dominance rule + dominance-pop + SGS
-upper-bound pruning; for TT, "+dr" = the Liu et al. dominance rules
-DR1/DR2/DR5.
+upper-bound pruning, and "+dom+dr4" additionally enables the DR4
+delayed-start dominance rule (in the recorded +dom+dr4 runs the UB-pruning
+counter is zero — configuration to confirm); for TT, "+dr" = the Liu et al.
+dominance rules DR1/DR2/DR5.
 
 ## 2. Experimental protocol
 
@@ -53,20 +55,25 @@ DR1/DR2/DR5.
 | TT LBIP0 +dr | 391 | 261 | 140 |
 | TT LBMAX +dr | 392 | 277 | **161** |
 | TT LBCS +dr | **402** | **277** | 158 |
+| TT LBER (d3) | 356 | — | — |
 | TT2 CP | 476 | 241 | 182 |
 | TT2 LBCC | 476 | 236 | 179 |
 | TT2 LBIP0 | 476 | 241 | 183 |
 | TT2 LBMAX | 476 | 241 | 182 |
 | TT2 LBCS | **477** | 240 | 181 |
 | TT2 LBER (d3) | **477** | **242** | not run |
-| TT2 LBCS +dom | **480** | 299 | 208 |
-| TT2 LBMAX +dom | **480** | **301** | **209** |
+| TT2 LBCS +dom | 480 | 299 | 208 |
+| TT2 LBMAX +dom | 480 | 301 | 209 |
+| TT2 LBCC +dom+dr4 | 480 | 355 | 293 |
+| TT2 LBCS +dom+dr4 | **480** | 357 | **295** |
+| TT2 LBMAX +dom+dr4 | **480** | **359** | **295** |
 
 All table entries are university-machine measurements (no placeholders
-remain). Missing plain-TT combinations (LBIP0/LBMAX on j60/j90, CP on j90)
-were not run anywhere. Note the standout: **plain TT with LBCC solves 233 on
-j90 — the best j90 result of any configuration in the study**, ahead of
-TT2 LBMAX+dom (209); see §4/§5 for discussion.
+remain). Study bests per set: **480/480 (100%) on j30, 359/480 (75%) on
+j60, 295/480 (61%) on j90 — all by TT2 +dom+dr4**. (LBER on TT was also
+measured: 356 at d3 / 345 at d4 on j30 — uncompetitive on that model.
+Plain TT LBCC's 233 on j90, remarkable in its own right (§5), held the j90
+record until DR4 landed.)
 
 Average time / expanded nodes on solved instances (per set, selected):
 
@@ -75,8 +82,9 @@ Average time / expanded nodes on solved instances (per set, selected):
 | TT2 CP | 4.78 s | 642,996 | 16.03 s | 1,246,458 | 8.75 s | 402,611 |
 | TT2 LBCS | 4.98 s | 637,239 | 17.98 s | 1,150,488 | 8.98 s | 360,773 |
 | TT2 LBER (d3) | 5.46 s | 892,346 | 14.83 s | 1,369,588 | — | — |
-| TT2 LBCS +dom | **0.37 s** | **31,363** | 22.10 s | 1,109,477 | 14.67 s | 337,815 |
-| TT2 LBMAX +dom | **0.36 s** | **32,953** | 21.10 s | 1,205,343 | 14.20 s | 392,910 |
+| TT2 LBCS +dom | 0.37 s | 31,363 | 22.10 s | 1,109,477 | 14.67 s | 337,815 |
+| TT2 LBMAX +dom | 0.36 s | 32,953 | 21.10 s | 1,205,343 | 14.20 s | 392,910 |
+| TT2 LBCS +dom+dr4 | **0.15 s** | **15,329** | 13.76 s | 956,989 | **5.83 s** | **244,877** |
 
 (Averages are over each configuration's solved set; +dom rows on j60/j90 reach
 harder instances, which is why their averages rise while solving more.)
@@ -94,6 +102,26 @@ harder instances, which is why their averages rise while solving more.)
 
 On j30, dominance pruning **closes the benchmark**: 480/480, every instance in
 under 26 s, ~13× faster and ~20× fewer nodes on average.
+
+**Adding DR4 on top of +dom** (delta shown vs the +dom run of the same
+heuristic):
+
+| Set | Config | Solved (+dom, Δ) | Avg time (+dom) | Avg nodes (+dom) |
+|---|---|---|---|---|
+| j30 | TT2 LBCS +dom+dr4 | 480 (480, +0) | 0.15 s (0.37) | 15,329 (31,363) |
+| j30 | TT2 LBMAX +dom+dr4 | 480 (480, +0) | 0.14 s (0.36) | 16,035 (32,953) |
+| j60 | TT2 LBCS +dom+dr4 | 357 (299, **+58**) | 13.76 s (22.10) | 956,989 (1,109,477) |
+| j60 | TT2 LBMAX +dom+dr4 | 359 (301, **+58**) | 12.80 s (21.10) | 1,015,987 (1,205,343) |
+| j90 | TT2 LBCS +dom+dr4 | 295 (208, **+87**) | 5.83 s (14.67) | 244,877 (337,815) |
+| j90 | TT2 LBMAX +dom+dr4 | 295 (209, **+86**) | 5.10 s (14.20) | 246,843 (392,910) |
+
+DR4 is the second big pruning lever, and it grows with instance size: no new
+instances on the saturated j30 (but ~2.5× faster, half the nodes), +58 on
+j60, +86–87 on j90. Each +dom+dr4 run is a strict superset of its +dom
+counterpart. LBCC+dom+dr4 (480/355/293) sits right beside LBCS/LBMAX —
+TT2's rule stack does **not** exhibit the LBCC anomaly the Liu rules show
+on TT. All makespans cross-verified against prior optimal runs with zero
+mismatches (j30 additionally against the known optima, 480/480).
 
 The same ablation for TT and the Liu rules (university machine):
 
@@ -160,7 +188,10 @@ all university machine):
 | j90 | LBCS | 158 | **208** | 56.2 | 17.6 |
 | j90 | LBMAX | 161 | **209** | 56.2 | 6.7 |
 
-TT2 keeps the solved-count lead everywhere (+22 to +78). One nuance: on j60's
+With DR4 included, TT2's best stack beats TT's best (+dr) by **+78 on j30
+(480 vs 402), +82 on j60 (359 vs 277), and +134 on j90 (295 vs 161)**. The
+table above (TT2 +dom without DR4) is retained for the like-for-like
+rules-vs-rules comparison. One nuance there: on j60's
 commonly-solved instances TT+dr is actually ~2× *faster* per instance (time
 ratio < 1) despite expanding 3.5× more nodes — TT2's dominance machinery has
 a high per-node cost there — but TT2 converts that machinery into 22–24 more
@@ -255,15 +286,16 @@ TPPN 219 → TTPN 354 (10 min) → TT+dr 402 → TT2+dom 480 (5 min).
    while **with LBCC plain TT beats plain TT2** (+30 on j60, +54 on j90)
    with 3–7× fewer nodes.
 7. Rule-heuristic interaction is strong: the Liu rules add only +1–6 on j30
-   but **+85/+88 on j60 and +102 on j90 for CP/LBCS** — the largest rule
-   gains in the study (TT2's cutset rules: +3–4, +59–60, +27) — yet they
-   **hurt LBCC (−13 on j60, −98 on j90)**, where they inflate rather than
-   shrink the search. This explains the j60 crossover (TT+dr 277 > plain
-   TT2 241) and flags an open diagnosis question for LBCC.
-8. **The best j90 result in the entire study is plain TT with LBCC: 233/480
-   (49%)** — ahead of TT2 LBMAX+dom (209). Best-of-study per set:
-   j30 TT2+dom 480 (100%), j60 TT2 LBMAX+dom 301 (63%), j90 TT LBCC 233
-   (49%). Overall scaling of the flagship TT2+dom config: 100% / 63% / 44%.
+   but **+85/+88 on j60 and +102 on j90 for CP/LBCS** — yet they **hurt
+   LBCC (−13 on j60, −98 on j90)**, inflating rather than shrinking the
+   search. This explains the j60 base-crossover (TT+dr 277 > plain TT2 241)
+   and flags an open diagnosis question for LBCC. TT2's own rule stack shows
+   no such anomaly (LBCC+dom+dr4 355/293, right beside LBCS/LBMAX).
+8. **DR4 is the decisive second pruning lever for TT2**: +0/+58/+86–87 over
+   +dom, with ~2.5× speedups even where counts saturate. Study bests per
+   set — all TT2 +dom+dr4: **480 (100%), 359 (75%), 295 (61%)**. Plain TT
+   LBCC's 233 on j90 held the record before DR4 and remains the best
+   non-TT2 result and the best no-rules result on that set.
 9. Obvious next experiment: **LBER + dominance** — dominance added +59/+60 on
    j60 for LBCS/LBMAX, and LBER starts from the best base count (242), so
    LBER+dom could plausibly exceed the current best 301.
@@ -274,12 +306,20 @@ TPPN 219 → TTPN 354 (10 min) → TT+dr 402 → TT2+dom 480 (5 min).
   (24 CSVs; one byte-identical duplicate dropped). Full coverage matrix in
   `analysis/output/coverage.md`.
 - TT results on the university machine: `.../tt/` — full +dr matrix
-  (5 heuristics × 3 sets) plus plain-TT: all 5 heuristics on j30,
-  CP/LBCC/LBCS on j60, LBCC/LBCS on j90.
-- Gaps: TT2 dominance runs exist only for LBCS/LBMAX (notably missing:
-  LBER+dom, and — given the j90 LBCC surprise — TT2 LBCC+dom); LBER d3
-  never run on j90; plain-TT LBIP0/LBMAX on j60/j90 and CP on j90 not run
-  anywhere (runner ready in `analysis/run_tt_sweep.sh`).
+  (5 heuristics × 3 sets), plain-TT (all 5 on j30, CP/LBCC/LBCS on j60,
+  LBCC/LBCS on j90), and TT LBER d3/d4 on j30.
+- TT2 +dom+dr4: LBCC/LBCS/LBMAX × all three sets (complete).
+
+### Missing runs — and whether they matter
+
+| Missing run | Importance | Why |
+|---|---|---|
+| **TT2 LBER +dom+dr4 (j60, j90)** | **HIGH — the one gap that could change a headline** | LBER is the best/complementary base heuristic (242 on j60, unique hard-core solves); on the winning +dom+dr4 stack it could plausibly exceed 359/295. |
+| TT2 LBER base on j90 | Medium | Completes the LBER row in §3; LBER is the only heuristic whose base j90 number is unknown. |
+| TT2 CP/LBIP0 +dom+dr4 | Low | The three measured +dom+dr4 heuristics cluster within 2–4 instances; CP ≈ LBMAX throughout, so little new information expected. |
+| TT2 LBCC +dom (without DR4) | Low | Only needed for a complete LBCC ablation chain; +dom+dr4 supersedes it in practice. |
+| Plain-TT LBIP0/LBMAX on j60/j90, CP on j90 | Low | The TT story (collapse without rules; LBCC exception) is already established by the existing runs. |
+| Confirm UB-pruning setting of the +dom+dr4 runs | Documentation | `ub_pruned = 0` in every row — either UB was off or it never fired; §7.1/setup text should state the exact flags. |
 - Local (laptop) TT j30 sweeps: `data/real_data/2026-02-0*_tt_*.csv` and
   `2026-05-30_..._tt_lbip0.csv` (§5b).
 - Prior-work numbers in §5c are quoted from the SoCS 2026 paper and the 2025
@@ -302,10 +342,10 @@ When the book or slides need a figure, reference it by exact filename:
 
 | Figure file | What it shows | Suggested use |
 |---|---|---|
-| `scaling_summary` | 3 bars: best configuration per set — 480/480 (100%), 301/480 (63%), 209/480 (44%) with the config named in each bar | The single takeaway slide; book conclusion |
-| `cactus_j30` | Instances solved vs time budget (log x, 0.01–300 s), all 8 TT2 configurations; +dom curves dominate 2 orders of magnitude to the left | Book results §: main j30 figure |
-| `cactus_j60` | Same for j60; +dom curves separate from the base pack (~301 vs ~241) | Book results §: j60 figure |
-| `cactus_j90` | Same for j90; curves plateau low (~209 best) | Book results §: j90 figure (or merge with j60 in text) |
+| `scaling_summary` | 3 bars: best TT2 configuration per set — 480/480 (100%), 359/480 (75%), 295/480 (61%) with the config named in each bar | The single takeaway slide; book conclusion |
+| `cactus_j30` | Instances solved vs time budget (log x, 0.01–300 s), all 11 TT2 configurations; +dom+dr4 curves leftmost | Book results §: main j30 figure (consider `--configs` to slim to ~6 lines for print) |
+| `cactus_j60` | Same for j60; +dom+dr4 curves top out at ~359, clearly above +dom (~301) and base (~241) | Book results §: j60 figure |
+| `cactus_j90` | Same for j90; +dom+dr4 ~295 vs +dom ~209 vs base ~183 | Book results §: j90 figure (or merge with j60 in text) |
 | `solved_by_RS_j30/j60/j90` | Grouped bars: solved per Resource Strength level (0.2/0.5/0.7/1.0), one bar per configuration | Hardness analysis §6 — the RS gradient; j60 version is the most telling |
 | `solved_by_RF_j30/j60/j90` | Same broken down by Resource Factor | Hardness analysis, secondary (RF effect is milder) |
 | `tt_vs_tt2_solved_j30/j60/j90` | Paired bars TT vs TT2 per heuristic, no dominance rules (j30: 5 heuristics; j60/j90: LBCS only — 189 vs 240, 56 vs 181) | Model-comparison §5, first half; j90 version shows the widening gap |

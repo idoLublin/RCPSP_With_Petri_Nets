@@ -45,6 +45,8 @@ SERIES_STYLES = [
     dict(color="0.35", linestyle="-.", marker="*"),
     dict(color="0.0",  linestyle=(0, (5, 1, 1, 1)), marker="<"),
     dict(color="0.5",  linestyle="--", marker=">"),
+    dict(color="0.35", linestyle=":",  marker="h"),
+    dict(color="0.0",  linestyle="-",  marker="s"),
 ]
 BAR_FILLS = [
     dict(color="0.15", hatch=""),
@@ -55,6 +57,10 @@ BAR_FILLS = [
     dict(color="0.6",  hatch="\\\\\\"),
     dict(color="1.0",  hatch="xxx"),
     dict(color="0.8",  hatch="||"),
+    dict(color="0.3",  hatch="//"),
+    dict(color="0.95", hatch="---"),
+    dict(color="0.55", hatch="++"),
+    dict(color="1.0",  hatch="\\\\"),
 ]
 
 STYLE = {
@@ -83,6 +89,8 @@ def config_label(row):
     label = f"{row['model']} {row['heuristic']}"
     if row["config"] == "dom":
         label += " +dom"
+    elif row["config"] == "dom_dr4":
+        label += " +dom+dr4"
     elif row["config"] == "ttdr":
         label += " +dr"
     elif row["config"].startswith("lber_"):

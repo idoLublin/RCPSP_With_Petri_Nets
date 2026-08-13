@@ -12,13 +12,18 @@
 | TT LBMAX +dr | 392 | 5.59 | 37,900 |
 | TT LBCS | 396 | 12.96 | 674,546 |
 | TT LBCS +dr | 402 | 8.62 | 56,316 |
+| TT LBER (d3) | 356 | 20.68 | 37,305 |
+| TT LBER (d4) | 345 | 19.34 | 20,460 |
 | TT2 CP | 476 | 4.78 | 642,996 |
 | TT2 LBCC | 476 | 5.72 | 604,701 |
+| TT2 LBCC +dom+dr4 | 480 | 0.18 | 14,961 |
 | TT2 LBIP0 | 476 | 4.52 | 611,338 |
 | TT2 LBMAX | 476 | 4.80 | 642,996 |
 | TT2 LBMAX +dom | 480 | 0.36 | 32,953 |
+| TT2 LBMAX +dom+dr4 | 480 | 0.14 | 16,035 |
 | TT2 LBCS | 477 | 4.98 | 637,239 |
 | TT2 LBCS +dom | 480 | 0.37 | 31,363 |
+| TT2 LBCS +dom+dr4 | 480 | 0.15 | 15,329 |
 | TT2 LBER (d3) | 477 | 5.46 | 892,346 |
 
 _Averages are over each configuration's solved instances only; configurations solving different subsets are not directly comparable on time/nodes._

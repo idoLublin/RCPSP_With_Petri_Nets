@@ -89,6 +89,34 @@ Average time / expanded nodes on solved instances (per set, selected):
 (Averages are over each configuration's solved set; +dom rows on j60/j90 reach
 harder instances, which is why their averages rise while solving more.)
 
+## 3b. The project's progression — j30 as the yardstick
+
+Every milestone measured on the same benchmark (j30, 480 instances), same
+300 s protocol, same heuristic family; rows 3–7 on the same university
+machine with LBCS, so times are directly comparable. "Sweep time" = wall
+time to run all 480 instances sequentially (timeouts counted at 300 s).
+
+| Milestone | Solved | Avg time on solved | Full-sweep time | vs final |
+|---|---:|---:|---:|---:|
+| TPPN, previous project (10 min, laptop) | 219 (46%) | — | — | — |
+| TTPN, previous project (10 min, laptop) | 354 (74%) | — | — | — |
+| TT plain (this project) | 396 (82%) | 12.96 s | 8.4 h | 421× slower |
+| TT + Liu rules | 402 (84%) | 8.62 s | 7.5 h | 373× slower |
+| TT2 (relative-delay states) | 477 (99%) | 4.98 s | 55 min | 45× slower |
+| TT2 + cutset/UB pruning (+dom) | 480 (100%) | 0.37 s | 3.0 min | 2.5× slower |
+| **TT2 + dom + DR4 (final)** | **480 (100%)** | **0.15 s** | **1.2 min** | — |
+
+Reading: over the two project generations, j30 went from 46% solved in a
+10-minute-per-instance budget to **100% solved with the entire benchmark
+completed in 1.2 minutes** — within this project alone, a 421× reduction in
+total compute and an ~86× per-instance speedup over the plain TT baseline
+(12.96 → 0.15 s), with +84 more instances solved. Each step contributed:
+the model change (TT→TT2) bought +75–81 instances and ~9× sweep time; the
+cutset rules bought the last 3 and ~18×; DR4 another ~2.5×. The same
+ordering holds on j60 (189 → 277 → 240 → 301 → **359**) and j90
+(56 → 158 → 181 → 209 → **295**), where the gains grow instead of
+saturating.
+
 ## 4. Dominance-pruning ablation (with vs without, same heuristic)
 
 | Set | Config | Solved (base, Δ) | Avg time (base) | Avg nodes (base) |

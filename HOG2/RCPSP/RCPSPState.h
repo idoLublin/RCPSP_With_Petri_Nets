@@ -184,16 +184,25 @@ public:
     mutable std::vector<std::pair<short, short>> AvailableTransitionIndices_TT2;
     mutable bool transitionsCached = false;
     bool direction=1;
-    bool isDeltaZero;
+    // false at the ROOT: the root has no incoming firing. (Was uninitialized, which
+    // also let HCost's zero-cost h-caching reuse predessesor_h=0 for the root.)
+    bool isDeltaZero = false;
     bool isCriticalInActive;
     short g = 0;
     short g_pre = 0;
     mutable short h = 0;
     short predessesor_h = 0;
-    short lastTransitionId=0; // <--- SAVE IT HERE
+    short lastTransitionId=0; // transition fired to create THIS state (most-recent, not final)
     mutable short nextCritical;
+    // SHADOW absolute start time per activity (1-based id -> start clock; -1 = not
+    // started). Set when an activity fires (= g at that point). Used ONLY by the
+    // order-swap dominance check (RCPSP_ORDERSWAP). DELIBERATELY excluded from
+    // operator== AND GetStateHash — two states with the same marking but different
+    // start histories must still merge; abs_start is an annotation, never identity.
+    std::array<short, 128> abs_start;
     RCPSPState_TT2();
     RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime,bool Direction =1);
+    bool order_swap_prunable() const;   // Hartmann 1998 Rule 7, TT2 form (uses abs_start)
 
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_TT2& other) const {
@@ -304,6 +313,11 @@ public:
      std::vector<std::pair<short,short>> added_precedences={}; // accumulated from root
      mutable  bool is_size2_conflict = false;
 
+     // Warm-start branch-ordering key (RCPSP_WARMSTART=1). Set by the child ctors
+     // to the inflated-schedule start time of the activity this child delays;
+     // GetSuccessors stable-sorts siblings by it. 0 when warm start is off.
+     short warmstart_key = 0;
+
     short compute_h_and_RVS() const;
 
     // Light scan: find ONLY the earliest resource conflict (t*, participants,
@@ -314,6 +328,14 @@ public:
     // conflict, written by the full compute_h_and_RVS. Semantics are identical
     // to the earliest conflict the full scans find.
     bool compute_first_conflict(short& res_out) const;
+
+    // Greedy dive to a FEASIBLE schedule, reusing the CBS machinery: repeatedly
+    // take the earliest conflict (compute_first_conflict — no RVS/MDA/scoring),
+    // delay one participant out of that time slot (min-push), propagate, until
+    // conflict-free. Returns that feasible schedule's makespan — a valid upper
+    // bound. Returns SHRT_MAX if it can't converge (then no UB, safe). The
+    // returned schedule is verified conflict-free before its makespan is trusted.
+    short greedy_dive_makespan() const;
 
     void propagate_with_strong_form_0();
     short compute_start_recursive(short act, std::array<bool, N>& visited);
@@ -337,6 +359,14 @@ public:
     // isLeftShiftable(), this checks RESOURCE feasibility of the shift —
     // without it every CBS delay would be flagged.
     bool left_shift_prunable() const;
+
+    // Order-swap candidate (Hartmann 1998 Bounding Rule 7), MEASUREMENT ONLY.
+    // True iff the frozen set (finish <= t_first) contains a back-to-back pair
+    // i>j with f_i == s_j, sharing a resource, and no precedence either way — the
+    // non-canonical order that rule 7 would prune. Detector counts how often this
+    // survives DR5; it does NOT prune (soundness of the prune in a delay search
+    // needs the canonical order to be reachable via a sibling — validated later).
+    bool order_swap_candidate() const;
     bool dominates(const RCPSPState_CBS& other) const;
     std::span<const short> get_conflict_activities(const Conflict& c) const {
         return std::span<const short>(&rvs_activities_pool[c.activity_start_index], c.num_activities);
@@ -365,6 +395,18 @@ public:
         const std::array<short, N>& prev_starts,
         const std::vector<short>& bg_activities,
         int res_idx) const;
+
+    // Improvement 2 (RCPSP_MDA_RECURSE): *this is an MDA child whose delayed set
+    // `mda_members` has already cleared the original conflict's complement, but may
+    // itself be internally over-capacity on res_idx. Detect the earliest internal
+    // over-capacity window, branch over the sub-MDA selections that resolve it, push
+    // each further past the rest (non-minimal), and recurse until internally
+    // feasible. One leaf child per resolution is appended to `out`; if `mda_members`
+    // is already internally feasible, *this is emitted unchanged. `depth` is the
+    // recursion level (0 at the outer call). Requires use_non_minimal_delay.
+    void gen_internal_mda_split(const std::vector<short>& mda_members,
+                                int res_idx, int depth,
+                                std::vector<RCPSPState_CBS<N>>& out) const;
 
     std::vector<MDA> compute_mdas(
     const std::vector<short>& current_jobs,
@@ -480,6 +522,8 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
                       );
 double getforwardResource(std::vector<short>unstartedTransitions,std::vector<std::pair<short, short>>activeTransitionIndices);
+double thetaResourceBound_TT2(const std::vector<short>& tempUnfinished,
+                              const std::vector<std::pair<short, short>>& activeTransitionIndices);
 double getForwardHcost0Based(std::vector<short> unstartedTransitions,
                       std::vector<std::pair<short, short>> activeTransitionIndices);
 

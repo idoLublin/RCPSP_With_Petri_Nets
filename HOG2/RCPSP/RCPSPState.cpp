@@ -18,6 +18,7 @@
 #include <climits>
 
 #include "RCPSP.h"
+#include "ThetaTree.h"   // Vilím Θ-tree ECT resource bound (RCPSP_TT2_THETA=1)
 using namespace P_RCPSP;
 
 
@@ -481,6 +482,71 @@ double getforwardResource(std::vector<short> tempUnfinished,
         maxResourceBound = std::max(maxResourceBound, bound);
     }
     return maxResourceBound;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Θ-tree resource-completion dual bound (RCPSP_TT2_THETA=1). Returns a RELATIVE
+// remaining-makespan lower bound: max over resources r of the Vilím ECT of the
+// still-unfinished activities on r, using earliest-start bounds measured
+// relative to the current state (now = 0) — exactly the frame the existing
+// getForwardHcost / getforwardResource bounds use, so it maxes in consistently.
+//
+// est_i (relative) is computed with the SAME recurrence as getForwardHcost:
+// active predecessors contribute their residual delay, finished ones contribute
+// 0. energy_i = remaining_duration_i * demand_{i,r} (residual for active tasks,
+// full duration for not-yet-started ones). Independently admissible: est_i is a
+// valid lower bound on i's start, so ceil(Env/C) never exceeds the true earliest
+// completion — hence max()-combining it with the existing bound stays admissible.
+double thetaResourceBound_TT2(const std::vector<short>& tempUnfinished,
+                              const std::vector<std::pair<short, short>>& activeTransitionIndices) {
+    const int N = static_cast<int>(RCPSPex.activities.size());
+    if (N == 0 || tempUnfinished.empty()) return 0.0;
+
+    // Residual (remaining) duration for currently-active activities; -1 otherwise.
+    std::vector<int> residual(N + 1, -1);
+    for (const auto& [id, res] : activeTransitionIndices)
+        if (id >= 1 && id <= N) residual[id] = res;
+
+    std::vector<char> unfinished(N + 1, 0);
+    for (short id : tempUnfinished) unfinished[id] = 1;
+
+    // Earliest-start bound per activity, relative to now (matches getForwardHcost).
+    // tempUnfinished is ascending-id (topological for PSPLIB) so predecessors are
+    // resolved first; even out of order this only under-estimates est, which keeps
+    // the bound admissible (looser, never wrong).
+    std::vector<int> est(N + 1, 0);
+    for (short id : tempUnfinished) {
+        int maxPredFinish = 0;
+        for (short dep : RCPSPex.backword_dependencies[id - 1]) {
+            if (dep >= 1 && dep <= N && unfinished[dep]) {
+                int d = (residual[dep] != -1) ? residual[dep]
+                                              : (int)RCPSPex.activities[dep - 1].duration;
+                maxPredFinish = std::max(maxPredFinish, est[dep] + d);
+            }
+            // finished predecessors contribute est 0 (they are in the past)
+        }
+        est[id] = maxPredFinish;
+    }
+
+    double best = 0.0;
+    std::vector<std::pair<long, long>> leaves;   // (est, energy) reused per resource
+    for (const auto& [resName, capacity] : RCPSPex.resources) {
+        if (capacity <= 0) continue;
+        leaves.clear();
+        for (short id : tempUnfinished) {
+            if (id == 1 || id == N) continue;    // dummy source/sink: no demand
+            const auto& act = RCPSPex.activities[id - 1];
+            auto it = act.resource_demands.find(resName);
+            if (it == act.resource_demands.end() || it->second <= 0) continue;
+            int dur = (residual[id] != -1) ? residual[id] : (int)act.duration;
+            if (dur <= 0) continue;
+            leaves.emplace_back((long)est[id], (long)dur * (long)it->second);
+        }
+        if (leaves.empty()) continue;
+        long ect = thetaTreeECT(leaves, (long)capacity);
+        if ((double)ect > best) best = (double)ect;
+    }
+    return best;
 }
 
 double getBackwardHcost(std::vector<short> unstartedTransitions,
@@ -3542,12 +3608,17 @@ short RCPSPState_CBS<N>::compute_nonminimal_delay(
     const short capacity = resource_info[res_idx].capacity;
     const short current  = prev_starts[activity];
 
-    // Candidate times: current start + finish time of each bg activity.
-    // bg demand can only DROP at finish times, so those are the only
-    // moments a slot might first become feasible.
+    // Candidate times: the finish time of each bg (complement) activity. We do NOT
+    // include `current`: this member is a participant of the conflict at time t*, so
+    // it runs at t* and MUST be delayed past it. Every bg member also runs at t*, so
+    // all their finishes are > t*, i.e. >= the minimal-delay target (nearest freeing
+    // event). Testing `current` is a BUG when current < t*: before the other members
+    // have ramped up the member trivially "fits" at its own start and never moves —
+    // a no-op self-loop that silently drops that MDA's resolution. Starting from the
+    // complement finishes makes this the textbook "delay to the nearest freeing event,
+    // then to the earliest event where it actually co-fits."
     std::vector<short> candidates;
-    candidates.reserve(bg_activities.size() + 1);
-    candidates.push_back(current);
+    candidates.reserve(bg_activities.size());
     for (short bg : bg_activities) {
         short finish = prev_starts[bg] + (short)RCPSPex.activities[bg].duration;
         if (finish > current)
@@ -3555,6 +3626,7 @@ short RCPSPState_CBS<N>::compute_nonminimal_delay(
     }
     std::sort(candidates.begin(), candidates.end());
 
+    short winner = -1;
     for (short t : candidates) {
         short bg_demand = 0;
         for (short bg : bg_activities) {
@@ -3563,16 +3635,25 @@ short RCPSPState_CBS<N>::compute_nonminimal_delay(
             if (s <= t && t < f)
                 bg_demand += resource_info[res_idx].demand_lookup.at(bg);
         }
-        if (bg_demand + demand_i <= capacity)
-            return t;
+        if (bg_demand + demand_i <= capacity) { winner = t; break; }
+    }
+    if (winner < 0) {
+        // Fallback: after ALL bg activities finish the slot is always free.
+        winner = current;
+        for (short bg : bg_activities)
+            winner = std::max(winner,
+                (short)(prev_starts[bg] + RCPSPex.activities[bg].duration));
     }
 
-    // Fallback: after ALL bg activities finish the slot is always free.
-    short latest = current;
-    for (short bg : bg_activities)
-        latest = std::max(latest,
-            (short)(prev_starts[bg] + RCPSPex.activities[bg].duration));
-    return latest;
+    // Diagnostic: complement finish-times we jumped over (current, winner) are the
+    // intermediate resolution points — and their "delay complement" siblings — that
+    // this non-minimal push collapses. Count them.
+    int skipped = 0;
+    for (short c : candidates)
+        if (c > current && c < winner) ++skipped;
+    if (skipped > 0) { ++g_nmd_overshoot_events; g_nmd_lost_siblings += skipped; }
+
+    return winner;
 }
 
 template<short N>
@@ -3582,16 +3663,41 @@ short RCPSPState_CBS<N>::compute_mda_cost(
     const std::array<short, N>& latest_starts,
     int res_idx) const
 {
-    // h-value always uses minimal delay (admissible heuristic).
-    // use_non_minimal_delay only affects child-state generation (B/C), not h.
-
-    // ── Minimal-delay path ───────────────────────────────────────────────────
-    // new_start = min finish of conflict members NOT in the set (uniform for all members)
+    // The h must cost the SAME delay the child generator applies, or it under-
+    // estimates. Default (minimal delay): new_start = min completion of the conflict
+    // members NOT in the set. With RCPSP_SETDELAY the child pushes the whole set to
+    // the earliest completion where it co-fits, so the h uses that larger new_start
+    // too — a strictly tighter but still admissible bound (admissible w.r.t. the
+    // setdelay search tree, where every resolution of this conflict pays >= it).
     short new_start = std::numeric_limits<short>::max();
     for (short other : current_jobs) {
         if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
         short finish = start_times[other] + RCPSPex.activities[other].duration;
         new_start = std::min(new_start, finish);
+    }
+    if (g_use_setdelay && new_start != std::numeric_limits<short>::max()) {
+        // Advance the whole set to the earliest bg-completion where it co-fits.
+        const short cap = resource_info[res_idx].capacity;
+        short demandD = 0;
+        for (short m : mda_set) demandD += resource_info[res_idx].demand_lookup.at(m);
+        std::vector<short> cand;
+        cand.push_back(new_start);                               // min-completion baseline
+        for (short other : current_jobs) {
+            if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
+            short f = start_times[other] + (short)RCPSPex.activities[other].duration;
+            if (f > new_start) cand.push_back(f);
+        }
+        std::sort(cand.begin(), cand.end());
+        for (short t : cand) {
+            short bgd = 0;
+            for (short other : current_jobs) {
+                if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
+                short s = start_times[other];
+                short f = s + (short)RCPSPex.activities[other].duration;
+                if (s <= t && t < f) bgd += resource_info[res_idx].demand_lookup.at(other);
+            }
+            if (bgd + demandD <= cap) { new_start = t; break; }
+        }
     }
 
     // max delta over set members
@@ -3827,13 +3933,16 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 
                 bool is_better;
                 if (g_use_hybrid && setting.use_conflict_prioritization && found_any) {
-                    // Hybrid: cardinality only decides between cardinal (score==1)
-                    // and non-cardinal conflicts; among non-cardinals branch on the
-                    // EARLIEST (advances t*, keeps dominance eligible).
-                    const bool cand_card = (score >= 1.0f), best_card = (best_score >= 1.0f);
-                    if (cand_card != best_card) is_better = cand_card;
-                    else if (cand_card)         is_better = (t < best_t);
-                    else                        is_better = (t < best_t);
+                    // Threshold hybrid: conflicts with cardinality score >= T are
+                    // "strong" and picked by score (prioritization); conflicts below T
+                    // are "weak" and picked by EARLIEST (first-conflict — advances t*,
+                    // keeps dominance eligible). T=1 => only cardinals are strong;
+                    // T=0 => pure prioritization; T>1 => pure first-conflict.
+                    const float T = g_hybrid_threshold;
+                    const bool cand_strong = (score >= T), best_strong = (best_score >= T);
+                    if (cand_strong != best_strong) is_better = cand_strong;   // strong beats weak
+                    else if (cand_strong) is_better = (score > best_score) || (score == best_score && t < best_t);
+                    else                  is_better = (t < best_t);            // among weak: earliest
                 } else {
                     is_better = !found_any
                         || (setting.use_conflict_prioritization && (score > best_score))
@@ -3901,9 +4010,12 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 conflict_number++;
                 bool is_better;
                 if (g_use_hybrid && setting.use_conflict_prioritization && found_any) {
-                    const bool cand_card = (score >= 1.0f), best_card = (best_score >= 1.0f);
-                    if (cand_card != best_card) is_better = cand_card;
-                    else                        is_better = (t < best_t);
+                    // Threshold hybrid (see MDA branch): >= T strong (by score), < T weak (earliest).
+                    const float T = g_hybrid_threshold;
+                    const bool cand_strong = (score >= T), best_strong = (best_score >= T);
+                    if (cand_strong != best_strong) is_better = cand_strong;
+                    else if (cand_strong) is_better = (score > best_score) || (score == best_score && t < best_t);
+                    else                  is_better = (t < best_t);
                 } else {
                     is_better = !found_any
                         || (setting.use_conflict_prioritization && score > best_score)
@@ -4213,14 +4325,18 @@ short RCPSPState_CBS<N>::compute_start_recursive(short act, std::array<bool, N>&
             (int)start_times[depIdx] + RCPSPex.activities[depIdx].duration);
     }
 
-    // for (const auto& [f, t] : added_precedences) {
-    //     if (t == act) {
-    //         short fIdx = f; // if f is 1-based
-    //         compute_start_recursive(fIdx, visited);
-    //         new_start = std::max((int)new_start,
-    //             (int)start_times[fIdx] + RCPSPex.activities[fIdx].duration);
-    //     }
-    // }
+    // Improvement 1 (use_nmd_precedence): enforce the recorded p->m orderings so a
+    // later shift of p re-pushes m instead of silently reopening the m/p overlap.
+    // Off by default, so baseline propagation is byte-identical.
+    if (setting.use_nmd_prec_record) {
+        for (const auto& [f, t] : added_precedences) {
+            if (t == act) {
+                compute_start_recursive(f, visited);
+                new_start = std::max((int)new_start,
+                    (int)start_times[f] + RCPSPex.activities[f].duration);
+            }
+        }
+    }
 
     // take max with existing to preserve parent delays
     start_times[act] = std::max(new_start, start_times[act]);
@@ -4475,6 +4591,10 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     start_times[delayedActivity] = new_start;
     propagate(delayedActivity);
 
+    // Warm-start ordering key: this child delays `delayedActivity`, so key it by
+    // that activity's inflated-schedule start (RCPSP_WARMSTART; 0 when off).
+    if (g_use_warmstart && !g_warmstart_start.empty())
+        warmstart_key = g_warmstart_start[delayedActivity];
 
     // start_times = prev.start_times;
     // // depth=prev.depth+1;
@@ -4577,6 +4697,15 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
             new_start = std::min(new_start,
                 (short)(prev.start_times[act] + RCPSPex.activities[act].duration));
     }
+
+    // Warm-start ordering key: this child delays the whole MDA set; key it by the
+    // set's EARLIEST inflated-schedule start (a set is preferable to delay only if
+    // even its earliest member is relatively late). RCPSP_WARMSTART; 0 when off.
+    if (g_use_warmstart && !g_warmstart_start.empty() && !mda_activities.empty()) {
+        short k = std::numeric_limits<short>::max();
+        for (short act : mda_activities) k = std::min(k, g_warmstart_start[act]);
+        warmstart_key = k;
+    }
     // std::cout << "new " << std::endl;
     // std::cout << "pool " << std::endl;
     //
@@ -4647,6 +4776,51 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
         for (short delayed : mda_activities)
             start_times[delayed] = compute_nonminimal_delay(
                 delayed, prev.start_times, bg, prev.resourceType);
+
+        // Improvement 1: record the ordering the non-minimal push established. For
+        // every complement member p a delayed member m was pushed past
+        // (finish(p) <= new_start(m)), add the precedence p->m so the ordering
+        // persists for the rest of the branch (enforced in compute_start_recursive)
+        // and cannot silently reopen if p later shifts.
+        if (setting.use_nmd_prec_record) {
+            for (short m : mda_activities) {
+                const short ms = start_times[m];
+                for (short p : bg) {
+                    const short pf = prev.start_times[p] + (short)RCPSPex.activities[p].duration;
+                    if (pf <= ms) added_precedences.push_back({p, m});
+                }
+            }
+        }
+    } else if (g_use_setdelay && !mda_activities.empty()) {
+        // Set-together delay: advance the whole set D as a unit through the S\D
+        // completion times, stopping at the first where demand(D) + demand(S\D
+        // still running) <= capacity. new_start is already min-completion(S\D).
+        const int res_idx  = prev.resourceType;
+        const short cap     = resource_info[res_idx].capacity;
+        short demandD = 0;
+        for (short m : mda_activities) demandD += resource_info[res_idx].demand_lookup.at(m);
+
+        std::vector<short> cand;
+        cand.reserve(bg.size() + 1);
+        cand.push_back(new_start);                       // = min-completion(S\D)
+        for (short b : bg) {
+            short f = prev.start_times[b] + (short)RCPSPex.activities[b].duration;
+            if (f > new_start) cand.push_back(f);
+        }
+        std::sort(cand.begin(), cand.end());
+
+        short set_start = new_start;                     // fallback: standard minimal delay
+        for (short t : cand) {
+            short bgd = 0;
+            for (short b : bg) {
+                short s = prev.start_times[b];
+                short f = s + (short)RCPSPex.activities[b].duration;
+                if (s <= t && t < f) bgd += resource_info[res_idx].demand_lookup.at(b);
+            }
+            if (bgd + demandD <= cap) { set_start = t; break; }   // D co-fits here
+        }
+        for (short delayed : mda_activities)
+            start_times[delayed] = set_start;
     } else {
         // Minimal delay: all MDA members share the same new_start
         for (short delayed : mda_activities)
@@ -4723,6 +4897,85 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     // }
 // }
 
+// ── Improvement 2: recursive resolution of an internally-conflicted MDA ───────
+// See the header declaration for the contract. MDA selection only guarantees the
+// original conflict's COMPLEMENT is feasible, never that the chosen MDA is
+// internally feasible — with 3+ members a chosen MDA can itself exceed capacity.
+// Without this, that leftover conflict is simply rediscovered one CBS level deeper
+// (still sound); here we resolve it eagerly by branching over the sub-MDA
+// selections, which preserves optimality (same set of resolutions the deeper
+// rediscovery would enumerate).
+template<short N>
+void RCPSPState_CBS<N>::gen_internal_mda_split(
+    const std::vector<short>& mda_members,
+    int res_idx, int depth,
+    std::vector<RCPSPState_CBS<N>>& out) const
+{
+    const ResourceInfo& res = resource_info[res_idx];
+    const short cap = res.capacity;
+
+    // ── Detect the earliest internal over-capacity window among mda_members ──
+    // Peak demand over any overlap window is reached at some member's start, so
+    // testing each member's start as a candidate time is sufficient.
+    short conflict_t = std::numeric_limits<short>::max();
+    std::vector<short> overlap;          // members active at conflict_t
+    short excess = 0;
+    for (short m : mda_members) {
+        const short tt = start_times[m];
+        short dem = 0;
+        std::vector<short> active;
+        for (short x : mda_members) {
+            const short s = start_times[x];
+            const short f = s + (short)RCPSPex.activities[x].duration;
+            if (s <= tt && tt < f) { dem += res.demand_lookup.at(x); active.push_back(x); }
+        }
+        if (dem > cap && tt < conflict_t) {
+            conflict_t = tt; excess = (short)(dem - cap); overlap = std::move(active);
+        }
+    }
+
+    // Internally feasible (or defensive depth cap): emit this child unchanged.
+    if (conflict_t == std::numeric_limits<short>::max() ||
+        depth > (int)mda_members.size() + 1) {
+        out.push_back(*this);
+        return;
+    }
+
+    // Instrument the recursive case (spec: measure how often it fires + how deep).
+    ++g_imp2_fires;
+    if (depth + 1 > g_imp2_max_depth) g_imp2_max_depth = depth + 1;
+
+    // ── Branch over the sub-MDA selections that resolve the internal conflict ──
+    ConflictKey<N> key = make_conflict_key<N>(overlap, (short)res_idx);
+    std::vector<MDA> subs = compute_mdas(overlap, excess, start_times, res_idx, key);
+
+    const size_t out_before = out.size();
+    for (const MDA& sub : subs) {
+        // background at this level = overlap \ sub — the members `sub` must clear.
+        std::vector<short> bg;
+        bg.reserve(overlap.size());
+        for (short x : overlap)
+            if (std::find(sub.activities.begin(), sub.activities.end(), x) == sub.activities.end())
+                bg.push_back(x);
+        if (bg.empty()) continue;   // degenerate sub == overlap: nothing to push past
+
+        RCPSPState_CBS<N> c = *this;
+        const std::array<short, N> before = c.start_times;   // positions to push past
+        for (short m : sub.activities)
+            c.start_times[m] = c.compute_nonminimal_delay(m, before, bg, res_idx);
+        c.propagate(0);              // cascade the pushed starts onto their successors
+
+        // Recurse: `sub` may itself still be internally conflicted (spec step 4).
+        c.gen_internal_mda_split(sub.activities, res_idx, depth + 1, out);
+    }
+
+    // If nothing was emitted (only degenerate candidates), fall back to emitting
+    // this child unchanged: the search then rediscovers the internal conflict one
+    // level deeper, exactly as without this feature — sound, never a lost branch.
+    if (out.size() == out_before)
+        out.push_back(*this);
+}
+
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short to, short conflict_t) {
     // 1. Copy parent
@@ -4740,6 +4993,10 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short 
     } else {
         propagate_with_strong_form_0(); // full pass with all strong constraints
     }
+
+    // Warm-start ordering key: this child enforces from->to, i.e. delays `to`.
+    if (g_use_warmstart && !g_warmstart_start.empty())
+        warmstart_key = g_warmstart_start[to];
 }
 
 template<short N>
@@ -4798,6 +5055,93 @@ bool RCPSPState_CBS<N>::left_shift_prunable() const {
             if (usage + it->second > res.capacity) ok = false;
         }
         if (ok) return true;    // persistent gap + feasible shift => prunable
+    }
+    return false;
+}
+
+template<short N>
+bool RCPSPState_CBS<N>::order_swap_candidate() const {
+    // Order-swap dominance (Hartmann 1998 Bounding Rule 7), FEASIBILITY-CHECKED.
+    // Prune the non-canonical (higher-index-first) order of a frozen back-to-back
+    // pair i>j (f_i == s_j) IF swapping to j-first — j into [s_i, s_i+d_j), i into
+    // [s_i+d_j, f_j) — is precedence- and resource-feasible. We only return true
+    // when the swap is DEFINITELY feasible (conservative), so the "dominated" claim
+    // holds; the remaining risk (is the j-first state reachable via a sibling in a
+    // delay search?) is what the finished=>correct gate validates.
+    if (t_first < 0) return false;
+    const int n = (int)RCPSPex.activities.size();
+    for (int i = 0; i < n; i++) {
+        const short di = RCPSPex.activities[i].duration;
+        if (di == 0) continue;
+        const short si = start_times[i], fi = si + di;
+        if (fi > t_first) continue;                 // i not in the frozen set
+        for (int j = 0; j < i; j++) {               // i > j (non-canonical order)
+            const short dj = RCPSPex.activities[j].duration;
+            if (dj == 0) continue;
+            const short sj = start_times[j];
+            const short fj = sj + dj;
+            if (fj > t_first) continue;              // j not frozen
+            if (fi != sj) continue;                  // not back-to-back (i then j)
+            // no precedence either way (else the order is forced, not swappable)
+            if (std::binary_search(downstream[i].begin(), downstream[i].end(), (short)j)) continue;
+            if (std::binary_search(downstream[j].begin(), downstream[j].end(), (short)i)) continue;
+            // must share a resource (else no resource reason for the order)
+            bool shares = false;
+            for (int r = 0; r < (int)resource_info.size() && !shares; r++) {
+                const auto& dl = resource_info[r].demand_lookup;
+                auto a = dl.find((short)i); auto b = dl.find((short)j);
+                if (a != dl.end() && a->second > 0 && b != dl.end() && b->second > 0) shares = true;
+            }
+            if (!shares) continue;
+            // ── swap feasibility ──
+            // precedence: j moves earlier to s_i -> all j-preds must finish <= s_i;
+            //             i moves later to end at f_j -> all i-succs must start >= f_j.
+            bool precOK = true;
+            for (short dep : RCPSPex.backword_dependencies[j]) {
+                int p = dep - 1;
+                if (start_times[p] + RCPSPex.activities[p].duration > si) { precOK = false; break; }
+            }
+            if (!precOK) continue;
+            for (short s : RCPSPex.dependencies[i]) {  // successors of i (1-based ids)
+                if (start_times[s - 1] < fj) { precOK = false; break; }
+            }
+            if (!precOK) continue;
+            // resource: max usage of OTHER activities over each sub-interval, per
+            // resource, must leave room for the moved activity. Usage is a step
+            // function; its max over [lo,hi) occurs at lo or at some other activity's
+            // start inside (lo,hi).
+            auto maxUsage = [&](int r, short lo, short hi) -> short {
+                const ResourceInfo& res = resource_info[r];
+                short mx = 0;
+                auto usageAt = [&](short t) -> short {
+                    short u = 0;
+                    for (int k = 0; k < (int)res.activity_indices.size(); k++) {
+                        short a = res.activity_indices[k];
+                        if (a == (short)i || a == (short)j) continue;
+                        short sa = start_times[a];
+                        if (sa <= t && t < sa + RCPSPex.activities[a].duration) u += res.demands[k];
+                    }
+                    return u;
+                };
+                mx = usageAt(lo);
+                for (int k = 0; k < (int)res.activity_indices.size(); k++) {
+                    short a = res.activity_indices[k]; if (a == (short)i || a == (short)j) continue;
+                    short sa = start_times[a];
+                    if (sa > lo && sa < hi) mx = std::max(mx, usageAt(sa));
+                }
+                return mx;
+            };
+            bool resOK = true;
+            for (int r = 0; r < (int)resource_info.size() && resOK; r++) {
+                const auto& dl = resource_info[r].demand_lookup;
+                short cap = resource_info[r].capacity;
+                auto a = dl.find((short)i); short demI = (a != dl.end()) ? a->second : 0;
+                auto b = dl.find((short)j); short demJ = (b != dl.end()) ? b->second : 0;
+                if (demJ > 0 && maxUsage(r, si, (short)(si + dj)) + demJ > cap) resOK = false;
+                if (resOK && demI > 0 && maxUsage(r, (short)(si + dj), fj) + demI > cap) resOK = false;
+            }
+            if (resOK) return true;                  // feasible swap => order-swap prunable
+        }
     }
     return false;
 }
@@ -5222,6 +5566,7 @@ RCPSPState_TT2::RCPSPState_TT2() {
     activity_nodes.resize(num_activities);
 
     finishedActivitiys.reset();
+    abs_start.fill(-1);   // shadow start times (order-swap only); root: nothing started
     int activity_counter = 0;
     for (int i = 0; i < petri.places.size(); ++i) {
         const auto& place = petri.places[i];
@@ -5285,6 +5630,92 @@ RCPSPState_TT2::RCPSPState_TT2() {
     g = 0;
 }
 
+// Order-swap dominance (Hartmann 1998 Bounding Rule 7), TT2 form. Reads the SHADOW
+// abs_start[] (never in ==/hash, so the relative-time merging is untouched). The
+// frozen set is the finished activities; if a back-to-back finished pair i>j
+// (f_i==s_j) with a shared resource, no precedence, and a feasible swap exists, the
+// non-canonical order is order-swap dominated. Feasibility is checked conservatively
+// (only prune a definitely-feasible swap); the finished=>correct gate validates the
+// remaining reachability assumption for the forward firing search.
+bool RCPSPState_TT2::order_swap_prunable() const {
+    const int J = (int)RCPSPex.activities.size();        // consistent with the arrays we index
+    if ((int)downstream.size() < J || (int)RCPSPex.dependencies.size() < J ||
+        (int)RCPSPex.backword_dependencies.size() < J) return false;  // defensive
+    auto dur = [&](int id1){ return (id1 >= 1 && id1 <= J) ? (short)RCPSPex.activities[id1 - 1].duration : (short)0; };
+    for (int i = 1; i <= J && i < 128; i++) {
+        if (!finishedActivitiys[i]) continue;            // i frozen (finished)
+        const short di = dur(i); if (di == 0) continue;
+        const short si = abs_start[i]; if (si < 0) continue;
+        const short fi = si + di;
+        for (int j = 1; j < i; j++) {                    // i > j (non-canonical)
+            if (!finishedActivitiys[j]) continue;
+            const short dj = dur(j); if (dj == 0) continue;
+            const short sj = abs_start[j]; if (sj < 0) continue;
+            if (fi != sj) continue;                      // back-to-back: i then j
+            const short fj = sj + dj;
+            // no precedence either way (downstream is 0-based)
+            if (std::binary_search(downstream[i-1].begin(), downstream[i-1].end(), (short)(j-1))) continue;
+            if (std::binary_search(downstream[j-1].begin(), downstream[j-1].end(), (short)(i-1))) continue;
+            // shared resource?
+            bool shares = false;
+            for (int r = 0; r < (int)resource_info.size() && !shares; r++) {
+                const auto& dl = resource_info[r].demand_lookup;
+                auto a = dl.find((short)(i-1)); auto b = dl.find((short)(j-1));
+                if (a != dl.end() && a->second > 0 && b != dl.end() && b->second > 0) shares = true;
+            }
+            if (!shares) continue;
+            // precedence feasibility: j moves earlier to si -> j-preds finish <= si;
+            //                         i moves later to end at fj -> i-succs start >= fj.
+            bool precOK = true;
+            for (short dep : RCPSPex.backword_dependencies[j-1]) {
+                if (dep < 1 || dep >= 128) continue;
+                if (abs_start[dep] >= 0 && abs_start[dep] + dur(dep) > si) { precOK = false; break; }
+            }
+            if (!precOK) continue;
+            for (short s : RCPSPex.dependencies[i-1]) {
+                if (s < 1 || s >= 128) continue;
+                if (abs_start[s] >= 0 && abs_start[s] < fj) { precOK = false; break; }
+            }
+            if (!precOK) continue;
+            // resource feasibility of the swap (j in [si,si+dj), i in [si+dj,fj)),
+            // usage from OTHER started activities (max over the sub-interval).
+            auto maxUsage = [&](int r, short lo, short hi) -> short {
+                const ResourceInfo& res = resource_info[r];
+                auto usageAt = [&](short t) -> short {
+                    short u = 0;
+                    for (int p = 0; p < (int)res.activity_indices.size(); p++) {
+                        short k0 = res.activity_indices[p];          // 0-based activity index
+                        int id1 = k0 + 1;
+                        if (id1 == i || id1 == j) continue;
+                        short sa = abs_start[id1]; if (sa < 0) continue;
+                        if (sa <= t && t < sa + dur(id1)) u += res.demands[p];
+                    }
+                    return u;
+                };
+                short mx = usageAt(lo);
+                for (int p = 0; p < (int)res.activity_indices.size(); p++) {
+                    int id1 = res.activity_indices[p] + 1;
+                    if (id1 == i || id1 == j) continue;
+                    short sa = abs_start[id1];
+                    if (sa > lo && sa < hi) mx = std::max(mx, usageAt(sa));
+                }
+                return mx;
+            };
+            bool resOK = true;
+            for (int r = 0; r < (int)resource_info.size() && resOK; r++) {
+                const auto& dl = resource_info[r].demand_lookup;
+                short cap = resource_info[r].capacity;
+                auto a = dl.find((short)(i-1)); short demI = (a != dl.end()) ? a->second : 0;
+                auto b = dl.find((short)(j-1)); short demJ = (b != dl.end()) ? b->second : 0;
+                if (demJ > 0 && maxUsage(r, si, (short)(si + dj)) + demJ > cap) resOK = false;
+                if (resOK && demI > 0 && maxUsage(r, (short)(si + dj), fj) + demI > cap) resOK = false;
+            }
+            if (resOK) return true;
+        }
+    }
+    return false;
+}
+
 RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime,bool Direction) {
     // 1. Update Global Cost (G)
     direction=Direction;
@@ -5293,6 +5724,10 @@ if (direction) {
     g = prev.g + firingTime;
     predessesor_h = prev.h;  // Store parent's h for isDeltaZero optimization
     lastTransitionId=transitionId;
+    // SHADOW start times (order-swap only; NOT hashed / not in ==): the fired
+    // activity starts at the new clock g.
+    abs_start = prev.abs_start;
+    abs_start[transitionId] = g;
     // 2. Copy State
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;

@@ -71,7 +71,15 @@ struct AStarCompareWithF<RCPSPState_TT2> {
             return i1.data.finishedActivitiys.count() < i2.data.finishedActivitiys.count();
 
         // prefer fewer active transitions
-        return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+        if (i1.data.activeTransitionIndices.size() != i2.data.activeTransitionIndices.size())
+            return i1.data.activeTransitionIndices.size() < i2.data.activeTransitionIndices.size();
+
+        // RCPSP_TT2_SYMTB=1: deterministic final tie-break — prefer the SMALLER
+        // lastTransitionId (expand the canonical parent first). This makes symmetry
+        // breaking remove only rediscoveries, never a first-discovery edge.
+        if (g_tt2_sym_tiebreak && i1.data.lastTransitionId != i2.data.lastTransitionId)
+            return i1.data.lastTransitionId > i2.data.lastTransitionId;  // smaller id popped first
+        return false;
     }
 };
 

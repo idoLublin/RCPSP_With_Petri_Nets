@@ -154,6 +154,9 @@ struct CBSConfig {
     bool use_strong_constraints=true;
     bool use_MDA_BAB=true;
     bool use_non_minimal_delay=false; // delay each activity to earliest truly-feasible time instead of min-push
+    bool use_mda_recursive_delay=false; // Improvement 2: recursively resolve an internally-conflicted MDA (branch over MDA' sub-selections). NMD path only.
+    bool use_nmd_precedence=false; // Improvement 1: emit the minimal-delay child alongside the non-minimal one (completeness-anchor sibling) so the opposite orderings the non-minimal jump drops stay reachable. NMD path only.
+    bool use_nmd_prec_record=false; // Improvement 1 (extra, EXPERIMENTAL): also record+enforce p->m precedences on the non-minimal child. UNSOUND until operator== distinguishes added_precedences (a constrained state can otherwise shadow an equal unconstrained one). Default off.
     HeuristicType heuristic          = HeuristicType::HCBS;
 };
 
@@ -187,11 +190,165 @@ inline bool  g_use_ub     = false;
 inline short g_incumbent  = std::numeric_limits<short>::max();
 inline long  g_ub_pruned  = 0;
 
+// ── Per-rule prune counters (debug) ──────────────────────────────
+// Reset per instance in solveRCPSP_CBS. UB/dominance already counted elsewhere
+// (g_ub_pruned; the dominance table's own `pruned`); leftshift had none.
+inline long  g_leftshift_pruned = 0;   // children dropped by left_shift_prunable()
+
 // ── Experiment flags (each off by default; env-driven) ───────────
 inline bool  g_use_leftshift = false;  // RCPSP_LEFTSHIFT=1: drop left-shiftable children
+inline bool  g_use_dr4       = false;  // RCPSP_DR4=1: DR4 (Liu non-delaying rule) reduced to the CBS partial schedule == the active-schedule / left-shift dominance (drives the same verified-sound left_shift_prunable() prune). Recorded as useDR4; prunes counted in leftshiftPruned.
 inline bool  g_use_bidir     = false;  // RCPSP_BIDIR=1: new states also kill dominated stored states
 inline bool  g_use_hybrid    = false;  // RCPSP_HYBRID=1: prio falls back to earliest conflict when best score < 1
+inline float g_hybrid_threshold = 0.5f; // RCPSP_HYBRID_T: cardinality score below which we prefer first-conflict
 inline bool  g_use_lean      = false;  // RCPSP_LEAN=1: strip conflict vectors from OPEN/CLOSED copies (memory for time)
 inline bool  g_use_inline    = false;  // RCPSP_INLINE=1: expand intermediate children in place (B&P Descendants recursion)
+inline bool  g_dom_skyline   = false;  // RCPSP_SKYLINE=1: keep dominance buckets as a Pareto frontier (retire stored entries dominated by a newer one). Search-IDENTICAL for pruning (transitivity), only shrinks buckets => faster checks + less memory. Unlike BIDIR it does NOT feed the kill-set, so it never changes which nodes are expanded.
+inline bool  g_use_lazy      = false;  // RCPSP_LAZY=1: use LazyAStarCBS (deferred-heuristic A*) instead of TemplateAStar — compute the expensive compute_h_and_RVS only when a node is POPPED, not at insertion, so never-expanded OPEN nodes skip it. Optimal (h=0 is an admissible lower bound + lazy re-insertion).
+inline bool  g_tt2_dr5       = false;  // RCPSP_TT2_DR5=1: cutset (DR5) dominance for the TT2/TTPNR search (DominanceTT2.h), checked+inserted in RCPSP_TT2::GetSuccessors. Includes always-on skyline thinning.
+inline bool  g_tt2_dr4       = false;  // RCPSP_TT2_DR4=1: DR4 delayed-start dominance in TT2 successor generation (Liu et al. rule 4, ported from new_herustic). Prune firing l at delta d_l if some other available transition i has d_i < d_l and d_i + p_i <= d_l (sound left-shift; min-delta child never pruned).
+inline long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
+inline bool  g_tt2_batch     = false;  // RCPSP_TT2_BATCH=1: batch/macro expansion — each successor starts a resource-feasible SUBSET of the now-available activities in one edge (plus the time-advancing single firings), trading depth for branching. Superset of single-firing (singletons included) => still optimal.
+inline long  g_tt2_batch_cap = 200000; // RCPSP_TT2_BATCH_CAP: safety cap on feasible subsets enumerated per node (singletons emitted first, so a cap never breaks optimality). Guards the 2^|A0| worst case on resource-abundant instances.
+
+// ── TT2 symmetry breaking (RCPSP_TT2_SYM=1), NON-BATCH mode only ─────────────
+// Within a "zero-delay run" (consecutive tau=0 firings, no clock advance) the order
+// of the fired activities is irrelevant: a tau=0 firing only CONSUMES resources and
+// emits its outputs at delay=duration>0, so it can never enable anything new =>
+// anything available after is available before, and a->b / b->a yield a bit-identical
+// state (active list sorted, resource tokens canonically sorted+merged). Those
+// duplicates are caught today only AFTER being constructed+hashed. This imposes a
+// canonical INCREASING-id order so the redundant orderings are never generated at all.
+// Saves generation cost (ctor + hash + open/closed lookup), not tree size.
+// 0=off, 1=canonical INCREASING id (skip b<last), 2=canonical DECREASING id (skip b>last).
+// Both are equally sound (any fixed total order works); they differ ONLY in traversal
+// order, which is the clean way to isolate plateau/tie-break effects from real pruning.
+inline int   g_tt2_sym        = 0;
+inline long  g_tt2_sym_pruned = 0;     // successors skipped by the canonical-order rule
+inline bool  g_tt2_gendesc    = false;   // RCPSP_TT2_GENDESC=1: generate TT2 successors in DESCENDING id; with the heap's last-in-first-out tie tendency this makes the canonical (smaller-id) sibling expand first — canonical-first ordering without a comparator tie-break.
+inline bool  g_tt2_sym_tiebreak = false; // RCPSP_TT2_SYMTB=1: deterministic final tie-break preferring SMALLER lastTransitionId (canonical-aligned) so the canonical parent expands before the non-canonical one => symmetry breaking can then only remove REDISCOVERIES, never a first-discovery edge => should become strictly-not-worse.
+
+// ── Θ-tree resource-completion dual bound (RCPSP_TT2_THETA=1) ────────────────
+// Adds Vilím's Θ-tree Earliest-Completion-Time bound (thetaResourceBound_TT2) as
+// a THIRD admissible lower bound, max()-combined with the existing CPM critical-
+// path + energy bounds in RCPSP_TT2::HCost. Resource-contention-aware: respects
+// each activity's earliest start AND capacity jointly, so it is >= the plain
+// Σenergy/C energy bound. Bound-only (no filtering/pruning); always admissible,
+// so it can never make the search return a suboptimal makespan — only tighten h.
+inline bool  g_tt2_theta        = false; // RCPSP_TT2_THETA=1: enable the Θ-tree bound in the TT2/TTPNR search
+inline long  g_tt2_theta_better = 0;     // times the Θ-tree bound strictly beat the existing bound at a state (per instance; CSV: thetaBoundBetter)
+// Same Θ-tree bound adapted to CBS (RCPSP_CBS_THETA=1): floored into HCost like the
+// warm-start LB (est_i = start_times[i], an admissible earliest start). Ablatable,
+// independently admissible, default off. Recorded in the CBS CSV (useThetaBound/thetaBoundBetter).
+inline bool  g_cbs_theta        = false; // enable the Θ-tree bound in the CBS search
+inline long  g_cbs_theta_better = 0;     // times the Θ-tree floor strictly beat the CBS HCBS bound at a state (per instance)
+
+// ── Conflict-subset look-ahead LB (RCPSP_CBS_SUBSET=1), CBS only ─────────────
+// At a node, take the branched conflict's participants + their SHALLOW downstream
+// (bounded horizon, so it stays a small look-ahead, not a near-whole re-solve),
+// solve that sub-RCPSP with releases = start_times via the standalone (CPM-guided,
+// NON-recursive) mini solver capped at g_cbs_subset_expand expansions, and floor h
+// with (M_subset − g). Admissible: the subset is a relaxation, so its optimum is a
+// LB on this subtree's optimum; the expand cap only loosens it (min-f-on-OPEN).
+// Targets HCBS's blind spot — the downstream cascade a resolved conflict forces.
+inline bool  g_cbs_subset        = false; // enable the conflict-subset look-ahead bound
+inline long  g_cbs_subset_expand = 500;   // RCPSP_CBS_SUBSET_EXPAND: sub-search expansion cap
+inline int   g_cbs_subset_hops   = 3;     // RCPSP_CBS_SUBSET_HOPS: downstream horizon (precedence hops)
+inline int   g_cbs_subset_size   = 16;    // RCPSP_CBS_SUBSET_SIZE: hard cap on subset activity count
+// Gate: run the (costly) sub-solve only where it can pay off — a node is eligible if it
+// is SHALLOW (strong early bound near the root, kills a big subtree) OR NEAR-INCUMBENT
+// (f within the band below UB, where an admissible tightening can actually cross UB and
+// prune). OR of two complementary regimes; either alone is cost-bounded. depth proxy =
+// added_precedences.size(). The near-incumbent arm needs an incumbent (RCPSP_UB).
+inline int   g_cbs_subset_maxdepth = 4;   // RCPSP_CBS_SUBSET_MAXDEPTH: run if depth <= this
+inline int   g_cbs_subset_gap      = 5;   // RCPSP_CBS_SUBSET_GAP: run if 0 < UB-(g+h) <= this
+// Per-instance telemetry to CALIBRATE the expand cap (avg expands + cap-hit rate):
+inline long  g_cbs_subset_better       = 0; // times the subset LB strictly beat the existing h
+inline long  g_cbs_subset_solves       = 0; // sub-solves performed
+inline long  g_cbs_subset_expands_total= 0; // Σ sub-search expansions
+inline long  g_cbs_subset_capped       = 0; // sub-solves that hit the expand cap (didn't finish)
+inline long  g_cbs_subset_maxexpands   = 0; // max expansions any single sub-solve used
+// Result cache: the wide-shallow CBS tree revisits the SAME (subset activity-set +
+// release vector) many times, and that pair fully determines M_subset (durations/
+// demands/caps/precedence are instance-constant). Memoize it so 70k solves collapse
+// to the far fewer DISTINCT subproblems. Per-instance (cleared in solveRCPSP_CBS).
+inline std::unordered_map<uint64_t, long> g_cbs_subset_cache;
+inline long  g_cbs_subset_cache_hits   = 0; // sub-solves served from the cache
+
+// ── Inflated-resource warm start (RCPSP_WARMSTART=1), CBS only ───────────────
+// ONE-TIME, before the real search: solve the SAME instance with every resource
+// capacity inflated by k (RCPSP_WARMSTART_K, ceil). The inflated problem is a
+// relaxation — strictly easier — so its optimal schedule is found fast (a hard
+// node/wall budget, RCPSP_WARMSTART_BUDGET_S, with graceful fallback). That
+// schedule is *infeasible* for the real caps, so it is NOT used as a bound; it
+// only supplies a per-activity ordering to bias CBS branch expansion (dive along
+// a resource-aware schedule first => a good feasible incumbent early => more UB
+// pruning). Pure reorder of GetSuccessors' children => search stays OPTIMAL/SOUND
+// regardless of the ordering or direction. Off by default (zero behaviour change).
+inline bool  g_use_warmstart      = false; // RCPSP_WARMSTART=1: enable the warm-start branch ordering
+inline double g_warmstart_k       = 2.0;   // RCPSP_WARMSTART_K: capacity inflation factor (ceil(k*cap))
+inline long long g_warmstart_budget_s = 0; // RCPSP_WARMSTART_BUDGET_S: wall cap for the inflated solve; 0 => use the FULL search timeout (a separate budget from the real search, not stolen from it)
+inline double g_warmstart_sec     = 0.0;   // wall time spent on the inflated (sub-problem) solve this instance — recorded in the CSV (warmstartSec)
+inline int   g_warmstart_dir      = 0;     // RCPSP_WARMSTART_DIR: 0/1 flips which end of the relaxed order is explored first (pure tie-break; pick empirically)
+inline bool  g_warmstart_reorder  = false; // RCPSP_WARMSTART_REORDER=1: ALSO reorder CBS children by the relaxed schedule. OFF by default — the LB-floor (below) is the real lever; the reorder was net-negative (RS=0.4 worse, others neutral) since UB already seeds the incumbent.
+inline double g_warmstart_rs      = 0.0;   // RCPSP_WARMSTART_RS: if >0, inflate each resource to this target Resource Strength (instance-adaptive) INSTEAD of the flat k multiplier; capped to never drop below the real capacity
+inline bool  g_warmstart_ok       = false; // set true iff the inflated solve produced a usable schedule this instance
+inline short g_warmstart_infl_mk  = -1;    // makespan of the inflated relaxation this instance (-1 if warm start didn't engage) — diagnostic for judging k / RS quality
+inline std::vector<short> g_warmstart_start; // per-activity (0-based) start time from the inflated schedule; the branch-ordering key. Empty/!ok => no reorder.
+
+// ── Set-together MDA delay (RCPSP_SETDELAY=1), MDA path only ─────────────────
+// When delaying a minimal alternative D, instead of the textbook minimal delay
+// (all of D to the earliest completion of the non-delayed conflict members S\D),
+// advance the WHOLE set D as a unit through the S\D completion times and stop at
+// the first where demand(D) + demand(S\D still running) <= capacity — i.e. the
+// earliest time D actually fits alongside the fixed non-delayed members. Checks D
+// as a unit against ONLY S\D (unlike use_non_minimal_delay, which advances each
+// member independently and drags in unrelated activities). If D can never co-fit
+// (demand(D) > capacity), falls back to the standard minimal delay so re-branching
+// still resolves the intra-D conflict. SOUNDNESS UNPROVEN — validate via nmd_test /
+// j30 correctness before trusting. Off by default (zero behaviour change).
+inline bool  g_use_setdelay       = false; // RCPSP_SETDELAY=1: set-together MDA delay
+
+// ── Order-swap dominance MEASUREMENT (RCPSP_ORDERSWAP=1) ─────────────────────
+// Hartmann 1998 Bounding Rule 7 (order-swap / order-monotonous schedules): a
+// back-to-back frozen pair i>j (f_i==s_j) with no precedence between them and a
+// shared resource is order-swap reducible -> the canonical (lower-index-first)
+// order dominates. HYPOTHESIS: DR5's cutset key (scheduled-set + unscheduled
+// starts, ignoring frozen internal order) already prunes these. So we first only
+// COUNT children that survive DR5 yet are order-swap candidates — the NET-NEW
+// prunes rule 7 would add. If ~0, order-swap is subsumed; no prune worth adding.
+inline bool  g_orderswap      = false;  // RCPSP_ORDERSWAP=1: measure order-swap candidates (no pruning yet)
+inline long  g_orderswap_cand = 0;      // children kept by DR5 that ARE order-swap reducible (per instance)
+
+// ── Non-minimal delay env toggle (RCPSP_NMD=1) ───────────────────────────────
+// Exposes setting.use_non_minimal_delay to the normal benchmark/sweep runner (it
+// was previously only reachable via the dedicated `nmd_test` mode). Improvements
+// on top of the non-minimal delay (e.g. RCPSP_MDA_RECURSE) require this on.
+inline bool  g_use_nmd            = false; // RCPSP_NMD=1: use the non-minimal delay in sweep/single runs
+
+// ── Improvement 2 instrumentation (RCPSP_MDA_RECURSE=1) ──────────────────────
+// The spec asks to measure how often an internally-conflicted MDA actually fires
+// and how deep the recursive split goes, to judge the branching-factor cost.
+// Reset per instance in solveRCPSP_CBS_impl.
+inline long  g_imp2_fires     = 0;  // # times a chosen MDA was itself internally infeasible and got split
+inline int   g_imp2_max_depth = 0;  // deepest internal-split recursion level reached this instance
+
+// ── Non-minimal delay overshoot trace (diagnostic) ───────────────────────────
+// When compute_nonminimal_delay pushes a member past one or more complement
+// finish-times it did NOT fit at, it skips the intermediate resolution node that
+// minimal delay would create — and with it the sibling branch "delay that
+// complement member instead of this one". Count those skips: a positive count on
+// an instance that returns a SUBOPTIMAL makespan is direct evidence of the lost
+// branch. Reset per instance in solveRCPSP_CBS_impl.
+inline long  g_nmd_overshoot_events = 0; // # non-minimal pushes that skipped >=1 complement finish
+inline long  g_nmd_lost_siblings    = 0; // Σ complement finish-times skipped (lost "delay complement" siblings)
+
+// ── Optimal-schedule reachability tracer (RCPSP_STAR="s1,s2,...") ─────────────
+// A known-optimal schedule S* (per-activity 0-indexed starts). A CBS node N can
+// still reach S* only if N.start_times[i] <= S*[i] for all i (delays only push
+// forward). We flag the FIRST node that is consistent with S* but whose children
+// ALL overshoot it — that is exactly the conflict where the optimum is lost.
+inline std::vector<short> g_star;            // S* starts; empty => tracer off
+inline int  g_star_hits = 0;                 // culprit nodes reported (capped)
 
 #endif // GLOBALS_H

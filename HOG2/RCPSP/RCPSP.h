@@ -10,6 +10,10 @@
 #include <functional>
 #include "petriclasses.h"
 #include "DominanceCBS.h"   // DR5 cutset dominance (guarded by setting.use_dr5)
+#include "DominanceTT2.h"   // DR5 cutset dominance for TT2/TTPNR (guarded by g_tt2_dr5)
+#include "ThetaTree.h"      // Vilím Θ-tree ECT resource bound (RCPSP_TT2_THETA / RCPSP_CBS_THETA)
+#include "SubsetSolver.h"   // mini subset-RCPSP LB solver for the CBS conflict look-ahead (RCPSP_CBS_SUBSET)
+#include <queue>
 
 // h returned for a DR5-dominated node: large enough that A* never expands it,
 // finite so nothing downstream trips on inf arithmetic.
@@ -1459,8 +1463,144 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
-  for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
-    neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
+  if (!g_tt2_batch) {
+    // ── Serial single-firing (default): one successor per available transition ──
+    //
+    // Symmetry breaking (RCPSP_TT2_SYM=1): inside a "zero-delay run" the firing ORDER
+    // of tau=0 activities is irrelevant — a->b and b->a build a bit-identical state, so
+    // today one of them is constructed + hashed only to be thrown away by duplicate
+    // detection. We impose a canonical INCREASING-id order and never generate the
+    // redundant ones. Conditions (all required):
+    //   (1) nodeID.isDeltaZero  — this state was reached by a tau=0 firing, i.e. we are
+    //       inside a zero-delay run (after a clock advance the order genuinely matters).
+    //   (2) duration(last) > 0  — the last firing STARTED an activity, so all its output
+    //       tokens carry delay=duration>0 and nothing became available now. (A duration-0
+    //       activity finishes immediately and emits delay-0 tokens, which CAN enable a
+    //       successor; then b may be newly-enabled and the b->a order never existed.)
+    //   (3) transId < lastTransitionId — the canonical order already covers this set.
+    // Sound: all tau=0 firings add 0 to g, so the surviving canonical path has the same
+    // cost; and every subset is still reachable via its sorted order (the first firing of
+    // a run is unconstrained, since a run starts where isDeltaZero is false).
+    // Only tau=0 successors are ever skipped; time-advancing (tau>0) firings never are.
+    const bool symOn = g_tt2_sym
+                    && nodeID.lastTransitionId > 0                                        // not the root
+                    && nodeID.isDeltaZero                                                 // (1)
+                    && RCPSPex.activities[nodeID.lastTransitionId - 1].duration > 0;      // (2)
+
+    // RCPSP_TT2_GENDESC=1: generate successors in DESCENDING id instead of ascending.
+    // The open list's binary heap pops last-inserted-ish first among ties (Close() moves
+    // the last heap element to the root), so ascending generation makes the NON-canonical
+    // sibling (larger id) expand first. Reversing generation makes the canonical (smaller
+    // id) sibling be inserted last => expanded first => canonical-first ordering for free,
+    // without a comparator tie-break. Pure ordering change; identical set of successors.
+    const int nAvail = (int)avilableTransitionIndices.size();
+    for (int k = 0; k < nAvail; k++) {
+      const auto& [transId, Timedelta] =
+          avilableTransitionIndices[g_tt2_gendesc ? (nAvail - 1 - k) : k];
+      // (3) canonical order: mode 1 = increasing id, mode 2 = decreasing id. Both sound.
+      if (symOn && Timedelta == 0 &&
+          (g_tt2_sym == 1 ? (transId < nodeID.lastTransitionId)
+                          : (transId > nodeID.lastTransitionId))) {
+        ++g_tt2_sym_pruned;
+        continue;
+      }
+      // DR4 delayed-start dominance (RCPSP_TT2_DR4=1; Liu, Jin, Zhou & Hu 2023,
+      // rule 4, ported from new_herustic): prune firing `transId` at delta
+      // Timedelta iff some other available transition i has d_i < Timedelta and
+      // d_i + p_i <= Timedelta — i can be left-shifted ahead of it and return its
+      // resources by Timedelta, so this branch is dominated by the (i,d_i) sibling.
+      // Strict d_i < Timedelta keeps the minimum-delta child, so a dominating
+      // branch always survives (sound + complete).
+      if (g_tt2_dr4) {
+        bool dr4dominated = false;
+        for (const auto& [oId, oDelta] : avilableTransitionIndices) {
+          if (oId == transId || oDelta >= Timedelta) continue;
+          if (oDelta + RCPSPex.activities[oId - 1].duration <= Timedelta) { dr4dominated = true; break; }
+        }
+        if (dr4dominated) { ++g_tt2_dr4_pruned; continue; }
+      }
+      neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
+    }
+  } else {
+    // ── Batch / macro expansion (RCPSP_TT2_BATCH=1) ──────────────────────────
+    // A successor is either (a) a single time-advancing firing (τ>0), or (b) a
+    // resource-feasible NON-EMPTY subset of the now-available (τ=0) activities,
+    // all started at the current time in one edge. Singleton subsets reproduce the
+    // τ=0 single firings, so the batch graph is a SUPERSET of the single-firing
+    // graph => the optimal serial path is still present (Prop. 1 preserved), while
+    // larger subsets are shortcut edges that trade depth for branching. Resource
+    // feasibility (combined demand ≤ τ=0 resource tokens) bounds the enumeration.
+    std::vector<short> A0;
+    for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
+      if (Timedelta > 0)
+        neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta, 1)); // (a)
+      else
+        A0.push_back(transId);
+    }
+
+    // τ=0 resource tokens available now, per resource place.
+    std::array<int,4> avail0 = {0,0,0,0};
+    for (int r = 0; r < 4; r++)
+      for (const auto& [amt, delay] : nodeID.resource_nodes[r])
+        if (delay == 0) avail0[r] += amt;
+
+    // Per-activity resource demand (resID -> demand), for the A0 activities.
+    auto demandOf = [&](short id, std::array<int,4>& d) {
+      d = {0,0,0,0};
+      for (const auto& [resName, dem] : RCPSPex.activities[id-1].resource_demands)
+        if (dem > 0) d[petri.place_name_to_id.at(resName)] += dem;
+    };
+
+    // (b) Enumerate feasible non-empty subsets by incremental firing. `cur` already
+    // has the subset-so-far started; `used` is its cumulative τ=0 demand. Emitting
+    // one successor per recursion node yields every feasible subset exactly once.
+    long emitted = 0;
+    std::function<void(int, const RCPSPState_TT2&, std::array<int,4>)> rec =
+      [&](int start, const RCPSPState_TT2& cur, std::array<int,4> used) {
+        for (int i = start; i < (int)A0.size(); i++) {
+          if (emitted >= g_tt2_batch_cap) return;   // safety valve (singletons already emitted)
+          std::array<int,4> d; demandOf(A0[i], d);
+          bool feasible = true;
+          for (int r = 0; r < 4; r++) if (used[r] + d[r] > avail0[r]) { feasible = false; break; }
+          if (!feasible) continue;
+          RCPSPState_TT2 child(cur, A0[i], 0, 1);    // fire A0[i] now (τ=0)
+          std::array<int,4> nu = { used[0]+d[0], used[1]+d[1], used[2]+d[2], used[3]+d[3] };
+          neighbors.push_back(child);
+          ++emitted;
+          rec(i + 1, child, nu);                     // extend the subset
+        }
+      };
+    rec(0, nodeID, {0,0,0,0});
+  }
+
+  // Order-swap dominance (RCPSP_ORDERSWAP=1), TT2 form: drop the non-canonical
+  // order of a frozen back-to-back pair whose swap is feasible (Hartmann 1998
+  // Rule 7). Uses the shadow abs_start; the relative-time state is untouched.
+  // MUST run BEFORE the DR5 insert below — otherwise a dropped child would already
+  // be recorded in the DR5 table as a phantom that dominates the real path.
+  if (g_orderswap) {
+    size_t w = 0;
+    for (size_t i = 0; i < neighbors.size(); i++) {
+      if (neighbors[i].order_swap_prunable()) { ++g_orderswap_cand; continue; }
+      if (w != i) neighbors[w] = std::move(neighbors[i]);
+      w++;
+    }
+    neighbors.resize(w);
+  }
+  // Cutset (DR5) dominance for TT2 (RCPSP_TT2_DR5=1). Checked+inserted once per
+  // generated child, exactly like the CBS side does in RCPSP_CBS::GetSuccessors:
+  // a child dominated by an earlier state (same scheduled set, no-later releases)
+  // is dropped and never enqueued. Skyline thinning is folded into the insert.
+  if (g_tt2_dr5) {
+    auto& tab = get_tt2_dominance_table();
+    size_t w = 0;
+    for (size_t i = 0; i < neighbors.size(); i++) {
+      if (!tab.check_and_insert(neighbors[i])) {
+        if (w != i) neighbors[w] = std::move(neighbors[i]);
+        w++;
+      }
+    }
+    neighbors.resize(w);
   }
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;
@@ -1503,7 +1643,16 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  state1.h = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));  // ← ADD THIS
+  double base = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));  // ← ADD THIS
+
+  // Θ-tree resource-completion bound (RCPSP_TT2_THETA=1): a third admissible LB,
+  // combined via max(). Independently admissible, so it only ever tightens h.
+  if (g_tt2_theta) {
+    double theta = thetaResourceBound_TT2(tempUnfinished, state1.activeTransitionIndices);
+    if (theta > base) { base = theta; ++g_tt2_theta_better; }
+  }
+
+  state1.h = base;
   return state1.h;
 }
 inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
@@ -2107,7 +2256,38 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
 
   // Child generation for one parent, shared by the normal path and the inline
   // (B&P Descendants) recursion below. Requires parent's full conflict fields.
-  auto gen_children = [](const RCPSPState_CBS<N>& par, std::vector<RCPSPState_CBS<N>>& out) {
+  // Emit the child/children resolving one MDA `set` of the parent's conflict.
+  // Baseline: one child (minimal or non-minimal per the flag). With Improvement 1
+  // (use_nmd_precedence) the non-minimal child alone is INCOMPLETE (it commits each
+  // member past the whole complement, dropping the opposite orderings); we restore
+  // completeness by ALSO emitting the minimal-delay child — minimal delay is
+  // provably complete, so the union is a superset of a complete child-set (sound +
+  // optimal), at +1 child per MDA. The non-minimal child stays as the fast path.
+  auto emit_set = [](const RCPSPState_CBS<N>& par, const std::vector<short>& set,
+                     std::vector<RCPSPState_CBS<N>>& out) {
+    if (setting.use_non_minimal_delay && setting.use_nmd_precedence) {
+      // Emit the non-minimal child (fast, resolves the conflict against the whole
+      // complement in one step) AND, only when it differs, the minimal-delay child.
+      // Minimal delay is complete, so keeping its placement available restores the
+      // "delay the other complement member instead" branches the non-minimal jump
+      // skips — while the differ-check avoids emitting a duplicate when the two
+      // coincide (the common case), so the completeness anchor is nearly free.
+      RCPSPState_CBS<N> cnmd(par, set, par.t);               // non-minimal (flag currently on)
+      setting.use_non_minimal_delay = false;
+      RCPSPState_CBS<N> cmin(par, set, par.t);               // minimal
+      setting.use_non_minimal_delay = true;
+      const bool differ = (cmin.start_times != cnmd.start_times);
+      out.push_back(std::move(cnmd));
+      if (differ) out.push_back(std::move(cmin));
+    } else if (setting.use_non_minimal_delay && setting.use_mda_recursive_delay) {
+      RCPSPState_CBS<N> child(par, set, par.t);             // Improvement 2: outer-pushed child
+      child.gen_internal_mda_split(set, par.resourceType, 0, out);
+    } else {
+      out.emplace_back(par, set, par.t);
+    }
+  };
+
+  auto gen_children = [&emit_set](const RCPSPState_CBS<N>& par, std::vector<RCPSPState_CBS<N>>& out) {
     if (setting.use_MDA_sets) {
       if (setting.use_MDA_cache) {
         if (setting.use_strong_constraints && par.is_size2_conflict) {
@@ -2119,12 +2299,12 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
         else {
           const auto& sets = get_mda_cache<N>().at(par.conflict_key);
           for (const auto& set : sets)
-            out.emplace_back(par, set, par.t);
+            emit_set(par, set, out);
         }
       }
       else {
         for (const MDA& mda : par.conflict_solutions)
-          out.emplace_back(par, mda.activities, par.t);
+          emit_set(par, mda.activities, out);
       }
     }
     else {
@@ -2153,7 +2333,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       RCPSPState_CBS<N> s = std::move(work.back());
       work.pop_back();
       if (!seen.insert(s.start_times).second) continue;      // local duplicate
-      if (g_use_ub && s.start_times[g_sink_id] >= g_incumbent) { ++g_ub_pruned; continue; }
+      if (g_use_ub && s.start_times[g_sink_id] > g_incumbent) { ++g_ub_pruned; continue; }
       short ru = -1;
       const bool hc = s.compute_first_conflict(ru);
       if (!hc) { neighbors.push_back(std::move(s)); continue; }   // goal child
@@ -2170,7 +2350,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   //   IF New-RVST-and-Sched-Set(...) And Not(State-Dominated(...)) THEN keep
   // A dominated child is dropped outright, so it is never added to OPEN and never
   // expanded. Off unless setting.use_dr5.
-  if (setting.use_dr5 || g_use_ub || g_use_leftshift) {
+  if (setting.use_dr5 || g_use_ub || g_use_leftshift || g_use_dr4) {
     // Parent's (A_s, RVST). nodeID.compute_h_and_RVS() has already run (HCost).
     const CBSCutsetKey<N> pkey = setting.use_dr5
         ? cbs_cutset_key<N>(nodeID, RCPSPex.activities) : CBSCutsetKey<N>{};
@@ -2181,7 +2361,9 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       // UB pruning (B&P Descendants Line 4): propagate only pushes start times
       // forward, so every solution in this child's subtree has makespan >= the
       // child's own — and we already hold a feasible schedule at g_incumbent.
-      if (g_use_ub && neighbors[i].start_times[g_sink_id] >= g_incumbent) {
+      // strict >: with a tight (datasheet==optimum) UB the makespan==UB
+      // optimal goal must survive; a real feasible incumbent still tightens below.
+      if (g_use_ub && neighbors[i].start_times[g_sink_id] > g_incumbent) {
         drop = true; ++g_ub_pruned;
       }
 
@@ -2197,10 +2379,16 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
           // and keep the child (it is a goal for A*) — never prune it.
           if (g_use_ub)
             g_incumbent = std::min(g_incumbent, neighbors[i].start_times[g_sink_id]);
-        } else if (g_use_leftshift && neighbors[i].left_shift_prunable()) {
+        } else if (g_orderswap && neighbors[i].order_swap_candidate()) {
+          // Order-swap dominance (Hartmann 1998 Rule 7): drop the non-canonical
+          // order of a frozen back-to-back pair whose swap is feasible. MUST come
+          // BEFORE the DR5 insert — a dropped child must never enter the dominance
+          // table (a phantom entry would dominate & prune the real path).
+          drop = true; ++g_orderswap_cand;
+        } else if ((g_use_leftshift || g_use_dr4) && neighbors[i].left_shift_prunable()) {
           // Persistent precedence-idle gap with a feasible shift: no descendant
           // is an active schedule; a sibling branch holds the active optimum.
-          drop = true;
+          drop = true; ++g_leftshift_pruned;
         } else if (setting.use_dr5) {
           const CBSCutsetKey<N> ckey = cbs_cutset_key<N>(neighbors[i], RCPSPex.activities);
           // Descendants Line 8: only a child whose RVST AND scheduled set both differ
@@ -2259,6 +2447,19 @@ if (setting.use_dominance){
   }
 
 
+  // ── Warm-start branch ordering (RCPSP_WARMSTART=1) ──────────────────────────
+  // Reorder the (final, already-pruned) children by their inflated-schedule key so
+  // the branch that follows the resource-aware relaxed schedule is explored first.
+  // Pure reorder: the set of successors is unchanged => optimality/soundness hold.
+  // DIR flips which end goes first (tie-break only) — pick whichever helps.
+  if (g_use_warmstart && g_warmstart_ok && g_warmstart_reorder && neighbors.size() > 1) {
+    std::stable_sort(neighbors.begin(), neighbors.end(),
+      [](const RCPSPState_CBS<N>& a, const RCPSPState_CBS<N>& b) {
+        return g_warmstart_dir ? (a.warmstart_key > b.warmstart_key)
+                               : (a.warmstart_key < b.warmstart_key);
+      });
+  }
+
   // if (satisfies_optimal(nodeID)) {
   //   bool any_child_satisfies = false;
   //   int satisfying_child = -1;
@@ -2309,6 +2510,127 @@ template<short N>
 inline bool RCPSP_CBS<N>::GoalTest(const RCPSPState_CBS<N> &node, const RCPSPState_CBS<N> &goal) const {
   return !node.found_conflict;
 }
+
+// Θ-tree resource-completion bound for a CBS node (RCPSP_CBS_THETA=1). Each activity
+// is placed at its current start_times[i], which is a LOWER BOUND on its final start
+// (CBS delays only push starts forward), so est_i = start_times[i] is an admissible
+// earliest-start. Returns an ABSOLUTE makespan lower bound = max over resources of the
+// Vilím ECT. Source/sink (duration 0, no demand) contribute nothing.
+template<short N>
+inline double thetaMakespanBound_CBS(const RCPSPState_CBS<N>& s) {
+  const int n = (int)RCPSPex.activities.size();
+  double best = 0.0;
+  std::vector<std::pair<long, long>> leaves;
+  for (const auto& [resName, capacity] : RCPSPex.resources) {
+    if (capacity <= 0) continue;
+    leaves.clear();
+    for (int i = 0; i < n; ++i) {
+      const auto& act = RCPSPex.activities[i];
+      if (act.duration <= 0) continue;
+      auto it = act.resource_demands.find(resName);
+      if (it == act.resource_demands.end() || it->second <= 0) continue;
+      leaves.emplace_back((long)s.start_times[i], (long)act.duration * (long)it->second);
+    }
+    if (leaves.empty()) continue;
+    long ect = thetaTreeECT(leaves, (long)capacity);
+    if ((double)ect > best) best = (double)ect;
+  }
+  return best;
+}
+
+// Conflict-subset look-ahead LB for a CBS node (RCPSP_CBS_SUBSET=1). Seeds from the
+// participants of the branched conflict (recomputed from t/resourceType/start_times,
+// so it is robust to which conflict-pool fields the config populates), grows a
+// SHALLOW downstream (g_cbs_subset_hops, capped at g_cbs_subset_size), and solves the
+// resulting sub-RCPSP with releases = start_times. Returns an ABSOLUTE makespan LB;
+// 0 when there is no usable conflict. Precedence among subset members is the true
+// transitive precedence (upstream ∩ subset) — that is what propagates a delayed
+// conflict participant to its downstream (the cascade HCBS misses).
+template<short N>
+inline double subsetConflictLB_CBS(const RCPSPState_CBS<N>& s) {
+  if (!s.found_conflict) return 0.0;
+  const int nAll = (int)RCPSPex.activities.size();
+  const int R = (int)resource_info.size();
+  const int res = s.resourceType;
+  if (res < 0 || res >= R || nAll == 0) return 0.0;
+  const int tc = s.t;
+
+  std::vector<char> inSub(nAll, 0);
+  std::vector<int>  subset;
+
+  // 1. Seed = activities running on the conflict resource at the conflict time.
+  const ResourceInfo& RI = resource_info[res];
+  for (short idx : RI.activity_indices) {
+    if (idx == 0 || idx == g_sink_id) continue;
+    int st = s.start_times[idx];
+    if (st <= tc && tc < st + RCPSPex.activities[idx].duration && !inSub[idx]) {
+      inSub[idx] = 1; subset.push_back(idx);
+    }
+  }
+  if (subset.empty()) return 0.0;
+
+  // 2. Grow shallow downstream (BFS over forward edges), capped by hops and size.
+  std::queue<std::pair<int,int>> bfs;
+  for (int a : subset) bfs.push({a, 0});
+  while (!bfs.empty() && (int)subset.size() < g_cbs_subset_size) {
+    auto [a, hop] = bfs.front(); bfs.pop();
+    if (hop >= g_cbs_subset_hops) continue;
+    for (short d : RCPSPex.dependencies[a]) {
+      int c = d - 1;                                   // dependencies values are 1-based
+      if (c < 0 || c >= nAll || c == g_sink_id || inSub[c]) continue;
+      inSub[c] = 1; subset.push_back(c); bfs.push({c, hop + 1});
+      if ((int)subset.size() >= g_cbs_subset_size) break;
+    }
+  }
+
+  // 2b. Cache lookup. (subset activity-set + their releases) fully determines the
+  //     subproblem, so memoize its LB — the wide-shallow tree revisits it heavily.
+  uint64_t sig = 1469598103934665603ULL;
+  { std::vector<int> sorted = subset;
+    std::sort(sorted.begin(), sorted.end());
+    for (int gi : sorted) {
+      sig ^= (uint64_t)(unsigned)gi;                          sig *= 1099511628211ULL;
+      sig ^= (uint64_t)(unsigned short)s.start_times[gi];     sig *= 1099511628211ULL;
+    } }
+  {
+    auto cit = g_cbs_subset_cache.find(sig);
+    if (cit != g_cbs_subset_cache.end()) { ++g_cbs_subset_cache_hits; return (double)cit->second; }
+  }
+
+  // 3. Build the local SubsetInstance (0-based global -> local index).
+  const int m = (int)subset.size();
+  std::vector<int> local(nAll, -1);
+  for (int k = 0; k < m; k++) local[subset[k]] = k;
+
+  SubsetInstance P;
+  P.n = m; P.R = R;
+  P.dur.resize(m); P.release.resize(m);
+  P.demand.assign(m, std::vector<int>(R, 0));
+  P.preds.assign(m, {});
+  P.cap.resize(R);
+  for (int r = 0; r < R; r++) P.cap[r] = resource_info[r].capacity;
+
+  for (int k = 0; k < m; k++) {
+    const int gi = subset[k];
+    P.dur[k]     = RCPSPex.activities[gi].duration;
+    P.release[k] = s.start_times[gi];
+    for (int r = 0; r < R; r++) {
+      auto it = resource_info[r].demand_lookup.find((short)gi);
+      if (it != resource_info[r].demand_lookup.end()) P.demand[k][r] = it->second;
+    }
+    for (short p : upstream[gi]) if (p >= 0 && p < nAll && inSub[p]) P.preds[k].push_back(local[p]);
+  }
+
+  // 4. Solve capped + record telemetry (to calibrate g_cbs_subset_expand).
+  SubsetResult rr = subsetRcpspLB(P, g_cbs_subset_expand);
+  ++g_cbs_subset_solves;
+  g_cbs_subset_expands_total += rr.expands;
+  if (rr.capped) ++g_cbs_subset_capped;
+  if (rr.expands > g_cbs_subset_maxexpands) g_cbs_subset_maxexpands = rr.expands;
+  g_cbs_subset_cache[sig] = rr.lb;   // memoize (capped LBs are deterministic in the inputs too)
+  return (double)rr.lb;
+}
+
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   // std::cout << "H: ";
@@ -2316,7 +2638,41 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   // compute_h_and_RVS is expensive and state-deterministic; cache its result so
   // repeat HCost calls on the same state object (or copies of it) are free.
   if (state1.h_cached) return state1.h_cache;
-  const double h = state1.compute_h_and_RVS();//return h_cost
+  double h = state1.compute_h_and_RVS();//return h_cost
+  // RCPSP_WARMSTART: use the inflated-resource optimum as an admissible LOWER BOUND.
+  // It's valid (more resources => makespan <= real optimum) and tighter than the
+  // resource-blind CPM h. Floor h so f = g+h >= inflMk-rootMk, letting A* skip the
+  // loose CPM lower f-layers and start real work at f=inflMk. Admissible: inflMk <=
+  // global opt <= this subtree's opt, so the floor never overestimates. At any goal
+  // makespan >= inflMk, so the floor is <=0 there and goals are unaffected.
+  if (g_use_warmstart && g_warmstart_ok) {
+    const double lb_rem = (double)(g_warmstart_infl_mk - state1.start_times[g_sink_id]);
+    if (lb_rem > h) h = lb_rem;
+  }
+  // Θ-tree resource bound (RCPSP_CBS_THETA=1): admissible ABSOLUTE makespan LB,
+  // floored into h exactly like the warm-start bound above (h := max(h, LB - g),
+  // g = current makespan = start_times[g_sink_id]). Independently admissible, so it
+  // only tightens h; at a goal LB <= makespan, so the floor is <= 0 (no effect).
+  if (g_cbs_theta) {
+    const double theta_rem = thetaMakespanBound_CBS(state1) - (double)state1.start_times[g_sink_id];
+    if (theta_rem > h) { h = theta_rem; ++g_cbs_theta_better; }
+  }
+  // Conflict-subset look-ahead floor (RCPSP_CBS_SUBSET=1): admissible, so it only
+  // tightens h (same floor slot as Θ/warmstart). The sub-solve is costly, so it runs
+  // only where it can pay off — SHALLOW (strong early bound) OR NEAR-INCUMBENT (a
+  // tightening here can cross UB and prune). See the gate params in Globals.h.
+  if (g_cbs_subset) {
+    const int g_now = state1.start_times[g_sink_id];
+    const int f_cur = g_now + (int)h;                         // current best f (post warmstart/Θ)
+    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_subset_maxdepth;
+    const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
+                         && f_cur < g_incumbent
+                         && (g_incumbent - f_cur) <= g_cbs_subset_gap;
+    if (shallow || nearUB) {
+      const double sub_rem = subsetConflictLB_CBS(state1) - (double)g_now;
+      if (sub_rem > h) { h = sub_rem; ++g_cbs_subset_better; }
+    }
+  }
   state1.h_cache  = h;
   state1.h_cached = true;
   // RCPSP_LEAN=1: strip the heavy per-conflict vectors before this state is

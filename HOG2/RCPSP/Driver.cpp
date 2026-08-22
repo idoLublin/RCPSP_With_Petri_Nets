@@ -12,8 +12,10 @@
 #include "AStarCompare.h"
 
 #include <filesystem>
+#include <ctime>            // timestamped, self-describing run filenames
 namespace fs = std::filesystem;
 #include "RCPSP.h"
+#include "LazyAStarCBS.h"   // RCPSP_LAZY=1: deferred-heuristic A* (compute conflicts/h at pop, not insertion)
 //****importent i changed GLUtil.h with recVec == operator abit****//
  //PetriExample petri;
  //RCPSP_example RCPSP1;
@@ -26,6 +28,9 @@ namespace fs = std::filesystem;
 // #include <windows.h>
 #include <omp.h> // Include this at the top of Driver.cpp
 #include <fstream>
+#include <sstream>
+#include <tuple>
+#include <map>
 #include <vector>
 #include <climits>
 #include <fstream>
@@ -55,7 +60,10 @@ namespace fs = std::filesystem;
 void runBenchmark(const std::string& problemType);
 void runSingleConfig(const std::string& problemType, int configNum);
 inline int serialSGS_makespan();   // feasible-schedule UB seed (defined below)
+int getDatasheetUB(int group, int exam, const std::string& problemType); // datasheet UB (defined below)
 void runBenchmarkTT2(const std::string& problemType);
+void runCbsInitF(const std::string& problemType);   // root-state f (no search) for heuristic eval
+void runTt2InitF(const std::string& problemType);   // TT2 root-state f (no search)
 void applyConfigNum(int n);
 void runConfigResume(const std::string& filename, const std::string& problemType, int startGroup, int startExam);
 void runSingleConfigResume(const std::string& problemType, int configNum, int startGroup, int startExam);
@@ -543,6 +551,66 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
     return 0;
 }
 
+// ── Root trivial-optimality shortcut for TT2 / TTPNR ─────────────────────────
+// If the CPM/EST schedule (every activity started at its earliest
+// precedence-feasible time, resources ignored) is ALSO resource-feasible, then
+// it attains the CPM lower bound while satisfying every constraint, so it is
+// provably optimal — we can return it immediately and skip A* entirely.
+//
+// Fills estStart (1-based; index = activity id) and outMakespan, and returns
+// true iff the EST schedule is resource-feasible. One-directional: a false
+// result just means "run the normal search", so there is no correctness risk.
+static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakespan) {
+    const int N = static_cast<int>(RCPSPex.activities.size());
+    if (N == 0) return false;
+
+    // 1. Earliest start times (longest path over precedence, resources ignored).
+    //    Fixpoint iteration so we do NOT rely on activity ids being topologically
+    //    ordered — an under-estimated EST could otherwise fire the shortcut on an
+    //    infeasible schedule.
+    estStart.assign(N + 1, 0);
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (int i = 1; i <= N; ++i) {
+            int est = 0;
+            for (short pred : RCPSPex.backword_dependencies[i - 1]) {
+                int predFinish = estStart[pred] + RCPSPex.activities[pred - 1].duration;
+                if (predFinish > est) est = predFinish;
+            }
+            if (est != estStart[i]) { estStart[i] = est; changed = true; }
+        }
+    }
+
+    // 2. CPM makespan = latest earliest-finish over all activities (== the root
+    //    heuristic getForwardHcost_TT, which is the admissible CPM lower bound).
+    int H = 0;
+    for (int i = 1; i <= N; ++i)
+        H = std::max(H, estStart[i] + static_cast<int>(RCPSPex.activities[i - 1].duration));
+    outMakespan = H;
+
+    // 3. Whole-profile resource-feasibility check: for each resource, accumulate
+    //    demand over EVERY time unit and verify capacity is never exceeded. This
+    //    is a full timeline sweep (not per-activity / pairwise), so it catches a
+    //    3+-way overlap that a local check would miss.
+    for (const auto& [resName, capacity] : RCPSPex.resources) {
+        std::vector<int> usage(H + 1, 0);
+        for (int i = 1; i <= N; ++i) {
+            const auto& act = RCPSPex.activities[i - 1];
+            const int dur = act.duration;
+            if (dur <= 0) continue;
+            auto it = act.resource_demands.find(resName);
+            if (it == act.resource_demands.end() || it->second <= 0) continue;
+            const int d = it->second;
+            const int s = estStart[i];
+            for (int t = s; t < s + dur; ++t) usage[t] += d;
+        }
+        for (int t = 0; t < H; ++t)
+            if (usage[t] > capacity) return false;
+    }
+    return true;
+}
+
  int solveRCPSP_TT2(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving TT2: " << group<<":"<<exam << std::endl;
     count=0;
@@ -555,6 +623,73 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
 
 
     last.g = HCost_TT2(last, first);
+
+    get_tt2_dominance_table().clear();   // DR5 table is per-instance (RCPSP_TT2_DR5=1)
+    g_tt2_sym_pruned = 0;                // symmetry-breaking counter is per-instance
+    g_tt2_dr4_pruned = 0;                // DR4 delayed-start prune counter is per-instance
+    g_tt2_theta_better = 0;              // Θ-tree "bound beat existing" counter is per-instance
+
+    // ── Root trivial-optimality shortcut ────────────────────────────────────
+    // If the CPM/EST schedule is already resource-feasible it is provably
+    // optimal (attains the CPM lower bound) — return it without running A*.
+    {
+        auto tstart = std::chrono::high_resolution_clock::now();
+        std::vector<int> trivEst;
+        int trivMakespan = 0;
+        if (tryTrivialRootSchedule_TT2(trivEst, trivMakespan)) {
+            auto tend = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> telapsed = tend - tstart;
+            long peakMemKB = getPeakMemoryKB();
+
+            std::cout << "TT2 trivial-at-root: EST schedule is resource-feasible => "
+                      << "optimal makespan=" << trivMakespan
+                      << " (0 expansions, A* skipped)" << std::endl;
+            std::cout << "{'scheduling': {";
+            bool firstJob = true;
+            int realJobCount = 0;
+            for (int i = 1; i < (int)trivEst.size(); ++i) {
+                int dur = RCPSPex.activities[i - 1].duration;
+                if (!firstJob) std::cout << ", ";
+                std::cout << "'" << i << "': " << (trivEst[i] + dur);  // finish time
+                firstJob = false;
+                realJobCount++;
+            }
+            std::cout << "}, 'total_jobs_scheduled': " << realJobCount
+                      << ", 'makespan': " << trivMakespan
+                      << ", 'solved': True, 'trivialAtRoot': True}" << std::endl;
+
+            std::ofstream file(filename, std::ios::app);
+            file << group << "," << exam << "," << telapsed.count() << ","
+                 << "True" << ","
+                 << trivMakespan << ","
+                 << 0 << ","                       // expandNumber (A* never ran)
+                 << 0 << ","                       // generatedNumber
+                 << 0 << ","                       // depth
+                 << "TT2" << ","
+                 << problemType << ","
+                 << peakMemKB << ","
+                 << LB << ","
+                 << g_tt2_dr5 << ","
+                 << g_tt2_batch << ","
+                 << g_tt2_batch_cap << ","
+                 << get_tt2_dominance_table().pruned << ","
+                 << get_tt2_dominance_table().thinned << ","
+                 << get_tt2_dominance_table().checks << ","
+                 << get_tt2_dominance_table().inserts << ","
+                 << get_tt2_dominance_table().maxBucket << ","
+                 << g_tt2_sym << ","
+                 << g_tt2_sym_pruned << ","
+                 << g_tt2_gendesc << ","
+                 << g_tt2_sym_tiebreak << ","
+                 << astar_timeout_seconds << ","
+                 << 1 << ","                       // trivialAtRoot
+                 << (g_tt2_theta ? 1 : 0) << ","   // useThetaBound
+                 << g_tt2_theta_better << ","      // thetaBoundBetter (0 here: A* never ran)
+                 << g_tt2_dr4 << "," << g_tt2_dr4_pruned   // useTT2DR4, dr4Pruned
+                 << "\n";
+            return 0;
+        }
+    }
 
     RCPSP_TT2 as1;
 
@@ -654,6 +789,20 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
    // std::cout << "Nodes Touched: " << astar.GetUniqueNodesExpanded() << std::endl;
     std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
 
+    if (g_tt2_dr5) {
+        auto& dt = get_tt2_dominance_table();
+        std::cout << "TT2 DR5: pruned=" << dt.pruned << " checks=" << dt.checks
+                  << " inserts=" << dt.inserts << " thinned=" << dt.thinned
+                  << " comparisons=" << dt.comparisons
+                  << " buckets=" << dt.bucketCount() << " maxBucket=" << dt.maxBucket << std::endl;
+    }
+    if (g_tt2_sym)
+        std::cout << "TT2 SYM: successors skipped by canonical order = " << g_tt2_sym_pruned << std::endl;
+    if (g_tt2_theta)
+        std::cout << "TT2 THETA: bound beat existing at " << g_tt2_theta_better << " states" << std::endl;
+    if (g_tt2_dr4)
+        std::cout << "TT2 DR4: successors pruned = " << g_tt2_dr4_pruned << std::endl;
+
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
          << (!path.empty() ? "True" : "False") << ","
@@ -665,8 +814,25 @@ int solveRCPSP(int group, int exam, const std::string& filename,const std::strin
         << problemType<< ","
         << peakMemKB << ","  // ADD THIS
         << LB << ","  // ADD THIS
-
-         // << (useCS ? "True" : "False")<< ","
+        // ── active TT2 feature flags + DR5 dominance stats (self-documenting run) ──
+        << g_tt2_dr5 << ","
+        << g_tt2_batch << ","
+        << g_tt2_batch_cap << ","
+        << get_tt2_dominance_table().pruned << ","
+        << get_tt2_dominance_table().thinned << ","
+        << get_tt2_dominance_table().checks << ","
+        << get_tt2_dominance_table().inserts << ","
+        << get_tt2_dominance_table().maxBucket << ","
+        << g_tt2_sym << ","
+        << g_tt2_sym_pruned << ","
+        // ── remaining configurable TT2 knobs, appended for full run traceability ──
+        << g_tt2_gendesc << ","
+        << g_tt2_sym_tiebreak << ","
+        << astar_timeout_seconds << ","
+        << 0 << ","   // trivialAtRoot (shortcut did not fire on this instance)
+        << (g_tt2_theta ? 1 : 0) << ","   // useThetaBound
+        << g_tt2_theta_better << ","      // thetaBoundBetter
+        << g_tt2_dr4 << "," << g_tt2_dr4_pruned   // useTT2DR4, dr4Pruned
          << "\n";
 
     return 0;
@@ -1203,6 +1369,126 @@ void setProblemSize(const std::string& problemType) {
 //     return 0;
 // }
 
+// ── Inflated-resource warm start (RCPSP_WARMSTART=1), CBS only ────────────────
+// ONE-TIME, before the real search: solve the SAME instance with every resource
+// capacity inflated by g_warmstart_k (ceil) on a small wall budget
+// (g_warmstart_budget_s). The inflated instance is a relaxation — strictly easier
+// — so this usually finishes fast; on timeout we just leave g_warmstart_ok=false
+// and the real search runs with its normal ordering. The resulting schedule is
+// INFEASIBLE for the real caps, so it is used ONLY to key CBS branch ordering,
+// never as a bound. Requires getRCPSP + precompute* already done. All per-instance
+// caches the inner solve touches (dominance table, MDA cache) are wiped afterwards
+// so the real search starts pristine; g_incumbent/capacities are saved+restored.
+template<int N>
+void computeWarmstartOrder() {
+    g_warmstart_ok = false;
+    g_warmstart_infl_mk = -1;
+    g_warmstart_sec = 0.0;
+    g_warmstart_start.assign(RCPSPex.activities.size(), 0);
+    if (resource_info.empty() || RCPSPex.activities.empty()) return;
+
+    // Inflate capacities (save originals). Two modes:
+    //  - RS target (g_warmstart_rs > 0): per-resource, set capacity to the value
+    //    giving that Resource Strength — Kmin = max activity demand, Kmax = peak of
+    //    the earliest-start (CPM, resource-blind) demand profile. Instance-adaptive.
+    //  - else: flat multiplier ceil(k * capacity).
+    // Both are clamped to never drop below the real capacity (must stay a relaxation).
+    std::vector<short> savedCap(resource_info.size());
+    for (size_t r = 0; r < resource_info.size(); ++r) savedCap[r] = resource_info[r].capacity;
+
+    if (g_warmstart_rs > 0.0) {
+        const int n = (int)RCPSPex.activities.size();
+        std::vector<int> es(n, 0);                       // CPM earliest starts (precedence only)
+        for (int i = 0; i < n; ++i)
+            for (int dep : RCPSPex.backword_dependencies[i]) {
+                int d = dep - 1;
+                es[i] = std::max(es[i], es[d] + (int)RCPSPex.activities[d].duration);
+            }
+        int horizon = 0;
+        for (int i = 0; i < n; ++i) horizon = std::max(horizon, es[i] + (int)RCPSPex.activities[i].duration);
+
+        for (size_t r = 0; r < resource_info.size(); ++r) {
+            const auto& ri = resource_info[r];
+            short Kmin = 0;
+            for (short d : ri.demands) Kmin = std::max(Kmin, d);      // max single-activity demand
+            std::vector<int> prof(horizon + 1, 0);                     // earliest-start demand profile
+            for (size_t j = 0; j < ri.activity_indices.size(); ++j) {
+                short a = ri.activity_indices[j], d = ri.demands[j];
+                if (d == 0) continue;
+                for (int t = es[a]; t < es[a] + (int)RCPSPex.activities[a].duration; ++t) prof[t] += d;
+            }
+            int Kmax = Kmin;
+            for (int t = 0; t < horizon; ++t) Kmax = std::max(Kmax, prof[t]);
+            long cap = (long)std::ceil((double)Kmin + g_warmstart_rs * (double)(Kmax - Kmin));
+            cap = std::max<long>(cap, savedCap[r]);                    // never below real (stay a relaxation)
+            resource_info[r].capacity = (short)std::min<long>(cap, (long)std::numeric_limits<short>::max());
+        }
+    } else {
+        for (size_t r = 0; r < resource_info.size(); ++r) {
+            long inflated = (long)std::ceil(g_warmstart_k * (double)savedCap[r]);
+            resource_info[r].capacity =
+                (short)std::min<long>(inflated, (long)std::numeric_limits<short>::max());
+        }
+    }
+
+    // Save/clamp the search knobs the inner solve reads, then run it. The inflated
+    // solve gets its OWN, SEPARATE budget (not stolen from the real search): 0 =>
+    // the full search timeout, so if the strictly-easier problem can't be solved,
+    // the real one has no hope either. Its wall time is recorded (warmstartSec).
+    const bool      saved_ws  = g_use_warmstart;      g_use_warmstart = false; // no recursion
+    const long long saved_to  = astar_timeout_seconds;
+    if (g_warmstart_budget_s > 0) astar_timeout_seconds = g_warmstart_budget_s;  // else keep full timeout
+    const short     saved_inc = g_incumbent;          g_incumbent = std::numeric_limits<short>::max();
+    get_cbs_dominance_table<N>().clear();
+    reset_mda_cache<N>();
+
+    RCPSP_CBS<N> env;
+    RCPSPState_CBS<N> first;
+    RCPSPState_CBS<N> last = first;
+    last.start_times[g_sink_id] = 0;
+    last.resourceType = -1;
+    last.rvs_activities_pool.clear();
+    TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> astar;
+    std::vector<RCPSPState_CBS<N>> path;
+    auto ws_t0 = std::chrono::high_resolution_clock::now();
+    astar.GetPath(&env, first, last, path);
+    g_warmstart_sec = std::chrono::duration<double>(
+        std::chrono::high_resolution_clock::now() - ws_t0).count();
+
+    // Pick the schedule: the found goal, or (when GetPath returns empty because
+    // start==goal) the root itself if it is already conflict-free under inflated
+    // caps. Only a genuine budget exhaustion with no goal leaves ordering disabled.
+    const RCPSPState_CBS<N>* fs = nullptr;
+    if (!path.empty()) {
+        fs = &path.back();
+    } else {
+        short rc = -1;
+        if (!first.compute_first_conflict(rc)) fs = &first;   // root already feasible
+    }
+    if (fs) {
+        for (size_t i = 0; i < RCPSPex.activities.size(); ++i)
+            g_warmstart_start[i] = fs->start_times[i];
+        g_warmstart_ok = true;
+        g_warmstart_infl_mk = fs->start_times[g_sink_id];
+        std::cout << "WARMSTART: inflated ("
+                  << (g_warmstart_rs > 0.0 ? ("RS=" + std::to_string(g_warmstart_rs))
+                                           : ("k=" + std::to_string(g_warmstart_k)))
+                  << ") schedule ready, makespan=" << fs->start_times[g_sink_id]
+                  << "  (budget " << g_warmstart_budget_s << "s)\n";
+    } else {
+        std::cout << "WARMSTART: inflated solve found no schedule in "
+                  << g_warmstart_budget_s << "s -> ordering disabled this instance\n";
+    }
+
+    // Restore real caps/knobs and wipe the caches the inner solve dirtied.
+    for (size_t r = 0; r < resource_info.size(); ++r) resource_info[r].capacity = savedCap[r];
+    astar_timeout_seconds = saved_to;
+    g_use_warmstart       = saved_ws;
+    g_incumbent           = saved_inc;
+    get_cbs_dominance_table<N>().clear();
+    reset_mda_cache<N>();
+}
+
 template<int N>
 int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const std::string& problemType) {
     debug_cardinal_num = 0;
@@ -1216,14 +1502,29 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     precomputeUpstream();
     precomputeResourceInfo();
 
+    // ── RCPSP_WARMSTART: one-time inflated-resource solve to seed branch order ──
+    // Runs before the UB reset/seed below so it can freely reset the incumbent and
+    // per-instance caches; it restores everything it touches.
+    if (g_use_warmstart) computeWarmstartOrder<N>();
+
     // ── Upper-bound pruning: per-instance reset + SGS seed ──
     g_incumbent = std::numeric_limits<short>::max();
     g_ub_pruned = 0;
+    g_leftshift_pruned = 0;
+    g_lazy_hcost_evals = 0;
+    g_lazy_reinserts = 0;
+    g_cbs_theta_better = 0;   // Θ-tree "floor beat HCBS" counter is per-instance
+    g_cbs_subset_better = g_cbs_subset_solves = g_cbs_subset_expands_total = 0;   // subset LB telemetry, per-instance
+    g_cbs_subset_capped = g_cbs_subset_maxexpands = g_cbs_subset_cache_hits = 0;
+    g_cbs_subset_cache.clear();   // subset LB result cache is per-instance
+    g_imp2_fires = 0; g_imp2_max_depth = 0;   // Improvement 2 (RCPSP_MDA_RECURSE) telemetry, per-instance
+    g_orderswap_cand = 0;                     // order-swap measurement (RCPSP_ORDERSWAP), per-instance
+    g_nmd_overshoot_events = 0; g_nmd_lost_siblings = 0;   // NMD overshoot diagnostic, per-instance
     LB = 0;   // proven-LB accumulator (TemplateAStar: LB = max(LB, popped f))
     if (g_use_ub) {
-        int sgs = serialSGS_makespan();
-        if (sgs > 0) g_incumbent = (short)sgs;
-        std::cout << "UB seed (SGS): " << sgs << std::endl;
+        int ub = getDatasheetUB(group, exam, problemType);
+        if (ub > 0) g_incumbent = (short)ub;
+        std::cout << "UB seed (datasheet): " << ub << std::endl;
     }
 
     RCPSP_CBS<N> as1;
@@ -1233,12 +1534,34 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     last.start_times[g_sink_id]=0;
     last.resourceType = -1;
     last.rvs_activities_pool.clear();
+
+    // Init-f (root f) = root earliest-start makespan + root heuristic; computed on a
+    // COPY so the real search's start state stays pristine. Recorded in the CSV
+    // (rootF), together with the proven LB after the search (provenLB = rootMk + LB).
+    const int root_mk_csv = (int)first.start_times[g_sink_id];
+    int root_f_csv;
+    { RCPSPState_CBS<N> probe = first; root_f_csv = root_mk_csv + (int)probe.compute_h_and_RVS(); }
+
     TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> astar;
     std::vector<RCPSPState_CBS<N>> path;
 
     std::chrono::duration<double> elapsed;
     auto start = std::chrono::high_resolution_clock::now();
-    astar.GetPath(&as1, first, last, path);
+    // Search engine: eager TemplateAStar (default) or the deferred-heuristic
+    // LazyAStarCBS (RCPSP_LAZY=1). Both expose GetPath / GetNodesExpanded /
+    // GetNodesTouched and share the AStarOpenClosed data type, so the rest of the
+    // function (and the wrong-answer debug's openClosedList access) is unchanged.
+    long nExpanded = 0, nTouched = 0;
+    if (g_use_lazy) {
+        LazyAStarCBS<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> lazyAstar;
+        lazyAstar.GetPath(&as1, first, last, path);
+        nExpanded = (long)lazyAstar.GetNodesExpanded();
+        nTouched  = (long)lazyAstar.GetNodesTouched();
+    } else {
+        astar.GetPath(&as1, first, last, path);
+        nExpanded = (long)astar.GetNodesExpanded();
+        nTouched  = (long)astar.GetNodesTouched();
+    }
     auto end = std::chrono::high_resolution_clock::now();
     elapsed = end - start;
     long peakMemKB = getPeakMemoryKB();
@@ -1287,8 +1610,27 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
         std::cout << "Path not found or timeout occurred.\n";
     }
 
-    std::cout << "Nodes Expanded: " << astar.GetNodesExpanded() << std::endl;
-    std::cout << "Nodes Touched: " << astar.GetNodesTouched() << std::endl;
+    std::cout << "Nodes Expanded: " << nExpanded << std::endl;
+    std::cout << "Nodes Touched: " << nTouched << std::endl;
+
+    // ── Per-rule prune breakdown (debug) ──
+    {
+        auto& dt = get_cbs_dominance_table<N>();
+        size_t nb = 0, maxb = 0; double avgb = 0;
+        dt.bp_bucket_stats(nb, maxb, avgb);
+        std::cout << "Prunes per rule: UB=" << g_ub_pruned
+                  << " LEFTSHIFT=" << g_leftshift_pruned
+                  << " DOMINANCE=" << dt.pruned
+                  << "  (dom checks=" << dt.checks << " stored=" << dt.stored
+                  << " bp=" << dt.bp_count << " dr5=" << dt.dr5_count
+                  << " killed=" << dt.killed_count
+                  << " | bp_buckets=" << nb << " maxBucket=" << maxb
+                  << " avgBucket=" << avgb << ")" << std::endl;
+        if (g_use_lazy)
+            std::cout << "Lazy A*: hcost_evals(scans@pop)=" << g_lazy_hcost_evals
+                      << " reinserts=" << g_lazy_reinserts
+                      << "  vs expanded=" << nExpanded << " touched=" << nTouched << std::endl;
+    }
 
     std::ofstream file(filename, std::ios::app);
     InstanceParams p = getParams(group);
@@ -1476,8 +1818,8 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     }
     file << p.NC << "," << p.RF << "," << p.RS << ","
          << ((!path.empty() || first.rvs_activities_pool.empty() || ub_exhaust_optimal) ? "True" : "False") << ","
-         << astar.GetNodesExpanded() << ","
-         << astar.GetNodesTouched() << ","
+         << nExpanded << ","
+         << nTouched << ","
          << path.size() << ","
          << peakMemKB << ","
          << setting.use_first_conflict << ","
@@ -1487,7 +1829,60 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << setting.use_MDA_cache << ","
          << setting.use_strong_constraints << ","
          << setting.use_MDA_BAB << ","
-         << debug_cardinal_num / max(1, astar.GetNodesTouched()) << "\n";
+         << debug_cardinal_num / max(1L, nTouched) << ","
+         // ── active experiment rules + per-rule prune counts ──
+         << setting.use_dr5 << ","
+         << (g_dom_rule==DOM_BP?"bp":g_dom_rule==DOM_DR5?"dr5":g_dom_rule==DOM_DR5S?"dr5s":"both") << ","
+         << g_use_ub << ","
+         << g_use_hybrid << ","
+         << g_hybrid_threshold << ","
+         << g_use_leftshift << ","
+         << g_use_bidir << ","
+         << g_ub_pruned << ","
+         << g_leftshift_pruned << ","
+         << get_cbs_dominance_table<N>().pruned << ","
+         << get_cbs_dominance_table<N>().checks << ","
+         << get_cbs_dominance_table<N>().stored << ","
+         << g_use_lazy << ","
+         << g_dom_skyline << ","
+         << g_lazy_hcost_evals << ","
+         << g_lazy_reinserts << ","
+         // ── remaining configurable knobs, appended so every run is fully self-documenting ──
+         << setting.use_non_minimal_delay << ","
+         << setting.use_ancestor_branching << ","
+         << setting.use_dominance << ","
+         << setting.use_pair_decomposition << ","
+         << setting.use_greed_conflic_resultion_asstimation << ","
+         << g_use_lean << ","
+         << g_use_inline << ","
+         << g_dom_store_cap << ","
+         << astar_timeout_seconds << ","
+         << g_use_warmstart << ","
+         << g_warmstart_k << ","
+         << g_warmstart_budget_s << ","
+         << g_warmstart_dir << ","
+         << g_use_setdelay << ","
+         << g_warmstart_rs << ","
+         << (g_warmstart_ok ? 1 : 0) << ","
+         << g_warmstart_infl_mk << ","
+         << root_f_csv << ","
+         << (root_mk_csv + (int)LB) << ","
+         << g_warmstart_sec << ","
+         << g_use_dr4 << ","
+         << (g_cbs_theta ? 1 : 0) << ","   // useThetaBound
+         << g_cbs_theta_better << ","      // thetaBoundBetter
+         << (g_cbs_subset ? 1 : 0) << ","  // useSubsetLB
+         << g_cbs_subset_better << ","     // subsetBetter
+         << g_cbs_subset_solves << ","     // subsetSolves
+         << g_cbs_subset_expands_total << ","  // subsetExpandsTotal
+         << g_cbs_subset_capped << ","     // subsetCapped
+         << g_cbs_subset_maxexpands << ","  // subsetMaxExpands
+         << g_cbs_subset_cache_hits << ","      // subsetCacheHits
+         << setting.use_mda_recursive_delay << ","  // useMdaRecursive (Improvement 2)
+         << g_imp2_fires << ","                 // imp2Fires (internal-MDA splits this instance)
+         << g_imp2_max_depth << ","             // imp2MaxDepth (deepest internal split this instance)
+         << setting.use_nmd_precedence << ","   // useNmdPrecedence (Improvement 1)
+         << g_orderswap_cand << "\n";           // orderSwapCand (rule-7 candidates DR5 kept; measurement)
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
         // exit(0); // disabled: log wrong answers and continue benchmark
@@ -1703,20 +2098,59 @@ int solveoldRCPSP(int group, int exam, const std::string& filename, const std::s
         return solveRCPSP_old_impl<92>(group, exam, filename, problemType);
 }
 
+// ── Self-describing run filenames ─────────────────────────────────────────────
+// Compact tag of the ACTIVE feature flags, so a filename says what it ran instead
+// of an opaque _1/_2/_3 counter. Adapts to whatever is on (CBS or TT2). Empty when
+// nothing beyond the base config is enabled (e.g. plain baseline).
+static std::string activeFeatureTag() {
+    std::string t;
+    auto add = [&](const std::string& s){ if(!t.empty()) t += "-"; t += s; };
+    // CBS dominance / experiment flags
+    if (setting.use_dr5) add(g_dom_rule==DOM_BP?"bp":g_dom_rule==DOM_DR5?"dr5":g_dom_rule==DOM_DR5S?"dr5s":"both");
+    if (g_use_hybrid)    add("hyb");
+    if (g_use_ub)        add("ub");
+    if (g_use_lazy)      add("lazy");
+    if (g_dom_skyline)   add("sky");
+    if (g_use_leftshift) add("ls");
+    if (g_use_bidir)     add("bidir");
+    if (g_use_lean)      add("lean");
+    if (g_use_inline)    add("inl");
+    // TT2 flags
+    if (g_tt2_dr5)       add("tt2dr5");
+    if (g_tt2_batch)     add("batch");
+    if (g_tt2_sym)       add("sym");
+    if (g_tt2_gendesc)   add("gendesc");
+    if (g_tt2_theta)     add("theta");
+    return t;
+}
+
+// Local wall-clock stamp YYYYMMDD-HHMMSS — makes every run unique AND time-ordered.
+static std::string nowStamp() {
+    std::time_t tt = std::time(nullptr);
+    std::tm tmv = *std::localtime(&tt);
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y%m%d-%H%M%S", &tmv);
+    return std::string(buf);
+}
+
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
     // Ensure folder exists
     if (!fs::exists(folder)) {
         fs::create_directories(folder);
     }
 
-    int count = 1;
-    std::string newFilename;
+    // baseName (e.g. "output_j30_cfg8_") + active-feature tag + timestamp, so the
+    // name is self-documenting and sorts chronologically. The old numeric counter
+    // is kept only to break same-second collisions.
+    const std::string tag = activeFeatureTag();
+    std::string stem = baseName + (tag.empty() ? "" : tag + "_") + nowStamp();
 
-    do {
-        newFilename = folder + "/" + baseName + std::to_string(count) + extension;
+    std::string newFilename = folder + "/" + stem + extension;
+    int count = 2;
+    while (fs::exists(newFilename)) { // same-second collision -> disambiguate
+        newFilename = folder + "/" + stem + "_" + std::to_string(count) + extension;
         count++;
-    } while (fs::exists(newFilename)); // Ensure unique filename
-
+    }
     return newFilename;
 }
 
@@ -1746,7 +2180,7 @@ void runCrashDiagnostic() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
          << std::endl;
     file.close();
 
@@ -1805,7 +2239,7 @@ void runWrongAnswerDebug() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
          << std::endl;
     file.close();
 
@@ -1850,7 +2284,7 @@ void runNonMinimalDelayTest() {
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
 
     setting.use_non_minimal_delay = true;
 
@@ -1945,9 +2379,134 @@ inline int serialSGS_makespan() {
     return start[n-1] + RCPSPex.activities[n-1].duration;
 }
 
+// ── Datasheet UB (env RCPSP_UB=1) ────────────────────────────────────────────
+// Seed the UB-pruning incumbent from a datasheet, cheapest source first:
+//   1. known optimum (j30 optima file / j60-j90 bounds with '*')  -> exact UB
+//   2. published UB from the bounds file (j60/j90 unknown-optimum) -> feasible UB
+//   3. a cached value from ub_cache.csv (previously computed)
+//   4. else compute a feasible serial-SGS schedule and cache it
+// NOTE (see memory project_ub_hardcoded_swap): this is a deliberate "cheat" for
+// performance experiments. For the paper it MUST become an on-the-fly UB
+// (serialSGS_makespan / greedy dive / TT2 result), or it's telling the solver
+// the answer. requires getRCPSP + precompute* already done (RCPSPex is loaded).
+static std::map<std::tuple<std::string,int,int>, int> g_ub_cache;
+static bool g_ub_cache_loaded = false;
+static void loadUBCache() {
+    if (g_ub_cache_loaded) return;
+    g_ub_cache_loaded = true;
+    std::ifstream f("ub_cache.csv");
+    if (!f.is_open()) { f.clear(); f.open("HOG2/RCPSP/ub_cache.csv"); }
+    std::string line;
+    while (std::getline(f, line)) {
+        std::stringstream ss(line); std::string tok; std::vector<std::string> p;
+        while (std::getline(ss, tok, ',')) p.push_back(tok);
+        if (p.size() == 4) g_ub_cache[{p[0], std::atoi(p[1].c_str()), std::atoi(p[2].c_str())}] = std::atoi(p[3].c_str());
+    }
+}
+static void saveUBCache(const std::string& sz, int g, int e, int ub) {
+    g_ub_cache[{sz,g,e}] = ub;
+    std::ofstream f("ub_cache.csv", std::ios::app);
+    f << sz << "," << g << "," << e << "," << ub << "\n";
+}
+int getDatasheetUB(int group, int exam, const std::string& problemType) {
+    if (problemType == "j30") {
+        int opt = getOptimalMakespan(group, exam, problemType);
+        if (opt > 0) return opt;
+    } else {
+        Bounds b = getBounds(group, exam, problemType);
+        if (b.optimal_known && b.lb > 0) return b.lb;   // exact optimum
+        if (b.ub > 0) return b.ub;                       // published feasible UB
+    }
+    loadUBCache();
+    auto it = g_ub_cache.find({problemType, group, exam});
+    if (it != g_ub_cache.end()) return it->second;
+    int sgs = serialSGS_makespan();                      // our best feasible attempt
+    if (sgs > 0) saveUBCache(problemType, group, exam, sgs);
+    return sgs;
+}
+
 // Sweep one exam across a range of parameter groups, into a single CSV. Walks the
 // whole NC x RF x RS grid quickly instead of grinding exam-by-exam through group 1,
 // which is what correctness validation actually needs.
+// ── S* reachability DFS: walk ONLY optimal-consistent children, find the dead-end ─
+// A node N can still reach S* iff N.start_times[i] <= g_star[i] for all i. DFS the
+// consistent frontier from the root; the first consistent node whose children ALL
+// overshoot S* is exactly the conflict where the non-minimal delay loses the optimum.
+template<short N>
+void traceStarLoss_impl(int group, int exam, const std::string& ptype) {
+    reset_mda_cache<N>();
+    getRCPSP(RCPSPex, group, exam, ptype);
+    resource_info.clear(); downstream.clear(); upstream.clear();
+    precomputeDownstream(); precomputeUpstream(); precomputeResourceInfo();
+
+    RCPSP_CBS<N> env;
+    RCPSPState_CBS<N> root;
+    auto consistent = [&](const RCPSPState_CBS<N>& s) {
+        for (int i = 0; i < (int)g_star.size() && i < N; i++)
+            if (s.start_times[i] > g_star[i]) return false;
+        return true;
+    };
+    if (!consistent(root)) { std::cout << "ROOT already inconsistent with S* (bad S*?)\n"; return; }
+
+    std::unordered_set<std::array<short, N>, CBSStateArrHash<N>> visited;
+    bool found = false;
+    long g_nodes = 0, g_leaves = 0; short g_bestLeaf = 32767;
+    std::function<void(RCPSPState_CBS<N>&, int)> dfs = [&](RCPSPState_CBS<N>& node, int depth) {
+        if (found) return;
+        if (!visited.insert(node.start_times).second) return;
+        ++g_nodes;
+        node.compute_h_and_RVS();
+        if (!node.found_conflict) {                        // consistent leaf: a feasible schedule <= S*
+            ++g_leaves; g_bestLeaf = std::min(g_bestLeaf, node.start_times[g_sink_id]);
+            return;
+        }
+        std::vector<RCPSPState_CBS<N>> children;
+        env.GetSuccessors(node, children);
+        std::vector<int> cons; int progressing = 0;
+        for (int k = 0; k < (int)children.size(); k++) {
+            if (children[k].start_times == node.start_times) continue;   // self-loop (no progress) — discarded as duplicate in real search
+            ++progressing;
+            if (consistent(children[k])) cons.push_back(k);
+        }
+        if (cons.empty() && progressing > 0) {
+            found = true;
+            std::cout << "\n===== OPTIMUM LOST at depth " << depth
+                      << " | conflict t=" << node.t << " resource=" << node.resourceType << " =====\n";
+            std::cout << "conflict participants (act: start..finish | S*):\n";
+            for (short a : node.rvs_activities_pool)
+                std::cout << "   act" << (a+1) << ": " << node.start_times[a] << ".."
+                          << (node.start_times[a]+RCPSPex.activities[a].duration)
+                          << " | S*=" << g_star[a]
+                          << " dem=" << resource_info[node.resourceType].demand_lookup.at(a) << "\n";
+            std::cout << "capacity(res " << node.resourceType << ")="
+                      << resource_info[node.resourceType].capacity << "\n";
+            std::cout << children.size() << " children — each overshoots S* at:\n";
+            for (int k = 0; k < (int)children.size(); k++) {
+                std::cout << "   child" << k << ":";
+                for (int i = 0; i < (int)g_star.size() && i < N; i++)
+                    if (children[k].start_times[i] > g_star[i])
+                        std::cout << " act" << (i+1) << "(" << children[k].start_times[i] << ">" << g_star[i] << ")";
+                std::cout << "\n";
+            }
+            return;
+        }
+        for (int k : cons) dfs(children[k], depth+1);
+    };
+    setting.use_non_minimal_delay = true;   // trace the non-minimal generator
+    dfs(root, 0);
+    std::cout << "consistent nodes visited=" << g_nodes
+              << "  consistent conflict-free leaves=" << g_leaves
+              << "  best leaf makespan=" << (g_leaves? g_bestLeaf : -1) << "\n";
+    if (!found) std::cout << "No dead-end found: S* stayed reachable along the consistent frontier.\n";
+}
+
+void traceStarLoss(const std::string& ptype, int group, int exam) {
+    if      (ptype == "j30") traceStarLoss_impl<32>(group, exam, ptype);
+    else if (ptype == "j60") traceStarLoss_impl<62>(group, exam, ptype);
+    else if (ptype == "j90") traceStarLoss_impl<92>(group, exam, ptype);
+    else std::cout << "unsupported type\n";
+}
+
 void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam) {
     applyConfigNum(cfg);
     std::string f = getNextFilename("new_results",
@@ -1955,7 +2514,7 @@ void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam)
     { std::ofstream h(f);
       h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
         << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
     for (int g = startG; g <= endG; g++) {
         std::cout << "\n=== sweep cfg" << cfg << " group " << g << " exam " << exam << " ===\n";
         solveRCPSP_CBS(g, exam, f, ptype);
@@ -2115,9 +2674,67 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_LEFTSHIFT")) g_use_leftshift = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_BIDIR"))     g_use_bidir     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_HYBRID"))    g_use_hybrid    = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_HYBRID_T"))  g_hybrid_threshold = (float)std::atof(e);
     if (const char* e = std::getenv("RCPSP_LEAN"))      g_use_lean      = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_HGREED"))    setting.use_greed_conflic_resultion_asstimation = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_INLINE"))    g_use_inline    = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_SKYLINE"))   g_dom_skyline   = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_LAZY"))      g_use_lazy      = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_DR5"))   g_tt2_dr5       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_BATCH")) g_tt2_batch     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_DR4"))   g_tt2_dr4       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_BATCH_CAP")) g_tt2_batch_cap = std::atol(e);
+    if (const char* e = std::getenv("RCPSP_TT2_SYM"))   g_tt2_sym       = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_TT2_SYMTB"))  g_tt2_sym_tiebreak = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_GENDESC")) g_tt2_gendesc   = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_THETA"))  g_tt2_theta     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_WARMSTART"))          g_use_warmstart     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_WARMSTART_K"))        g_warmstart_k       = std::atof(e);
+    if (const char* e = std::getenv("RCPSP_WARMSTART_BUDGET_S")) g_warmstart_budget_s = std::atoll(e);
+    if (const char* e = std::getenv("RCPSP_WARMSTART_DIR"))      g_warmstart_dir     = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_WARMSTART_REORDER"))  g_warmstart_reorder = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_WARMSTART_RS"))       g_warmstart_rs      = std::atof(e);
+    if (const char* e = std::getenv("RCPSP_SETDELAY"))           g_use_setdelay      = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_DR4"))                g_use_dr4           = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_NMD"))                g_use_nmd           = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_ORDERSWAP"))          g_orderswap         = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_MDA_RECURSE"))        setting.use_mda_recursive_delay = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_NMD_PREC"))           setting.use_nmd_precedence      = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_NMD_PREC_REC"))       setting.use_nmd_prec_record     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_STAR")) {             // optimal-reachability tracer
+        g_star.clear();
+        std::string s(e); size_t p = 0;
+        while (p < s.size()) { size_t c = s.find(',', p);
+            g_star.push_back((short)std::atoi(s.substr(p, c==std::string::npos?c:c-p).c_str()));
+            if (c==std::string::npos) break; p = c+1; }
+        std::cout << "STAR tracer: loaded " << g_star.size() << " optimal starts\n";
+    }
+    // Expose the non-minimal delay to the sweep/single-config runner (previously
+    // only reachable via `nmd_test`). Improvement 2 (recursive MDA split) requires it.
+    setting.use_non_minimal_delay = g_use_nmd;
+    if (setting.use_mda_recursive_delay && !g_use_nmd)
+        std::cout << "WARNING: RCPSP_MDA_RECURSE=1 has no effect without RCPSP_NMD=1\n";
+    if (g_use_nmd) std::cout << "Delay policy: NON-MINIMAL"
+                             << (setting.use_mda_recursive_delay ? " + recursive MDA split (Improvement 2)" : "")
+                             << "\n";
+    if (const char* e = std::getenv("RCPSP_CBS_THETA"))          g_cbs_theta         = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET"))         g_cbs_subset        = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET_EXPAND"))  g_cbs_subset_expand = std::atol(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET_HOPS"))    g_cbs_subset_hops   = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET_SIZE"))    g_cbs_subset_size   = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET_MAXDEPTH")) g_cbs_subset_maxdepth = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SUBSET_GAP"))     g_cbs_subset_gap    = std::atoi(e);
+    if (g_tt2_sym)    std::cout << "TT2 symmetry breaking: ON (canonical increasing-id, non-batch)\n";
+    if (g_tt2_dr5)    std::cout << "TT2 dominance: DR5 cutset ON\n";
+    if (g_tt2_theta)  std::cout << "TT2 bound: Theta-tree ECT resource bound ON (max-combined)\n";
+    if (g_tt2_batch)  std::cout << "TT2 expansion: BATCH (feasible subsets, cap=" << g_tt2_batch_cap << ")\n";
+    if (g_tt2_dr4)    std::cout << "TT2 DR4 delayed-start dominance: ON\n";
+    if (g_use_lazy)   std::cout << "Search: LazyAStarCBS (deferred-heuristic A*)\n";
+    if (g_cbs_theta)  std::cout << "CBS bound: Theta-tree ECT resource floor ON (max with HCBS)\n";
+    if (g_cbs_subset) std::cout << "CBS bound: conflict-subset look-ahead LB ON (expand=" << g_cbs_subset_expand
+                                << " hops=" << g_cbs_subset_hops << " size=" << g_cbs_subset_size
+                                << " | gate: depth<=" << g_cbs_subset_maxdepth << " OR gap<=" << g_cbs_subset_gap << ")\n";
+    if (g_dom_skyline) std::cout << "Dominance: SKYLINE bucket compaction ON\n";
     if (g_use_ub || g_use_leftshift || g_use_bidir || g_use_hybrid)
         std::cout << "Experiments: UB=" << g_use_ub << " LEFTSHIFT=" << g_use_leftshift
                   << " BIDIR=" << g_use_bidir << " HYBRID=" << g_use_hybrid << std::endl;
@@ -2145,13 +2762,18 @@ int main(int argc, char* argv[]) {
             std::string f = getNextFilename("new_results", "output_dumpdom_", ".csv");
             { std::ofstream h(f); h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
                  << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
             solveRCPSP_CBS(std::atoi(argv[3]), std::atoi(argv[4]), f, argv[2]);
             std::cout << "prune pairs -> " << g_dom_dump_path << std::endl;
         } else if (arg1 == "verifydom") {
             // verifydom <type> <group> <exam> <cfg> <pairsfile>
             if (argc < 7) { std::cerr << "Usage: verifydom <type> <group> <exam> <cfg> <pairsfile>\n"; return 1; }
             runVerifyDom(argv[2], std::atoi(argv[3]), std::atoi(argv[4]), std::atoi(argv[5]), argv[6]);
+        } else if (arg1 == "startrace") {
+            // startrace <type> <group> <exam>  (needs RCPSP_STAR=... and RCPSP_NMD=1)
+            if (argc < 5) { std::cerr << "Usage: startrace <type> <group> <exam> (set RCPSP_STAR)\n"; return 1; }
+            applyConfigNum(8);
+            traceStarLoss(argv[2], std::atoi(argv[3]), std::atoi(argv[4]));
         } else if (arg1 == "nmd_test") {
             runNonMinimalDelayTest();
         } else if (arg1 == "resume") {
@@ -2166,6 +2788,23 @@ int main(int argc, char* argv[]) {
             int startGroup = std::atoi(argv[4]);
             int startExam  = std::atoi(argv[5]);
             runSingleConfigResume(ptype, cfg, startGroup, startExam);
+        } else if (arg1 == "tt2one") {
+            // tt2one <type> <group> <exam> — single TT2 instance (validation/measurement)
+            if (argc < 5) { std::cerr << "Usage: tt2one <type> <group> <exam>\n"; return 1; }
+            std::string ptype = argv[2];
+            std::string f = getNextFilename("new_results", "output_tt2one_" + ptype + "_", ".csv");
+            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned\n"; }
+            solveRCPSP_TT2(std::atoi(argv[3]), std::atoi(argv[4]), f, ptype);
+        } else if (arg1 == "cbsinitf") {
+            // cbsinitf <type> — root-state f (earliest-start makespan + HCBS h) for
+            // every instance, NO search. For heuristic-quality evaluation vs LB/optimum.
+            if (argc < 3) { std::cerr << "Usage: cbsinitf <type>\n"; return 1; }
+            runCbsInitF(argv[2]);
+        } else if (arg1 == "tt2initf") {
+            // tt2initf <type> — TT2 root-state f (= HCost_TT2 at the root, g=0) for
+            // every instance, NO search.
+            if (argc < 3) { std::cerr << "Usage: tt2initf <type>\n"; return 1; }
+            runTt2InitF(argv[2]);
         } else if (arg1.rfind("tt2_", 0) == 0) {
             // TT2 mode: argument is "tt2_j30", "tt2_j60", "tt2_j90"
             std::string problemType = arg1.substr(4);
@@ -2182,6 +2821,74 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
+
+// ── Root-state f for heuristic evaluation (no search) ─────────────────────────
+// For every instance, build the CBS root and record: rootMakespan (earliest-start
+// schedule = the f you get with h=0/baseline), rootH (HCBS heuristic at the root),
+// rootF = rootMakespan + rootH (the f the CBS search starts from with the heuristic
+// on), and the known LB/UB/optimum. No expansion happens — this is pure heuristic
+// measurement. Compare rootF to lb/ub to judge how tight the initial bound is.
+template<int N>
+void runCbsInitF_impl(const std::string& ptype, std::ofstream& file) {
+    setting.heuristic = HeuristicType::HCBS;   // evaluate the CBS heuristic at the root
+    for (int group = 1; group <= 48; group++) {
+        for (int exam = 1; exam <= 10; exam++) {
+            getRCPSP(RCPSPex, group, exam, ptype);
+            resource_info.clear(); downstream.clear(); upstream.clear();
+            precomputeDownstream(); precomputeUpstream(); precomputeResourceInfo();
+
+            RCPSPState_CBS<N> first;                       // default ctor = earliest-start root
+            short rootMk = first.start_times[g_sink_id];
+            short h      = (short)first.compute_h_and_RVS();
+            int   rootF  = (int)rootMk + (int)h;
+
+            int lb, ub; bool optKnown;
+            if (ptype == "j30") {
+                int opt = getOptimalMakespan(group, exam, ptype);
+                lb = ub = opt; optKnown = true;
+            } else {
+                Bounds b = getBounds(group, exam, ptype);
+                lb = b.lb; ub = b.ub; optKnown = b.optimal_known;
+            }
+            file << group << "," << exam << "," << (int)rootMk << "," << (int)h << ","
+                 << rootF << "," << lb << "," << ub << "," << (optKnown ? "True" : "False") << "\n";
+        }
+    }
+}
+
+void runCbsInitF(const std::string& ptype) {
+    setProblemSize(ptype);
+    std::string f = getNextFilename("new_results", "initF_cbs_" + ptype + "_", ".csv");
+    { std::ofstream h(f); h << "group,exam,rootMakespan,rootH,rootF,lb,ub,optKnown\n"; }
+    std::ofstream file(f, std::ios::app);
+    if      (ptype == "j30")  runCbsInitF_impl<32>(ptype, file);
+    else if (ptype == "j60")  runCbsInitF_impl<62>(ptype, file);
+    else if (ptype == "j90")  runCbsInitF_impl<92>(ptype, file);
+    else if (ptype == "j120") runCbsInitF_impl<122>(ptype, file);
+    else { std::cerr << "cbsinitf: unknown type " << ptype << "\n"; return; }
+    std::cout << "CBS initF -> " << f << std::endl;
+}
+
+// TT2 counterpart of runCbsInitF: root-state f only, no search. Root g = 0, so the
+// first node's f = HCost_TT2(first, last) (the same heuristic the TT2 search starts
+// from — critical-path via getForwardHcost_TT).
+void runTt2InitF(const std::string& ptype) {
+    setProblemSize(ptype);
+    std::string f = getNextFilename("new_results", "initF_tt2main_" + ptype + "_", ".csv");
+    { std::ofstream h(f); h << "group,exam,rootF\n"; }
+    std::ofstream file(f, std::ios::app);
+    for (int group = 1; group <= 48; group++) {
+        for (int exam = 1; exam <= 10; exam++) {
+            getPetri(petri, group, exam, ptype);
+            getRCPSP(RCPSPex, group, exam, ptype);
+            RCPSPState_TT2 first;
+            RCPSPState_TT2 last = first;
+            int rootF = (int)HCost_TT2(first, last);   // g(root)=0 -> f = h
+            file << group << "," << exam << "," << rootF << "\n";
+        }
+    }
+    std::cout << "TT2 initF -> " << f << std::endl;
+}
 
 void runConfig(const std::string& filename, const std::string& problemType) {
     allcorrect = true;
@@ -2241,7 +2948,7 @@ void runSingleConfig(const std::string& problemType, int configNum) {
     if (!file.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
          << std::endl;
     file.close();
 
@@ -2288,7 +2995,7 @@ void runSingleConfigResume(const std::string& problemType, int configNum,
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
 
     std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType
               << " | resume from (" << startGroup << "," << startExam << ") ===" << std::endl;
@@ -2312,7 +3019,7 @@ void runBenchmark(const std::string& problemType) {
     }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
          << std::endl;
     file.close();
 
@@ -2377,7 +3084,7 @@ void runBenchmarkTT2(const std::string& problemType) {
         return;
     }
     // Header matches what solveRCPSP_TT2 writes per row
-    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB"
+    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned"
          << std::endl;
     file.close();
 
@@ -2442,7 +3149,7 @@ void sortCSV(const std::string& filename) {
     }
     inFile.close();
 
-    // 3. Sort (Priority: PetriType -> SetSize -> Group -> Exam)
+    // 3. Sort (Priority: PetriType -> SetslSize -> Group -> Exam)
     std::sort(rows.begin(), rows.end(), [](const ResultRow& a, const ResultRow& b) {
         if (a.petriType != b.petriType) return a.petriType < b.petriType; // TP vs TT
         if (a.setSize != b.setSize) return a.setSize < b.setSize;         // j30 vs j60

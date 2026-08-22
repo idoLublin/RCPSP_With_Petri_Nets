@@ -105,7 +105,18 @@ inline size_t getcomper3(const RCPSPState_Bi& state, double g) {
 }
 
 // --- 4. RCPSPState_TT2 ---
-inline size_t getcomper1(const RCPSPState_TT2& state, double g) { return g; }
+inline size_t getcomper1(const RCPSPState_TT2& state, double g) {
+    // #3 tie-break: g + MaxRemainInActive (longest remaining duration among
+    // active transitions) — a lower bound on the eventual makespan, strictly
+    // more informative than g alone. The comparator prefers the HIGHER value
+    // among equal-f nodes (same direction as the old "prefer higher g"), diving
+    // toward the more makespan-committed states. Tie-break only; never affects
+    // optimality. TT2-scoped (the hash already carries active remaining times).
+    short maxRem = 0;
+    for (const auto& a : state.activeTransitionIndices)
+        if (a.second > maxRem) maxRem = a.second;
+    return (size_t)(g + maxRem);
+}
 inline size_t getcomper2(const RCPSPState_TT2& state, double g) {
     return state.finishedActivitiys.count();
 }

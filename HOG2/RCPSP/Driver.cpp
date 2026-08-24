@@ -617,6 +617,12 @@ static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakes
     LB=0;
     getPetri(petri, group, exam,problemType);
     getRCPSP(RCPSPex, group, exam,problemType);
+    // Instance RS for RS-adaptive gating (RCPSP_TT2_RSADAPT); group-derived cycle.
+    // Must precede the root HCost_TT2 below so the gate/single-res see correct state.
+    { static const double RSL[4] = {0.2, 0.5, 0.7, 1.0}; g_instance_rs = RSL[((group - 1) % 4 + 4) % 4]; }
+    // The single-resource LB reads resource_info/upstream, which the TT2 path does not
+    // otherwise populate — build them once here when the bound is enabled.
+    if (g_tt2_singleres) { precomputeResourceInfo(); precomputeUpstream(); }
 
     RCPSPState_TT2 first;
     RCPSPState_TT2 last = first;
@@ -627,7 +633,9 @@ static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakes
     get_tt2_dominance_table().clear();   // DR5 table is per-instance (RCPSP_TT2_DR5=1)
     g_tt2_sym_pruned = 0;                // symmetry-breaking counter is per-instance
     g_tt2_dr4_pruned = 0;                // DR4 delayed-start prune counter is per-instance
+    g_tt2_immsel_fired = 0;              // immediate-selection counter is per-instance
     g_tt2_theta_better = 0;              // Θ-tree "bound beat existing" counter is per-instance
+    g_tt2_singleres_better = g_tt2_singleres_calls = 0;   // single-resource LB telemetry, per-instance
 
     // ── Root trivial-optimality shortcut ────────────────────────────────────
     // If the CPM/EST schedule is already resource-feasible it is provably
@@ -685,7 +693,11 @@ static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakes
                  << 1 << ","                       // trivialAtRoot
                  << (g_tt2_theta ? 1 : 0) << ","   // useThetaBound
                  << g_tt2_theta_better << ","      // thetaBoundBetter (0 here: A* never ran)
-                 << g_tt2_dr4 << "," << g_tt2_dr4_pruned   // useTT2DR4, dr4Pruned
+                 << g_tt2_dr4 << "," << g_tt2_dr4_pruned << ","   // useTT2DR4, dr4Pruned
+                 << g_tt2_immsel << "," << g_tt2_immsel_fired << ","      // useTT2ImmSel, immSelFired
+                 << (g_tt2_rsadapt ? 1 : 0) << "," << g_tt2_rs_threshold << "," << g_instance_rs << ","   // useTT2RSAdapt,tt2RsThreshold,instanceRS
+                 << (g_tt2_singleres ? 1 : 0) << "," << g_tt2_singleres_better << "," << g_tt2_singleres_calls << ","   // useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS
+                 << tt2_heuristic_name(true) << "," << tt2_heuristic_name(!g_tt2_rsadapt)   // heuristicLowRS,heuristicHighRS
                  << "\n";
             return 0;
         }
@@ -802,6 +814,8 @@ static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakes
         std::cout << "TT2 THETA: bound beat existing at " << g_tt2_theta_better << " states" << std::endl;
     if (g_tt2_dr4)
         std::cout << "TT2 DR4: successors pruned = " << g_tt2_dr4_pruned << std::endl;
+    if (g_tt2_immsel)
+        std::cout << "TT2 IMMSEL: forced-single-branch nodes = " << g_tt2_immsel_fired << std::endl;
 
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << elapsed.count() << ","
@@ -832,7 +846,11 @@ static bool tryTrivialRootSchedule_TT2(std::vector<int>& estStart, int& outMakes
         << 0 << ","   // trivialAtRoot (shortcut did not fire on this instance)
         << (g_tt2_theta ? 1 : 0) << ","   // useThetaBound
         << g_tt2_theta_better << ","      // thetaBoundBetter
-        << g_tt2_dr4 << "," << g_tt2_dr4_pruned   // useTT2DR4, dr4Pruned
+        << g_tt2_dr4 << "," << g_tt2_dr4_pruned << ","   // useTT2DR4, dr4Pruned
+        << g_tt2_immsel << "," << g_tt2_immsel_fired << ","      // useTT2ImmSel, immSelFired
+        << (g_tt2_rsadapt ? 1 : 0) << "," << g_tt2_rs_threshold << "," << g_instance_rs << ","   // useTT2RSAdapt,tt2RsThreshold,instanceRS
+        << (g_tt2_singleres ? 1 : 0) << "," << g_tt2_singleres_better << "," << g_tt2_singleres_calls << ","   // useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS
+                 << tt2_heuristic_name(true) << "," << tt2_heuristic_name(!g_tt2_rsadapt)   // heuristicLowRS,heuristicHighRS
          << "\n";
 
     return 0;
@@ -1501,6 +1519,10 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     precomputeDownstream();
     precomputeUpstream();
     precomputeResourceInfo();
+    // Instance Resource Strength for RS-adaptive gating (RCPSP_CBS_RSADAPT). RS cycles
+    // {0.2,0.5,0.7,1.0} every group in PSPLIB j30/j60/j90 (verified against j90 solve
+    // rates 2026-08-23). Group-derived so it needs no datasheet metadata.
+    { static const double RSL[4] = {0.2, 0.5, 0.7, 1.0}; g_instance_rs = RSL[((group - 1) % 4 + 4) % 4]; }
 
     // ── RCPSP_WARMSTART: one-time inflated-resource solve to seed branch order ──
     // Runs before the UB reset/seed below so it can freely reset the incumbent and
@@ -1517,6 +1539,8 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     g_cbs_subset_better = g_cbs_subset_solves = g_cbs_subset_expands_total = 0;   // subset LB telemetry, per-instance
     g_cbs_subset_capped = g_cbs_subset_maxexpands = g_cbs_subset_cache_hits = 0;
     g_cbs_subset_cache.clear();   // subset LB result cache is per-instance
+    g_cbs_mincut_better = g_cbs_mincut_calls = 0;   // min-cut LB telemetry, per-instance
+    g_cbs_singleres_better = g_cbs_singleres_calls = 0;   // single-resource LB telemetry, per-instance
     g_imp2_fires = 0; g_imp2_max_depth = 0;   // Improvement 2 (RCPSP_MDA_RECURSE) telemetry, per-instance
     g_orderswap_cand = 0;                     // order-swap measurement (RCPSP_ORDERSWAP), per-instance
     g_nmd_overshoot_events = 0; g_nmd_lost_siblings = 0;   // NMD overshoot diagnostic, per-instance
@@ -1882,7 +1906,18 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << g_imp2_fires << ","                 // imp2Fires (internal-MDA splits this instance)
          << g_imp2_max_depth << ","             // imp2MaxDepth (deepest internal split this instance)
          << setting.use_nmd_precedence << ","   // useNmdPrecedence (Improvement 1)
-         << g_orderswap_cand << "\n";           // orderSwapCand (rule-7 candidates DR5 kept; measurement)
+         << g_orderswap_cand << ","             // orderSwapCand (rule-7 candidates DR5 kept; measurement)
+         << (g_cbs_mincut ? 1 : 0) << ","       // useCbsMinCut (RCPSP_CBS_MINCUT)
+         << g_cbs_mincut_better << ","          // minCutBetter (times the min-cut floor beat h)
+         << g_cbs_mincut_calls << ","           // minCutCalls (times the gated bound was computed)
+         << (g_cbs_rsadapt ? 1 : 0) << ","      // useRSAdapt (RCPSP_CBS_RSADAPT)
+         << g_cbs_rs_threshold << ","           // rsThreshold
+         << g_instance_rs << ","                // instanceRS (this instance's Resource Strength)
+         << (g_cbs_singleres ? 1 : 0) << ","    // useSingleRes (RCPSP_CBS_SINGLERES)
+         << g_cbs_singleres_better << ","       // singleResBetter
+         << g_cbs_singleres_calls << ","        // singleResCalls
+         << cbs_heuristic_name(true) << ","                 // heuristicLowRS (RS<=thresh regime)
+         << cbs_heuristic_name(!g_cbs_rsadapt) << "\n";     // heuristicHighRS (RS>thresh; == low if RSADAPT off)
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
         // exit(0); // disabled: log wrong answers and continue benchmark
@@ -2180,7 +2215,7 @@ void runCrashDiagnostic() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS"
          << std::endl;
     file.close();
 
@@ -2239,7 +2274,7 @@ void runWrongAnswerDebug() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS"
          << std::endl;
     file.close();
 
@@ -2284,7 +2319,7 @@ void runNonMinimalDelayTest() {
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS\n"; }
 
     setting.use_non_minimal_delay = true;
 
@@ -2514,7 +2549,7 @@ void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam)
     { std::ofstream h(f);
       h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
         << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
+        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS\n"; }
     for (int g = startG; g <= endG; g++) {
         std::cout << "\n=== sweep cfg" << cfg << " group " << g << " exam " << exam << " ===\n";
         solveRCPSP_CBS(g, exam, f, ptype);
@@ -2683,11 +2718,20 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_TT2_DR5"))   g_tt2_dr5       = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_BATCH")) g_tt2_batch     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_DR4"))   g_tt2_dr4       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_IMMSEL")) g_tt2_immsel   = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_BATCH_CAP")) g_tt2_batch_cap = std::atol(e);
     if (const char* e = std::getenv("RCPSP_TT2_SYM"))   g_tt2_sym       = std::atoi(e);
     if (const char* e = std::getenv("RCPSP_TT2_SYMTB"))  g_tt2_sym_tiebreak = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_GENDESC")) g_tt2_gendesc   = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_THETA"))  g_tt2_theta     = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_RSADAPT"))         g_tt2_rsadapt         = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_RS_THRESH"))       g_tt2_rs_threshold    = std::atof(e);
+    if (const char* e = std::getenv("RCPSP_TT2_SINGLERES"))         g_tt2_singleres         = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_SINGLERES_EXPAND"))  g_tt2_singleres_expand  = std::atol(e);
+    if (const char* e = std::getenv("RCPSP_TT2_SINGLERES_MAXSIZE")) g_tt2_singleres_maxsize = std::atoi(e);
+    if (g_tt2_rsadapt)   std::cout << "TT2 RS-adaptive gating ON: expensive bounds fire only if RS<=" << g_tt2_rs_threshold << "\n";
+    if (g_tt2_singleres) std::cout << "TT2 bound: single-resource max LB ON (expand=" << g_tt2_singleres_expand
+                                   << " maxsize=" << g_tt2_singleres_maxsize << ")\n";
     if (const char* e = std::getenv("RCPSP_WARMSTART"))          g_use_warmstart     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_WARMSTART_K"))        g_warmstart_k       = std::atof(e);
     if (const char* e = std::getenv("RCPSP_WARMSTART_BUDGET_S")) g_warmstart_budget_s = std::atoll(e);
@@ -2724,16 +2768,33 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_CBS_SUBSET_SIZE"))    g_cbs_subset_size   = std::atoi(e);
     if (const char* e = std::getenv("RCPSP_CBS_SUBSET_MAXDEPTH")) g_cbs_subset_maxdepth = std::atoi(e);
     if (const char* e = std::getenv("RCPSP_CBS_SUBSET_GAP"))     g_cbs_subset_gap    = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_MINCUT"))          g_cbs_mincut          = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_MINCUT_MAXDEPTH")) g_cbs_mincut_maxdepth = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_MINCUT_GAP"))      g_cbs_mincut_gap      = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_RSADAPT"))         g_cbs_rsadapt         = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_RS_THRESH"))       g_cbs_rs_threshold    = std::atof(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SINGLERES"))          g_cbs_singleres          = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_SINGLERES_MAXDEPTH")) g_cbs_singleres_maxdepth = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SINGLERES_GAP"))      g_cbs_singleres_gap      = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SINGLERES_EXPAND"))   g_cbs_singleres_expand   = std::atol(e);
+    if (const char* e = std::getenv("RCPSP_CBS_SINGLERES_MAXSIZE"))  g_cbs_singleres_maxsize  = std::atoi(e);
     if (g_tt2_sym)    std::cout << "TT2 symmetry breaking: ON (canonical increasing-id, non-batch)\n";
     if (g_tt2_dr5)    std::cout << "TT2 dominance: DR5 cutset ON\n";
     if (g_tt2_theta)  std::cout << "TT2 bound: Theta-tree ECT resource bound ON (max-combined)\n";
     if (g_tt2_batch)  std::cout << "TT2 expansion: BATCH (feasible subsets, cap=" << g_tt2_batch_cap << ")\n";
     if (g_tt2_dr4)    std::cout << "TT2 DR4 delayed-start dominance: ON\n";
+    if (g_tt2_immsel) std::cout << "TT2 immediate selection (branching reduction): ON\n";
     if (g_use_lazy)   std::cout << "Search: LazyAStarCBS (deferred-heuristic A*)\n";
     if (g_cbs_theta)  std::cout << "CBS bound: Theta-tree ECT resource floor ON (max with HCBS)\n";
     if (g_cbs_subset) std::cout << "CBS bound: conflict-subset look-ahead LB ON (expand=" << g_cbs_subset_expand
                                 << " hops=" << g_cbs_subset_hops << " size=" << g_cbs_subset_size
                                 << " | gate: depth<=" << g_cbs_subset_maxdepth << " OR gap<=" << g_cbs_subset_gap << ")\n";
+    if (g_cbs_mincut) std::cout << "CBS bound: min-cut resource LB ON (max-flow energetic; gate: depth<="
+                                << g_cbs_mincut_maxdepth << " OR gap<=" << g_cbs_mincut_gap << ")\n";
+    if (g_cbs_rsadapt) std::cout << "CBS RS-adaptive gating ON: expensive bounds fire only if RS<=" << g_cbs_rs_threshold << "\n";
+    if (g_cbs_singleres) std::cout << "CBS bound: single-resource max LB ON (per-resource capped sub-solve; gate: depth<="
+                                << g_cbs_singleres_maxdepth << " expand=" << g_cbs_singleres_expand
+                                << " maxsize=" << g_cbs_singleres_maxsize << ")\n";
     if (g_dom_skyline) std::cout << "Dominance: SKYLINE bucket compaction ON\n";
     if (g_use_ub || g_use_leftshift || g_use_bidir || g_use_hybrid)
         std::cout << "Experiments: UB=" << g_use_ub << " LEFTSHIFT=" << g_use_leftshift
@@ -2762,7 +2823,7 @@ int main(int argc, char* argv[]) {
             std::string f = getNextFilename("new_results", "output_dumpdom_", ".csv");
             { std::ofstream h(f); h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
                  << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
+                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS\n"; }
             solveRCPSP_CBS(std::atoi(argv[3]), std::atoi(argv[4]), f, argv[2]);
             std::cout << "prune pairs -> " << g_dom_dump_path << std::endl;
         } else if (arg1 == "verifydom") {
@@ -2793,7 +2854,7 @@ int main(int argc, char* argv[]) {
             if (argc < 5) { std::cerr << "Usage: tt2one <type> <group> <exam>\n"; return 1; }
             std::string ptype = argv[2];
             std::string f = getNextFilename("new_results", "output_tt2one_" + ptype + "_", ".csv");
-            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned\n"; }
+            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS\n"; }
             solveRCPSP_TT2(std::atoi(argv[3]), std::atoi(argv[4]), f, ptype);
         } else if (arg1 == "cbsinitf") {
             // cbsinitf <type> — root-state f (earliest-start makespan + HCBS h) for
@@ -2948,7 +3009,7 @@ void runSingleConfig(const std::string& problemType, int configNum) {
     if (!file.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS"
          << std::endl;
     file.close();
 
@@ -2995,7 +3056,7 @@ void runSingleConfigResume(const std::string& problemType, int configNum,
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS\n"; }
 
     std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType
               << " | resume from (" << startGroup << "," << startExam << ") ===" << std::endl;
@@ -3019,7 +3080,7 @@ void runBenchmark(const std::string& problemType) {
     }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS"
          << std::endl;
     file.close();
 
@@ -3084,7 +3145,7 @@ void runBenchmarkTT2(const std::string& problemType) {
         return;
     }
     // Header matches what solveRCPSP_TT2 writes per row
-    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned"
+    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS"
          << std::endl;
     file.close();
 

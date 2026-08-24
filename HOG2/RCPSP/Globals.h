@@ -208,6 +208,8 @@ inline bool  g_use_lazy      = false;  // RCPSP_LAZY=1: use LazyAStarCBS (deferr
 inline bool  g_tt2_dr5       = false;  // RCPSP_TT2_DR5=1: cutset (DR5) dominance for the TT2/TTPNR search (DominanceTT2.h), checked+inserted in RCPSP_TT2::GetSuccessors. Includes always-on skyline thinning.
 inline bool  g_tt2_dr4       = false;  // RCPSP_TT2_DR4=1: DR4 delayed-start dominance in TT2 successor generation (Liu et al. rule 4, ported from new_herustic). Prune firing l at delta d_l if some other available transition i has d_i < d_l and d_i + p_i <= d_l (sound left-shift; min-delta child never pruned).
 inline long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
+inline bool  g_tt2_immsel    = false;  // RCPSP_TT2_IMMSEL=1: immediate selection (D&H / Hartmann Remark 1) — when every available transition is fireable NOW and one of them cannot be co-processed with any not-yet-started activity, it is forced: emit only that single firing (a left-shift; no optimum lost). Branching reduction, not a state prune.
+inline long  g_tt2_immsel_fired = 0;   // nodes where immediate selection collapsed the branching (per instance)
 inline bool  g_tt2_batch     = false;  // RCPSP_TT2_BATCH=1: batch/macro expansion — each successor starts a resource-feasible SUBSET of the now-available activities in one edge (plus the time-advancing single firings), trading depth for branching. Superset of single-firing (singletons included) => still optimal.
 inline long  g_tt2_batch_cap = 200000; // RCPSP_TT2_BATCH_CAP: safety cap on feasible subsets enumerated per node (singletons emitted first, so a cap never breaks optimality). Guards the 2^|A0| worst case on resource-abundant instances.
 
@@ -275,6 +277,72 @@ inline long  g_cbs_subset_maxexpands   = 0; // max expansions any single sub-sol
 inline std::unordered_map<uint64_t, long> g_cbs_subset_cache;
 inline long  g_cbs_subset_cache_hits   = 0; // sub-solves served from the cache
 
+// ── Pragmatic min-cut resource LB (RCPSP_CBS_MINCUT=1), CBS only ─────────────
+// Admissible ABSOLUTE makespan LB from a preemptive, window-based energetic
+// relaxation solved as a max-flow (min-cut) per resource; binary-searched to the
+// smallest feasible makespan (MinCutCBS.h). Floored into HCost like Θ/subset. It
+// dominates the workload bound and is a different relaxation than the Θ-tree bound,
+// so max(Θ, min-cut, …) can be tighter than either. Costly (K max-flows per binary-
+// search step), so it is GATED to shallow-or-near-incumbent nodes like the subset
+// bound. Independently admissible => bound-only, never changes which goals are legal.
+inline bool g_cbs_mincut         = false; // RCPSP_CBS_MINCUT=1: enable the min-cut resource LB in CBS
+inline long g_cbs_mincut_better  = 0;     // times the min-cut floor strictly beat the existing h (per instance; CSV: minCutBetter)
+inline long g_cbs_mincut_calls   = 0;     // times the (gated) bound was actually computed (per instance; CSV: minCutCalls)
+inline int  g_cbs_mincut_maxdepth = 6;    // RCPSP_CBS_MINCUT_MAXDEPTH: run if depth (added_precedences) <= this
+inline int  g_cbs_mincut_gap      = 8;    // RCPSP_CBS_MINCUT_GAP: run if 0 < UB-(g+h) <= this (needs RCPSP_UB)
+
+// ── RS-adaptive gating (RCPSP_CBS_RSADAPT=1), CBS ────────────────────────────
+// Instance Resource Strength (RS) predicts difficulty: on j90, RS>=0.7 is already
+// ~100% solved by the cheap heuristic, RS=0.5 is the swing zone, RS=0.2 the hard
+// frontier (measured 2026-08-23). So the expensive resource bounds (min-cut,
+// single-resource, Θ) only earn their cost at low RS. When RSADAPT is on, those
+// bounds fire ONLY if the instance RS <= g_cbs_rs_threshold; at high RS the search
+// runs on the cheap HCBS (=max(CP,RC)-style) heuristic alone. Pure gating — never
+// changes admissibility, only where cost is spent.
+inline bool   g_cbs_rsadapt      = true;  // RCPSP_CBS_RSADAPT (default ON): gate expensive bounds by RS, so a
+                                          // resource bound (single-res/min-cut/Θ) is a LOW-RS heuristic by
+                                          // default. Set RCPSP_CBS_RSADAPT=0 to run a bound at ALL RS.
+inline double g_cbs_rs_threshold = 0.6;   // RCPSP_CBS_RS_THRESH: expensive bounds fire only if RS <= this
+inline double g_instance_rs      = -1.0;  // current instance Resource Strength (set at load; <0 = unknown => gate open)
+// True when the (costly) resource bounds are allowed to run at this instance.
+inline bool cbs_rs_allows_expensive() {
+  return !g_cbs_rsadapt || g_instance_rs < 0.0 || g_instance_rs <= g_cbs_rs_threshold + 1e-9;
+}
+
+// ── Single-resource relaxation max LB (RCPSP_CBS_SINGLERES=1), CBS ────────────
+// For each resource k, relax all OTHER resources to unlimited and (approximately,
+// via the capped subset mini-solver) solve the resulting single-resource RCPSP on
+// the residual with releases = start_times; take the max over k. Admissible (each
+// is a relaxation => optimum <= real optimum; the expand cap only loosens it), and
+// STRONGER than Θ/energetic (which are themselves lower bounds OF the single-
+// resource problem). Costly (R capped searches per node) => gated by depth and by
+// RS (above). Floored into HCost like Θ/min-cut.
+inline bool g_cbs_singleres          = false; // RCPSP_CBS_SINGLERES=1: enable the single-resource max LB
+inline long g_cbs_singleres_better   = 0;     // times it strictly beat h (per instance; CSV: singleResBetter)
+inline long g_cbs_singleres_calls    = 0;     // times the (gated) bound was computed (per instance; CSV: singleResCalls)
+inline int  g_cbs_singleres_maxdepth = 3;     // RCPSP_CBS_SINGLERES_MAXDEPTH: run if depth <= this (shallow arm)
+inline int  g_cbs_singleres_gap      = 8;     // RCPSP_CBS_SINGLERES_GAP: also run if 0 < UB-(g+h) <= this (near-incumbent arm; needs RCPSP_UB)
+inline long g_cbs_singleres_expand   = 800;   // RCPSP_CBS_SINGLERES_EXPAND: per single-resource sub-solve expand cap
+inline int  g_cbs_singleres_maxsize  = 45;    // RCPSP_CBS_SINGLERES_MAXSIZE: skip if residual larger than this (cost guard)
+
+// ── TT2 port of RS-adaptive gating + single-resource LB ──────────────────────
+// Same idea as the CBS versions above, on the relative-time TT2/TTPNR search.
+// RS gate wraps TT2's expensive bounds (Θ, single-res); releases for the single-
+// resource residual come from the abs_start shadow (started => abs_start, unstarted
+// => g, both admissible lower bounds on the true start). TT2 has no UB pruning, so
+// the single-res gate is RS + residual-size only (no near-incumbent arm).
+inline bool   g_tt2_rsadapt      = true;  // RCPSP_TT2_RSADAPT (default ON): single-res/Θ are LOW-RS heuristics
+                                          // by default. Set RCPSP_TT2_RSADAPT=0 to run a bound at ALL RS.
+inline double g_tt2_rs_threshold = 0.6;   // RCPSP_TT2_RS_THRESH
+inline bool tt2_rs_allows_expensive() {
+  return !g_tt2_rsadapt || g_instance_rs < 0.0 || g_instance_rs <= g_tt2_rs_threshold + 1e-9;
+}
+inline bool g_tt2_singleres         = false; // RCPSP_TT2_SINGLERES=1: single-resource max LB on TT2
+inline long g_tt2_singleres_better  = 0;     // times it beat base h (per instance; CSV: tt2SingleResBetter)
+inline long g_tt2_singleres_calls   = 0;     // times computed (per instance; CSV: tt2SingleResCalls)
+inline long g_tt2_singleres_expand  = 800;   // RCPSP_TT2_SINGLERES_EXPAND: per sub-solve expand cap
+inline int  g_tt2_singleres_maxsize = 45;    // RCPSP_TT2_SINGLERES_MAXSIZE: skip if residual larger than this
+
 // ── Inflated-resource warm start (RCPSP_WARMSTART=1), CBS only ───────────────
 // ONE-TIME, before the real search: solve the SAME instance with every resource
 // capacity inflated by k (RCPSP_WARMSTART_K, ceil). The inflated problem is a
@@ -295,6 +363,33 @@ inline double g_warmstart_rs      = 0.0;   // RCPSP_WARMSTART_RS: if >0, inflate
 inline bool  g_warmstart_ok       = false; // set true iff the inflated solve produced a usable schedule this instance
 inline short g_warmstart_infl_mk  = -1;    // makespan of the inflated relaxation this instance (-1 if warm start didn't engage) — diagnostic for judging k / RS quality
 inline std::vector<short> g_warmstart_start; // per-activity (0-based) start time from the inflated schedule; the branch-ordering key. Empty/!ok => no reorder.
+
+// ── Effective-heuristic NAMES per RS regime (for self-documenting CSVs) ───────
+// With RS-adaptive gating the heuristic differs by RS: the gated resource bounds
+// (Θ/min-cut/single-res on CBS; Θ/single-res on TT2) apply only at low RS. These
+// build a readable NAME of what runs in each regime, written to the CSV columns
+// heuristicLowRS / heuristicHighRS. No commas in names (CSV-safe). When RSADAPT is
+// off, low and high names are identical (the gated bounds run everywhere). Declared
+// here (after all flags) so every g_* symbol referenced is already visible.
+inline std::string cbs_heuristic_name(bool includeGated) {
+  std::string s = "HCBS";                       // base cardinal-conflict heuristic
+  if (g_use_warmstart) s += "+WS";              // warmstart LB floor (never RS-gated)
+  if (includeGated) {
+    if (g_cbs_theta)     s += "+Theta";
+    if (g_cbs_mincut)    s += "+MinCut";
+    if (g_cbs_singleres) s += "+SingleRes";
+    if (g_cbs_subset)    s += "+Subset";
+  }
+  return s;
+}
+inline std::string tt2_heuristic_name(bool includeGated) {
+  std::string s = "max(CP/RC)";                 // TT2 base bound
+  if (includeGated) {
+    if (g_tt2_theta)     s += "+Theta";
+    if (g_tt2_singleres) s += "+SingleRes";
+  }
+  return s;
+}
 
 // ── Set-together MDA delay (RCPSP_SETDELAY=1), MDA path only ─────────────────
 // When delaying a minimal alternative D, instead of the textbook minimal delay

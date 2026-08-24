@@ -12,6 +12,7 @@
 #include "DominanceCBS.h"   // DR5 cutset dominance (guarded by setting.use_dr5)
 #include "DominanceTT2.h"   // DR5 cutset dominance for TT2/TTPNR (guarded by g_tt2_dr5)
 #include "ThetaTree.h"      // Vilím Θ-tree ECT resource bound (RCPSP_TT2_THETA / RCPSP_CBS_THETA)
+#include "MinCutCBS.h"      // Pragmatic min-cut / energetic resource LB (RCPSP_CBS_MINCUT)
 #include "SubsetSolver.h"   // mini subset-RCPSP LB solver for the CBS conflict look-ahead (RCPSP_CBS_SUBSET)
 #include <queue>
 
@@ -1463,7 +1464,46 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
-  if (!g_tt2_batch) {
+  // Immediate selection (RCPSP_TT2_IMMSEL=1; D&H / Hartmann Remark 1). When EVERY
+  // available transition is fireable now (delta==0) and one of them, `a`, cannot be
+  // co-processed with ANY not-yet-started activity (their combined demand exceeds a
+  // resource on some resource), then `a` runs solo in every completion — starting it
+  // now is a left-shift, so it is FORCED: emit only a's firing and skip the other
+  // branches. Sound (no optimum lost) and a pure branching reduction (does not drop
+  // stored states, so it can't starve DR5 the way order-swap did).
+  bool immFired = false;
+  if (g_tt2_immsel && !g_tt2_batch) {
+    bool allNow = true;
+    for (const auto& pr : avilableTransitionIndices) if (pr.second != 0) { allNow = false; break; }
+    if (allNow) {
+      const int J = (int)petri.Transitions.size();
+      for (const auto& pr : avilableTransitionIndices) {
+        const short aid = pr.first;
+        bool forced = true;
+        for (int b = 1; b <= J && b < 128; b++) {
+          if (b == aid || nodeID.finishedActivitiys[b]) continue;
+          bool bActive = false;
+          for (const auto& at : nodeID.activeTransitionIndices) if (at.first == b) { bActive = true; break; }
+          if (bActive) continue;                    // already running; a already co-fits with actives
+          bool canCo = true;
+          for (int r = 0; r < (int)resource_info.size(); r++) {
+            const auto& dl = resource_info[r].demand_lookup;
+            auto da = dl.find((short)(aid - 1)); auto db = dl.find((short)(b - 1));
+            short va = (da != dl.end()) ? da->second : 0;
+            short vb = (db != dl.end()) ? db->second : 0;
+            if (va + vb > resource_info[r].capacity) { canCo = false; break; }
+          }
+          if (canCo) { forced = false; break; }     // a can share with some future b => not forced
+        }
+        if (forced) {
+          neighbors.emplace_back(RCPSPState_TT2(nodeID, aid, 0, 1));
+          ++g_tt2_immsel_fired; immFired = true; break;
+        }
+      }
+    }
+  }
+
+  if (!immFired && !g_tt2_batch) {
     // ── Serial single-firing (default): one successor per available transition ──
     //
     // Symmetry breaking (RCPSP_TT2_SYM=1): inside a "zero-delay run" the firing ORDER
@@ -1521,7 +1561,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
       }
       neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
     }
-  } else {
+  } else if (!immFired) {
     // ── Batch / macro expansion (RCPSP_TT2_BATCH=1) ──────────────────────────
     // A successor is either (a) a single time-advancing firing (τ>0), or (b) a
     // resource-feasible NON-EMPTY subset of the now-available (τ=0) activities,
@@ -1532,9 +1572,20 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     // feasibility (combined demand ≤ τ=0 resource tokens) bounds the enumeration.
     std::vector<short> A0;
     for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
-      if (Timedelta > 0)
+      if (Timedelta > 0) {
+        // DR4 delayed-start dominance also applies to the batch's time-advancing
+        // firings (RCPSP_TT2_DR4=1) — same rule as the single-firing path, so DR4
+        // stacks with batch.
+        if (g_tt2_dr4) {
+          bool dr4dom = false;
+          for (const auto& [oId, oDelta] : avilableTransitionIndices) {
+            if (oId == transId || oDelta >= Timedelta) continue;
+            if (oDelta + RCPSPex.activities[oId - 1].duration <= Timedelta) { dr4dom = true; break; }
+          }
+          if (dr4dom) { ++g_tt2_dr4_pruned; continue; }
+        }
         neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta, 1)); // (a)
-      else
+      } else
         A0.push_back(transId);
     }
 
@@ -1626,6 +1677,60 @@ inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2
 
 
 
+// Single-resource relaxation max LB for a TT2 node (RCPSP_TT2_SINGLERES=1). Same
+// relaxation as the CBS version: per resource k (others unlimited), solve the residual
+// with the capped subset mini-solver, max over k. Residual = the UNFINISHED activities
+// (tempUnfinished, 1-based taskIDs). Absolute release for each: abs_start[taskID] if it
+// has started (shadow, always >= 0 once fired), else g (current time) — both admissible
+// lower bounds on the true start. Returns an ABSOLUTE makespan LB (0 if residual empty
+// or larger than the cost guard). abs_start is EXCLUDED from ==/hash, so this reads it
+// as a pure annotation and never affects relative-time state merging.
+inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished,
+                                      const std::array<short, 128>& abs_start, short g) {
+  const int R = (int)resource_info.size();
+  if (R == 0) return 0.0;
+  std::vector<int> resid;                 // 0-based activity indices
+  for (short taskID : tempUnfinished) {
+    const int a0 = (int)taskID - 1;
+    if (a0 < 0 || a0 >= (int)RCPSPex.activities.size()) continue;
+    if (RCPSPex.activities[a0].duration <= 0) continue;   // skip source/sink
+    resid.push_back(a0);
+  }
+  const int m = (int)resid.size();
+  if (m == 0 || m > g_tt2_singleres_maxsize) return 0.0;
+
+  std::vector<int> local((int)RCPSPex.activities.size(), -1);
+  for (int k = 0; k < m; ++k) local[resid[k]] = k;
+
+  SubsetInstance P;
+  P.n = m; P.R = R;
+  P.dur.resize(m); P.release.resize(m);
+  P.demand.assign(m, std::vector<int>(R, 0));
+  P.preds.assign(m, {});
+  P.cap.assign(R, 0);
+  for (int k = 0; k < m; ++k) {
+    const int a0 = resid[k];
+    const short tid = (short)(a0 + 1);
+    P.dur[k]     = RCPSPex.activities[a0].duration;
+    P.release[k] = (tid < 128 && abs_start[tid] >= 0) ? (int)abs_start[tid] : (int)g;
+    for (int r = 0; r < R; ++r) {
+      auto it = RCPSPex.activities[a0].resource_demands.find(resource_info[r].resource_nume);
+      if (it != RCPSPex.activities[a0].resource_demands.end()) P.demand[k][r] = it->second;
+    }
+    for (short p0 : upstream[a0]) if (p0 >= 0 && p0 < (int)local.size() && local[p0] >= 0) P.preds[k].push_back(local[p0]);
+  }
+
+  const int BIG = 1 << 24;
+  double best = 0.0;
+  for (int k = 0; k < R; ++k) {
+    if (resource_info[k].capacity <= 0) continue;
+    for (int r = 0; r < R; ++r) P.cap[r] = (r == k ? (int)resource_info[k].capacity : BIG);
+    SubsetResult rr = subsetRcpspLB(P, g_tt2_singleres_expand);
+    if ((double)rr.lb > best) best = (double)rr.lb;
+  }
+  return best;
+}
+
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
   if (state1.isDeltaZero){//||!state1.isCriticalInActive) {
     state1.h = state1.predessesor_h;
@@ -1647,9 +1752,20 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
 
   // Θ-tree resource-completion bound (RCPSP_TT2_THETA=1): a third admissible LB,
   // combined via max(). Independently admissible, so it only ever tightens h.
-  if (g_tt2_theta) {
+  if (g_tt2_theta && tt2_rs_allows_expensive()) {
     double theta = thetaResourceBound_TT2(tempUnfinished, state1.activeTransitionIndices);
     if (theta > base) { base = theta; ++g_tt2_theta_better; }
+  }
+
+  // Single-resource relaxation max LB (RCPSP_TT2_SINGLERES=1): admissible absolute
+  // makespan LB, max'd into base like Θ. Costly (R capped sub-solves), so gated by RS
+  // and by residual size (TT2 has no UB pruning, so no near-incumbent arm).
+  if (g_tt2_singleres && tt2_rs_allows_expensive()
+      && (int)tempUnfinished.size() <= g_tt2_singleres_maxsize + 2) {
+    ++g_tt2_singleres_calls;
+    const double srLB  = singleResourceMaxLB_TT2(tempUnfinished, state1.abs_start, state1.g);
+    const double srRem = srLB - (double)state1.g;
+    if (srRem > base) { base = srRem; ++g_tt2_singleres_better; }
   }
 
   state1.h = base;
@@ -2631,6 +2747,62 @@ inline double subsetConflictLB_CBS(const RCPSPState_CBS<N>& s) {
   return (double)rr.lb;
 }
 
+// Single-resource relaxation max LB for a CBS node (RCPSP_CBS_SINGLERES=1). For each
+// resource k, keep only resource k (others unlimited) and solve the residual single-
+// resource RCPSP approximately with the capped subset mini-solver (releases =
+// start_times); take the max over k. Admissible ABSOLUTE makespan LB (each is a
+// relaxation; the expand cap only loosens it). Residual = movable activities (finish >
+// cut), so frozen prefix enters only via successor releases. Returns 0 if the residual
+// is empty or too large (cost guard).
+template<short N>
+inline double singleResourceMaxLB_CBS(const RCPSPState_CBS<N>& s) {
+  const int nAll = (int)RCPSPex.activities.size();
+  const int R    = (int)resource_info.size();
+  if (nAll == 0 || R == 0) return 0.0;
+  const int cut = (s.t_first >= 0 ? s.t_first : 0);
+
+  // residual = real activities (dur>0) still movable (finish > cut).
+  std::vector<int> resid; std::vector<char> inSub(nAll, 0);
+  for (int i = 0; i < nAll; ++i) {
+    if (i == 0 || i == g_sink_id) continue;
+    const int d = (int)RCPSPex.activities[i].duration;
+    if (d <= 0) continue;
+    if ((int)s.start_times[i] + d > cut) { inSub[i] = 1; resid.push_back(i); }
+  }
+  const int m = (int)resid.size();
+  if (m == 0 || m > g_cbs_singleres_maxsize) return 0.0;
+
+  std::vector<int> local(nAll, -1);
+  for (int k = 0; k < m; ++k) local[resid[k]] = k;
+
+  SubsetInstance P;
+  P.n = m; P.R = R;
+  P.dur.resize(m); P.release.resize(m);
+  P.demand.assign(m, std::vector<int>(R, 0));
+  P.preds.assign(m, {});
+  P.cap.assign(R, 0);
+  for (int k = 0; k < m; ++k) {
+    const int gi = resid[k];
+    P.dur[k]     = RCPSPex.activities[gi].duration;
+    P.release[k] = s.start_times[gi];
+    for (int r = 0; r < R; ++r) {
+      auto it = resource_info[r].demand_lookup.find((short)gi);
+      if (it != resource_info[r].demand_lookup.end()) P.demand[k][r] = it->second;
+    }
+    for (short pgi : upstream[gi]) if (pgi >= 0 && pgi < nAll && inSub[pgi]) P.preds[k].push_back(local[pgi]);
+  }
+
+  const int BIG = 1 << 24;  // effectively unlimited capacity
+  double best = 0.0;
+  for (int k = 0; k < R; ++k) {
+    if (resource_info[k].capacity <= 0) continue;
+    for (int r = 0; r < R; ++r) P.cap[r] = (r == k ? (int)resource_info[k].capacity : BIG);
+    SubsetResult rr = subsetRcpspLB(P, g_cbs_singleres_expand);
+    if ((double)rr.lb > best) best = (double)rr.lb;
+  }
+  return best;
+}
+
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   // std::cout << "H: ";
@@ -2653,7 +2825,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   // floored into h exactly like the warm-start bound above (h := max(h, LB - g),
   // g = current makespan = start_times[g_sink_id]). Independently admissible, so it
   // only tightens h; at a goal LB <= makespan, so the floor is <= 0 (no effect).
-  if (g_cbs_theta) {
+  if (g_cbs_theta && cbs_rs_allows_expensive()) {
     const double theta_rem = thetaMakespanBound_CBS(state1) - (double)state1.start_times[g_sink_id];
     if (theta_rem > h) { h = theta_rem; ++g_cbs_theta_better; }
   }
@@ -2661,7 +2833,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   // tightens h (same floor slot as Θ/warmstart). The sub-solve is costly, so it runs
   // only where it can pay off — SHALLOW (strong early bound) OR NEAR-INCUMBENT (a
   // tightening here can cross UB and prune). See the gate params in Globals.h.
-  if (g_cbs_subset) {
+  if (g_cbs_subset && cbs_rs_allows_expensive()) {
     const int g_now = state1.start_times[g_sink_id];
     const int f_cur = g_now + (int)h;                         // current best f (post warmstart/Θ)
     const bool shallow = (int)state1.added_precedences.size() <= g_cbs_subset_maxdepth;
@@ -2671,6 +2843,38 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
     if (shallow || nearUB) {
       const double sub_rem = subsetConflictLB_CBS(state1) - (double)g_now;
       if (sub_rem > h) { h = sub_rem; ++g_cbs_subset_better; }
+    }
+  }
+  // Min-cut resource bound (RCPSP_CBS_MINCUT=1): admissible ABSOLUTE makespan LB,
+  // floored into h like Θ/subset. Costly (max-flow), so gated to SHALLOW OR
+  // NEAR-INCUMBENT nodes — same two complementary regimes as the subset bound.
+  if (g_cbs_mincut && cbs_rs_allows_expensive()) {
+    const int g_now = state1.start_times[g_sink_id];
+    const int f_cur = g_now + (int)h;
+    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_mincut_maxdepth;
+    const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
+                         && f_cur < g_incumbent
+                         && (g_incumbent - f_cur) <= g_cbs_mincut_gap;
+    if (shallow || nearUB) {
+      ++g_cbs_mincut_calls;
+      const double mc_rem = minCutMakespanBound_CBS(state1) - (double)g_now;
+      if (mc_rem > h) { h = mc_rem; ++g_cbs_mincut_better; }
+    }
+  }
+  // Single-resource relaxation max LB (RCPSP_CBS_SINGLERES=1): admissible absolute
+  // makespan LB, floored into h. Costly (R capped sub-solves), so gated by depth and
+  // by RS (expensive bounds only at low RS, where coverage is actually lost).
+  if (g_cbs_singleres && cbs_rs_allows_expensive()) {
+    const int g_now = state1.start_times[g_sink_id];
+    const int f_cur = g_now + (int)h;
+    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_singleres_maxdepth;
+    const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
+                         && f_cur < g_incumbent
+                         && (g_incumbent - f_cur) <= g_cbs_singleres_gap;
+    if (shallow || nearUB) {
+      ++g_cbs_singleres_calls;
+      const double sr_rem = singleResourceMaxLB_CBS(state1) - (double)g_now;
+      if (sr_rem > h) { h = sr_rem; ++g_cbs_singleres_better; }
     }
   }
   state1.h_cache  = h;

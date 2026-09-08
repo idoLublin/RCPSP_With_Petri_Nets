@@ -191,15 +191,12 @@ public:
     short g = 0;
     short g_pre = 0;
     mutable short h = 0;
+    mutable bool  hKnown = false;   // annotation (NOT in ==/hash): h already supplied (fused successor cache) => HCost returns it
     short predessesor_h = 0;
     short lastTransitionId=0; // transition fired to create THIS state (most-recent, not final)
     mutable short nextCritical;
-    // SHADOW absolute start time per activity (1-based id -> start clock; -1 = not
-    // started). Set when an activity fires (= g at that point). Used ONLY by the
-    // order-swap dominance check (RCPSP_ORDERSWAP). DELIBERATELY excluded from
-    // operator== AND GetStateHash — two states with the same marking but different
-    // start histories must still merge; abs_start is an annotation, never identity.
-    std::array<short, 128> abs_start;
+    // (abs_start removed: was a 256-byte shadow schedule; single-res releases are now derived
+    //  from the marking, order-swap is stubbed, and the final schedule comes from the path.)
     RCPSPState_TT2();
     RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime,bool Direction =1);
     bool order_swap_prunable() const;   // Hartmann 1998 Rule 7, TT2 form (uses abs_start)

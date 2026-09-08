@@ -5566,7 +5566,6 @@ RCPSPState_TT2::RCPSPState_TT2() {
     activity_nodes.resize(num_activities);
 
     finishedActivitiys.reset();
-    abs_start.fill(-1);   // shadow start times (order-swap only); root: nothing started
     int activity_counter = 0;
     for (int i = 0; i < petri.places.size(); ++i) {
         const auto& place = petri.places[i];
@@ -5638,6 +5637,8 @@ RCPSPState_TT2::RCPSPState_TT2() {
 // (only prune a definitely-feasible swap); the finished=>correct gate validates the
 // remaining reachability assumption for the forward firing search.
 bool RCPSPState_TT2::order_swap_prunable() const {
+    return false;   // stubbed: measurement-only (g_orderswap, no pruning) and read abs_start; removed with abs_start
+#if 0
     const int J = (int)RCPSPex.activities.size();        // consistent with the arrays we index
     if ((int)downstream.size() < J || (int)RCPSPex.dependencies.size() < J ||
         (int)RCPSPex.backword_dependencies.size() < J) return false;  // defensive
@@ -5714,6 +5715,7 @@ bool RCPSPState_TT2::order_swap_prunable() const {
         }
     }
     return false;
+#endif
 }
 
 RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime,bool Direction) {
@@ -5726,8 +5728,9 @@ if (direction) {
     lastTransitionId=transitionId;
     // SHADOW start times (order-swap only; NOT hashed / not in ==): the fired
     // activity starts at the new clock g.
-    abs_start = prev.abs_start;
-    abs_start[transitionId] = g;
+    // abs_start removed: it was a 256-byte-per-state shadow schedule used only by the single-res
+    // releases (now marking-derived) and order-swap (stubbed). Sub-solve / bounds derive start
+    // times from the marking (running: g - (dur - remaining)); the final schedule from the path.
     // 2. Copy State
     finishedActivitiys = prev.finishedActivitiys;
     resource_nodes = prev.resource_nodes;

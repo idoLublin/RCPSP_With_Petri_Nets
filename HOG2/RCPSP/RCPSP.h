@@ -8,12 +8,14 @@
 #include "RCPSPState.h"
 #include "../utils//GLUtil.h"
 #include <functional>
+#include <deque>
 #include "petriclasses.h"
 #include "DominanceCBS.h"   // DR5 cutset dominance (guarded by setting.use_dr5)
 #include "DominanceTT2.h"   // DR5 cutset dominance for TT2/TTPNR (guarded by g_tt2_dr5)
 #include "ThetaTree.h"      // Vilím Θ-tree ECT resource bound (RCPSP_TT2_THETA / RCPSP_CBS_THETA)
 #include "MinCutCBS.h"      // Pragmatic min-cut / energetic resource LB (RCPSP_CBS_MINCUT)
 #include "SubsetSolver.h"   // mini subset-RCPSP LB solver for the CBS conflict look-ahead (RCPSP_CBS_SUBSET)
+#include "LazyAStarCBS.h"   // deferred-heuristic A* — used inside the nested CBS sub-solve too (RCPSP_LAZY)
 #include <queue>
 
 // h returned for a DR5-dominated node: large enough that A* never expands it,
@@ -1437,9 +1439,60 @@ public:
 inline RCPSP_TT2::RCPSP_TT2() {
 }
 
+// ── ONE unified sub-solve cache (RCPSP_SUBSOLVE_H_CACHE / _SUCC_CACHE) ────────
+// A single per-(state,k) entry holds BOTH the h value (one number) AND the successor
+// RECIPE — the (transId,delta) firings that rebuild each child from the parent (tens of
+// bytes, NOT stored child states, so it's ~as light as the h-cache alone). Keyed by
+// mix(GetStateHash,k); a 2nd hash over abs_start verifies against collisions (a wrong h or
+// child list would be unsound). Per-instance cleared. h-cache and successor-cache share
+// this one map; each is independently flag-gated. Recipes are release-independent (TT2
+// firing is Markovian on the marking); the release-dependent DR5/order-swap run fresh after.
+struct TT2SubCacheEntry {
+  uint64_t verify   = 0;
+  double   h        = -1.0;   // -1 => h not cached yet
+  bool     expanded = false;  // true => successor data valid (children known)
+  // FLAT successor encoding (no nested vectors): `firings` holds, per child, [count, tid,delta, tid,delta, ...]
+  // concatenated; `childH` holds each child's fused h (float). One contiguous allocation each.
+  std::vector<short> firings;
+  std::vector<float> childH;
+};
+inline std::unordered_map<uint64_t, TT2SubCacheEntry>& get_tt2_cache(){ static std::unordered_map<uint64_t, TT2SubCacheEntry> c; return c; }
+inline uint64_t tt2CacheKey(uint64_t stateHash){ return stateHash*1099511628211ull + (uint64_t)(unsigned)g_subsolve_k; }
+inline uint64_t tt2VerifyHash(const RCPSPState_TT2& s){         // 2nd hash over the FULL IDENTITY (the operator== fields;
+  uint64_t h = 1469598103934665603ULL;                          // GetStateHash is lossy (omits activity/resource nodes), so
+  auto mix = [&](int v){ h = (h ^ (uint64_t)(uint32_t)v) * 1099511628211ULL; };  // the verify must cover them. No abs_start (annotation, not identity).
+  for (int i = 1; i <= (int)petri.Transitions.size(); ++i) mix((int)s.finishedActivitiys[i]);
+  for (const auto& a : s.activeTransitionIndices) { mix(a.first); mix(a.second); }
+  for (const auto& a : s.activity_nodes)          { mix(a.first); mix(a.second); }
+  for (int r = 0; r < 4; ++r) for (const auto& a : s.resource_nodes[r]) { mix(a.first); mix(a.second); }
+  return h;
+}
 
 inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
   //auto startS1 = std::chrono::high_resolution_clock::now();
+  // ── Successor-cache fast path (sub-solve only): rebuild children from cached firing
+  // recipes (skips the available-scan + batch enumeration). Recipes are tiny; no states stored.
+  bool _succHit = false; const bool _recON = g_subsolve_succ_cache && g_in_subsolve;
+  uint64_t _ckey = 0, _cver = 0;
+  std::vector<std::vector<std::pair<short,short>>> _recs;     // recorded during generation on a miss
+  if (_recON) {
+    _ckey = tt2CacheKey(GetStateHash(nodeID)); _cver = tt2VerifyHash(nodeID);
+    ++g_succ_probes;
+    auto it = get_tt2_cache().find(_ckey);
+    if (it != get_tt2_cache().end() && it->second.verify == _cver && it->second.expanded) {
+      const auto& F = it->second.firings; const auto& CH = it->second.childH;
+      size_t p = 0, ci = 0;                                    // walk the flat buffer: [count, tid,delta, ...] per child
+      while (p < F.size()) {
+        const int cnt = F[p++];
+        RCPSPState_TT2 cur = nodeID;
+        for (int f = 0; f < cnt; ++f) { const short t = F[p++], d = F[p++]; cur = RCPSPState_TT2(cur, t, d, 1); }
+        if (ci < CH.size()) { cur.h = (short)CH[ci]; cur.hKnown = true; }   // fused h: HCost returns it, no lookup/recompute
+        neighbors.push_back(std::move(cur)); ++ci;
+      }
+      _succHit = true; ++g_succ_hits;
+    }
+  }
+  if (!_succHit) {
   std::vector<short> tempUnstarted;
 
   // Optimization: Reserve max possible size to prevent re-allocations
@@ -1472,7 +1525,32 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // branches. Sound (no optimum lost) and a pure branching reduction (does not drop
   // stored states, so it can't starve DR5 the way order-swap did).
   bool immFired = false;
-  if (g_tt2_immsel && !g_tt2_batch) {
+
+  // Free-activity immediate firing (RCPSP_TT2_FREEFIRE=1; SUB-SOLVE ONLY). In the
+  // single-resource-k relaxation an activity with ZERO demand on the constrained
+  // resource k can never conflict; if it is fireable NOW (delta==0 = all predecessors
+  // finished, i.e. "0-duration tokens") starting it is a pure left-shift (it finishes
+  // sooner and only relaxes precedence for its successors). So it is FORCED: emit that
+  // one firing and skip every other branch => free activities collapse into a
+  // deterministic prefix chain instead of multiplying the branching. Sound; gated to
+  // g_in_subsolve (in the MAIN search an activity is free only if 0 on ALL resources).
+  // The delta==0 readiness guard is REQUIRED: a free activity whose token still carries
+  // remaining time (a predecessor is still running) must wait, not be forced.
+  if (g_tt2_freefire && g_in_subsolve &&
+      g_subsolve_k >= 0 && g_subsolve_k < (int)resource_info.size()) {
+    const auto& dlk = resource_info[g_subsolve_k].demand_lookup;
+    for (const auto& pr : avilableTransitionIndices) {
+      if (pr.second != 0) continue;                          // token not ready now (correctness guard)
+      auto it = dlk.find((short)(pr.first - 1));
+      if (it != dlk.end() && it->second != 0) continue;      // demands resource k => not free
+      neighbors.emplace_back(RCPSPState_TT2(nodeID, pr.first, 0, 1));  // force-fire this free, ready activity
+      if (_recON) _recs.push_back({{(short)pr.first,(short)0}});
+      ++g_tt2_freefire_fired; immFired = true;               // single forced successor: skip immsel/serial/batch
+      break;
+    }
+  }
+
+  if (!immFired && g_tt2_immsel && !g_tt2_batch) {
     bool allNow = true;
     for (const auto& pr : avilableTransitionIndices) if (pr.second != 0) { allNow = false; break; }
     if (allNow) {
@@ -1497,6 +1575,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
         }
         if (forced) {
           neighbors.emplace_back(RCPSPState_TT2(nodeID, aid, 0, 1));
+          if (_recON) _recs.push_back({{(short)aid,(short)0}});
           ++g_tt2_immsel_fired; immFired = true; break;
         }
       }
@@ -1560,6 +1639,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
         if (dr4dominated) { ++g_tt2_dr4_pruned; continue; }
       }
       neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
+      if (_recON) _recs.push_back({{transId,Timedelta}});
     }
   } else if (!immFired) {
     // ── Batch / macro expansion (RCPSP_TT2_BATCH=1) ──────────────────────────
@@ -1585,6 +1665,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
           if (dr4dom) { ++g_tt2_dr4_pruned; continue; }
         }
         neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta, 1)); // (a)
+        if (_recON) _recs.push_back({{transId,Timedelta}});
       } else
         A0.push_back(transId);
     }
@@ -1606,8 +1687,8 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     // has the subset-so-far started; `used` is its cumulative τ=0 demand. Emitting
     // one successor per recursion node yields every feasible subset exactly once.
     long emitted = 0;
-    std::function<void(int, const RCPSPState_TT2&, std::array<int,4>)> rec =
-      [&](int start, const RCPSPState_TT2& cur, std::array<int,4> used) {
+    std::function<void(int, const RCPSPState_TT2&, std::array<int,4>, const std::vector<std::pair<short,short>>&)> rec =
+      [&](int start, const RCPSPState_TT2& cur, std::array<int,4> used, const std::vector<std::pair<short,short>>& path) {
         for (int i = start; i < (int)A0.size(); i++) {
           if (emitted >= g_tt2_batch_cap) return;   // safety valve (singletons already emitted)
           std::array<int,4> d; demandOf(A0[i], d);
@@ -1616,13 +1697,33 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
           if (!feasible) continue;
           RCPSPState_TT2 child(cur, A0[i], 0, 1);    // fire A0[i] now (τ=0)
           std::array<int,4> nu = { used[0]+d[0], used[1]+d[1], used[2]+d[2], used[3]+d[3] };
+          std::vector<std::pair<short,short>> npath = path; npath.push_back({(short)A0[i], (short)0});
           neighbors.push_back(child);
+          if (_recON) _recs.push_back(npath);
           ++emitted;
-          rec(i + 1, child, nu);                     // extend the subset
+          rec(i + 1, child, nu, npath);              // extend the subset
         }
       };
-    rec(0, nodeID, {0,0,0,0});
+    rec(0, nodeID, {0,0,0,0}, {});
   }
+  // successor-cache store: the firing RECIPES (post-DR4/symmetry, BEFORE stored-state dominance).
+  // Tiny (a few (transId,delta) pairs per child), no states. Reset the entry if a different
+  // state (collision) currently owns this key, so a stale h can't be mis-attributed.
+  if (_recON) {
+    auto& e = get_tt2_cache()[_ckey];
+    if (e.verify != _cver) { e = TT2SubCacheEntry{}; e.verify = _cver; }
+    e.expanded = true;
+    e.firings.clear(); e.childH.clear(); e.childH.reserve(neighbors.size());
+    for (size_t i = 0; i < neighbors.size(); ++i) {          // flat-encode firings + fuse each child's h
+      const int cnt = (i < _recs.size()) ? (int)_recs[i].size() : 0;
+      e.firings.push_back((short)cnt);
+      if (i < _recs.size()) for (const auto& pr : _recs[i]) { e.firings.push_back(pr.first); e.firings.push_back(pr.second); }
+      const double hv = HCost(neighbors[i], neighbors[i]);   // A* would compute this anyway; do it now + fuse it
+      neighbors[i].h = (short)hv; neighbors[i].hKnown = true; // so A* returns it here too (no recompute post-filter)
+      e.childH.push_back((float)hv);
+    }
+  }
+  }  // end if(!_succHit): generation is skipped entirely on a cache hit
 
   // Order-swap dominance (RCPSP_ORDERSWAP=1), TT2 form: drop the non-canonical
   // order of a frozen back-to-back pair whose swap is feasible (Hartmann 1998
@@ -1650,6 +1751,21 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
         if (w != i) neighbors[w] = std::move(neighbors[i]);
         w++;
       }
+    }
+    neighbors.resize(w);
+  }
+  // Upper-bound (incumbent) pruning (RCPSP_TT2_UB=1): drop any child whose f = g + h
+  // STRICTLY exceeds the SGS-seeded feasible incumbent, before it is enqueued. Sound
+  // with TT2's consistent heuristic (optimal-path f <= opt <= incumbent, so '>' never
+  // cuts the optimum). Runs last, on the already-dominance-filtered set, so h is only
+  // computed for children that survived DR5/DR4/symmetry. Minimizes peak memory.
+  if (g_tt2_ub && g_incumbent < std::numeric_limits<short>::max()) {
+    size_t w = 0;
+    for (size_t i = 0; i < neighbors.size(); i++) {
+      const double f = (double)neighbors[i].g + HCost(neighbors[i], neighbors[i]);
+      if (f > (double)g_incumbent) { ++g_ub_pruned; continue; }
+      if (w != i) neighbors[w] = std::move(neighbors[i]);
+      w++;
     }
     neighbors.resize(w);
   }
@@ -1685,8 +1801,13 @@ inline bool RCPSP_TT2::GoalTest(const RCPSPState_TT2 &node, const RCPSPState_TT2
 // lower bounds on the true start. Returns an ABSOLUTE makespan LB (0 if residual empty
 // or larger than the cost guard). abs_start is EXCLUDED from ==/hash, so this reads it
 // as a pure annotation and never affects relative-time state merging.
-inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished,
-                                      const std::array<short, 128>& abs_start, short g) {
+// Forward decls: the RS-inflation helpers are defined later (near the CBS hier-RS
+// block) but hierRSBound_TT2 below needs them.
+inline void precomputeRSInflation();
+inline int  inflatedCapForRS(int r, double targetRS);
+
+inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished, short g,
+                                      const std::vector<std::pair<short,short>>& activeTransitionIndices) {
   const int R = (int)resource_info.size();
   if (R == 0) return 0.0;
   std::vector<int> resid;                 // 0-based activity indices
@@ -1697,7 +1818,7 @@ inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished,
     resid.push_back(a0);
   }
   const int m = (int)resid.size();
-  if (m == 0 || m > g_tt2_singleres_maxsize) return 0.0;
+  if (m == 0) return 0.0;   // no residual-size cap: a stronger bound should run on the HARD (large) nodes too
 
   std::vector<int> local((int)RCPSPex.activities.size(), -1);
   for (int k = 0; k < m; ++k) local[resid[k]] = k;
@@ -1711,8 +1832,12 @@ inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished,
   for (int k = 0; k < m; ++k) {
     const int a0 = resid[k];
     const short tid = (short)(a0 + 1);
-    P.dur[k]     = RCPSPex.activities[a0].duration;
-    P.release[k] = (tid < 128 && abs_start[tid] >= 0) ? (int)abs_start[tid] : (int)g;
+    {
+      short rem = -1;
+      for (const auto& at : activeTransitionIndices) if (at.first == tid) { rem = at.second; break; }
+      P.dur[k]     = (rem >= 0) ? (int)rem : RCPSPex.activities[a0].duration;   // running: remaining; unstarted: full
+      P.release[k] = 0;                                                          // relative time (now); result += g below
+    }
     for (int r = 0; r < R; ++r) {
       auto it = RCPSPex.activities[a0].resource_demands.find(resource_info[r].resource_nume);
       if (it != RCPSPex.activities[a0].resource_demands.end()) P.demand[k][r] = it->second;
@@ -1728,15 +1853,156 @@ inline double singleResourceMaxLB_TT2(const std::vector<short>& tempUnfinished,
     SubsetResult rr = subsetRcpspLB(P, g_tt2_singleres_expand);
     if ((double)rr.lb > best) best = (double)rr.lb;
   }
+  return best + (double)g;   // relative solve returns remaining; +g to match the absolute-LB contract (caller subtracts g)
+}
+
+// Hierarchical RS-relaxation LB for a TT2 node (RCPSP_TT2_HIERRS=1). Same residual as
+// the single-resource bound above (unfinished activities, releases = abs_start or g),
+// but instead of the per-resource all-but-one relaxation it keeps ALL resources at the
+// NEXT-RS-up inflated capacity and solves once. Admissible ABSOLUTE makespan LB (more
+// capacity => optimum <= real residual optimum). Memoized by (residual set + releases)
+// in the shared hier-RS cache. Returns 0 if inert (no higher RS level / empty residual).
+inline double hierRSBound_TT2(const std::vector<short>& tempUnfinished, short g) {
+  return 0.0;   // hierRS shelved (net-negative) and used abs_start; neutralized during abs_start removal (re-port relative if revived)
+#if 0
+  if (g_cbs_hierrs_target < 0.0) return 0.0;              // no higher RS level => inert
+  const int R = (int)resource_info.size();
+  if (R == 0) return 0.0;
+  std::vector<int> resid;                                 // 0-based activity indices
+  for (short taskID : tempUnfinished) {
+    const int a0 = (int)taskID - 1;
+    if (a0 < 0 || a0 >= (int)RCPSPex.activities.size()) continue;
+    if (RCPSPex.activities[a0].duration <= 0) continue;   // skip source/sink
+    resid.push_back(a0);
+  }
+  const int m = (int)resid.size();
+  if (m == 0) return 0.0;
+
+  // Cache lookup: (residual set + releases) determines this relaxation (target RS is
+  // instance-constant). Releases use abs_start (started) or g, matching the build below.
+  uint64_t sig = 1469598103934665603ULL;
+  { std::vector<int> sorted = resid;
+    std::sort(sorted.begin(), sorted.end());
+    for (int a0 : sorted) {
+      const short tid = (short)(a0 + 1);
+      const int rel = (tid < 128 && abs_start[tid] >= 0) ? (int)abs_start[tid] : (int)g;
+      sig ^= (uint64_t)(unsigned)a0;               sig *= 1099511628211ULL;
+      sig ^= (uint64_t)(unsigned)rel;              sig *= 1099511628211ULL;
+    } }
+  {
+    auto cit = g_cbs_hierrs_cache.find(sig);
+    if (cit != g_cbs_hierrs_cache.end()) { ++g_cbs_hierrs_cache_hits; return cit->second; }
+  }
+
+  std::vector<int> local((int)RCPSPex.activities.size(), -1);
+  for (int k = 0; k < m; ++k) local[resid[k]] = k;
+
+  SubsetInstance P;
+  P.n = m; P.R = R;
+  P.dur.resize(m); P.release.resize(m);
+  P.demand.assign(m, std::vector<int>(R, 0));
+  P.preds.assign(m, {});
+  P.cap.assign(R, 0);
+  for (int r = 0; r < R; ++r) P.cap[r] = inflatedCapForRS(r, g_cbs_hierrs_target);
+  for (int k = 0; k < m; ++k) {
+    const int a0 = resid[k];
+    const short tid = (short)(a0 + 1);
+    P.dur[k]     = RCPSPex.activities[a0].duration;
+    P.release[k] = (tid < 128 && abs_start[tid] >= 0) ? (int)abs_start[tid] : (int)g;
+    for (int r = 0; r < R; ++r) {
+      auto it = RCPSPex.activities[a0].resource_demands.find(resource_info[r].resource_nume);
+      if (it != RCPSPex.activities[a0].resource_demands.end()) P.demand[k][r] = it->second;
+    }
+    for (short p0 : upstream[a0]) if (p0 >= 0 && p0 < (int)local.size() && local[p0] >= 0) P.preds[k].push_back(local[p0]);
+  }
+
+  SubsetResult rr = subsetRcpspLB(P, g_tt2_hierrs_expand);
+  const double lb = (double)rr.lb;
+  if (std::getenv("RCPSP_HIERRS_DEBUG")) {
+    std::cerr << "[hierRS] m=" << m << " R=" << R << " caps=";
+    for (int r = 0; r < R; ++r) std::cerr << P.cap[r] << "(real" << resource_info[r].capacity << ") ";
+    long demSum = 0; for (int k = 0; k < m; ++k) for (int r = 0; r < R; ++r) demSum += P.demand[k][r];
+    std::cerr << "demSum=" << demSum << " lb=" << lb << " capped=" << rr.capped << " expands=" << rr.expands << "\n";
+  }
+  g_cbs_hierrs_cache[sig] = lb;
+  return lb;
+#endif
+}
+
+// Defined below (after the CBS env): solve TT2's single-resource sub-problem with the
+// nested CBS engine by translating the TT2 node (abs_start + g) to a CBS state.
+double singleResViaCBS_TT2dispatch(const RCPSPState_TT2& node);
+
+// TT2-native sub-solver: solve the single-resource relaxation from the TT2 node's OWN
+// marking with a nested TT2 (Petri+batch) A*. Isolated by move-swapping the global TT2
+// dominance table and disabling resource bounds inside (recursion guard). goal g = makespan.
+inline double singleResViaTT2(const RCPSPState_TT2& node) {
+  const int R = (int)resource_info.size();
+  if (R == 0) return 0.0;
+  const short BIG = 30000;   // "unlimited" that fits in short (capacity is short)
+  const bool sSr = g_tt2_singleres, sTh = g_tt2_theta;
+  const long long sTo = astar_timeout_seconds;           // per-k we point the nested deadline at the parent's
+  std::vector<short> savedCap(R); for (int r=0;r<R;++r) savedCap[r]=resource_info[r].capacity;
+  auto savedDom = std::move(get_tt2_dominance_table());
+  g_tt2_singleres = false; g_tt2_theta = false;          // recursion guard: nested HCost = plain max(CP,RC)
+  const bool sIn = g_in_subsolve; g_in_subsolve = true;   // shadow-cache estimator scopes here
+  double best = 0.0;
+  for (int k=0;k<R;++k) {
+    if (savedCap[k] <= 0) continue;
+    long long rem = heur_time_left_s();
+    if (rem <= 0) break;                                 // parent 300s budget spent — stop tightening
+    astar_timeout_seconds = rem;                         // nested GetPath arms to the parent's absolute deadline
+    g_subsolve_k = k;                                    // shadow-cache key component (successors/h* depend on k)
+    for (int r=0;r<R;++r) resource_info[r].capacity = (r==k ? savedCap[k] : BIG);
+    get_tt2_dominance_table().clear();
+    RCPSP_TT2 env;
+    RCPSPState_TT2 first = node;                          // start from the node's marking
+    first.isDeltaZero = false; first.h = 0; first.predessesor_h = 0;   // force fresh heuristic
+    RCPSPState_TT2 last = first;
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+    astar.GetPath(&env, first, last, path);
+    if (!path.empty()) { double mk = (double)path.back().g; if (mk > best) best = mk;
+      if (g_h_cache && g_h_cache_solved && g_in_subsolve) {   // back-fill EXACT h*=M-g for each proven-path node (this k)
+        const double M = mk;
+        for (const auto& nd : path) {
+          const uint64_t hk = tt2CacheKey(env.GetStateHash(nd)), hv = tt2VerifyHash(nd);
+          auto& e = get_tt2_cache()[hk];
+          if (e.verify != hv) { e = TT2SubCacheEntry{}; e.verify = hv; }
+          e.h = M - (double)nd.g;
+        }
+      }
+    }
+    else ++g_singleres_viacbs_capped;                    // no goal (timeout) — unsolvable sub-problem signal
+    // (shadow-cache states are inserted at generation time in HCost — covers open + solved)
+  }
+  for (int r=0;r<R;++r) resource_info[r].capacity = savedCap[r];
+  get_tt2_dominance_table() = std::move(savedDom);
+  g_tt2_singleres = sSr; g_tt2_theta = sTh; astar_timeout_seconds = sTo; g_in_subsolve = sIn;
   return best;
 }
 
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
+  if (state1.hKnown) return state1.h;   // fused successor cache supplied h at reconstruction => no lookup, no recompute
   if (state1.isDeltaZero){//||!state1.isCriticalInActive) {
     state1.h = state1.predessesor_h;
     return state1.h;
   }
+  if (g_shadow_cache && g_in_subsolve) { ++g_shadow_probes; uint64_t _sk = GetStateHash(state1)*1099511628211ull + (uint64_t)(unsigned)g_subsolve_k; if (!g_shadow_set.insert(_sk).second) ++g_shadow_hits; }  // cache-hit estimate: every GENERATED sub-state (open+solved), keyed by (state,k), hit if seen in a prior sub-solve
 
+  // h-cache fast path (sub-solve only): h=max(CP,RC) is deterministic per (state,k), so a
+  // hit returns it without recomputing getForwardHcost/getforwardResource. 128-bit key
+  // (hash + abs_start verify) guards collisions => a wrong h can't slip in (would be inadmissible).
+  uint64_t _hck = 0, _hcv = 0;
+  if (g_h_cache && g_in_subsolve) {
+    _hck = tt2CacheKey(GetStateHash(state1));
+    _hcv = tt2VerifyHash(state1);
+    ++g_hcache_probes;
+    auto it = get_tt2_cache().find(_hck);
+    if (it != get_tt2_cache().end() && it->second.verify == _hcv && it->second.h >= 0.0) { ++g_hcache_hits; state1.h = it->second.h; return state1.h; }
+  }
+
+  auto _hct0 = std::chrono::steady_clock::now();
   std::vector<short> tempUnfinished;
   tempUnfinished.reserve(petri.Transitions.size());
 
@@ -1760,15 +2026,34 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
   // Single-resource relaxation max LB (RCPSP_TT2_SINGLERES=1): admissible absolute
   // makespan LB, max'd into base like Θ. Costly (R capped sub-solves), so gated by RS
   // and by residual size (TT2 has no UB pruning, so no near-incumbent arm).
-  if (g_tt2_singleres && tt2_rs_allows_expensive()
-      && (int)tempUnfinished.size() <= g_tt2_singleres_maxsize + 2) {
+  if (g_tt2_singleres && tt2_rs_allows_expensive()) {
     ++g_tt2_singleres_calls;
-    const double srLB  = singleResourceMaxLB_TT2(tempUnfinished, state1.abs_start, state1.g);
+    auto _srt0 = std::chrono::steady_clock::now();
+    const double srLB  = (g_subsolver == 2) ? singleResViaTT2(state1)
+                         : (g_subsolver == 1) ? singleResViaCBS_TT2dispatch(state1)
+                         : singleResourceMaxLB_TT2(tempUnfinished, state1.g, state1.activeTransitionIndices);
+    g_singleres_time_sec += secs_since(_srt0);
     const double srRem = srLB - (double)state1.g;
     if (srRem > base) { base = srRem; ++g_tt2_singleres_better; }
   }
 
+  // Hierarchical RS-relaxation LB (RCPSP_TT2_HIERRS=1): solve the residual at the next
+  // RS level up (all caps inflated) and max its optimum into base. Admissible; on TT2
+  // (consistent, no UB) the payoff is a TIGHTER h => fewer expansions. RS-gated.
+  if (g_tt2_hierrs && g_cbs_hierrs_target >= 0.0 && tt2_rs_allows_expensive()) {
+    ++g_tt2_hierrs_calls;
+    auto _hrt0 = std::chrono::steady_clock::now();
+    const double hrLB = hierRSBound_TT2(tempUnfinished, state1.g);
+    g_hierrs_time_sec += secs_since(_hrt0);
+    const double hrRem = hrLB - (double)state1.g;
+    if (hrRem > base) { base = hrRem; ++g_tt2_hierrs_better; }
+  }
+
+  g_heur_time_sec += secs_since(_hct0);
+  ++g_heur_calls;
+  if (g_root_h < 0.0) g_root_h = base;
   state1.h = base;
+  if (g_h_cache && !g_h_cache_solved && g_in_subsolve) { auto& e = get_tt2_cache()[_hck]; if (e.verify != _hcv) { e = TT2SubCacheEntry{}; e.verify = _hcv; } e.h = base; }   // all-nodes mode: memoize every state's heuristic h (solved mode back-fills exact h* instead)
   return state1.h;
 }
 inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
@@ -2770,7 +3055,7 @@ inline double singleResourceMaxLB_CBS(const RCPSPState_CBS<N>& s) {
     if ((int)s.start_times[i] + d > cut) { inSub[i] = 1; resid.push_back(i); }
   }
   const int m = (int)resid.size();
-  if (m == 0 || m > g_cbs_singleres_maxsize) return 0.0;
+  if (m == 0) return 0.0;   // no residual-size cap: a stronger bound should run on the HARD (large) nodes too
 
   std::vector<int> local(nAll, -1);
   for (int k = 0; k < m; ++k) local[resid[k]] = k;
@@ -2793,14 +3078,248 @@ inline double singleResourceMaxLB_CBS(const RCPSPState_CBS<N>& s) {
   }
 
   const int BIG = 1 << 24;  // effectively unlimited capacity
+  // UB pruning: pass the main incumbent so each sub-solve can stop as soon as it proves
+  // its optimum >= incumbent (that alone floors h enough to prune the caller node).
+  const long ub = (g_use_ub && g_incumbent < std::numeric_limits<short>::max())
+                  ? (long)g_incumbent : LONG_MAX;
   double best = 0.0;
   for (int k = 0; k < R; ++k) {
     if (resource_info[k].capacity <= 0) continue;
     for (int r = 0; r < R; ++r) P.cap[r] = (r == k ? (int)resource_info[k].capacity : BIG);
-    SubsetResult rr = subsetRcpspLB(P, g_cbs_singleres_expand);
+    SubsetResult rr = subsetRcpspLB(P, g_cbs_singleres_expand, ub);
     if ((double)rr.lb > best) best = (double)rr.lb;
+    if (best >= (double)ub) break;   // enough to prune the caller — skip remaining resources
   }
   return best;
+}
+
+// Single-resource bound via the FULL nested CBS engine (RCPSP_CBS_SINGLERES_VIACBS=1).
+// For each resource k, relax the OTHER resources to unlimited and solve the residual
+// from THIS node (releases = node's start_times) to the goal with the real CBS A* using
+// the current best config (DR5/MDA/SetDelay/...). Same admissible bound as the extension
+// mini-solver, but computed with our strongest engine. Nested solve is isolated by
+// move-swapping the dominance + MDA caches and disabling all resource bounds (recursion
+// guard). Returns the max over k (an ABSOLUTE makespan LB). Heavy per node — gate hard.
+template<short N>
+inline double singleResViaCBS_CBS(const RCPSPState_CBS<N>& node) {
+  const int R = (int)resource_info.size();
+  if (R == 0) return 0.0;
+  const short BIG = 30000;   // "unlimited" that FITS in short (capacity is short!); >> any concurrent demand
+  // ---- save + isolate ----
+  const bool sSr=g_cbs_singleres, sMc=g_cbs_mincut, sTh=g_cbs_theta, sSub=g_cbs_subset, sUb=g_use_ub, sLazy=g_use_lazy;
+  const short savedInc = g_incumbent;
+  const long long sTo = astar_timeout_seconds;   // restored below; per-k we point the nested deadline at the parent's
+  std::vector<short> savedCap(R); for (int r=0;r<R;++r) savedCap[r]=resource_info[r].capacity;
+  auto savedDom = std::move(get_cbs_dominance_table<N>());
+  auto savedMda = std::move(get_mda_cache<N>());
+  g_cbs_singleres=g_cbs_mincut=g_cbs_theta=g_cbs_subset=false;  // recursion guard: nested HCost = plain HCBS(+resource k)
+  g_use_ub=false; g_incumbent=std::numeric_limits<short>::max();   // keep g_use_lazy: lazy still cuts node-generation cost even at h=0
+  const bool sHcbsOff = g_hcbs_off_now; g_hcbs_off_now = g_subsolve_hcbs_off;  // consistent-h mode for the nested solve (cache-safe)
+  const bool sIn = g_in_subsolve; g_in_subsolve = true;   // shadow-cache estimator scopes here
+
+  double best = 0.0;
+  for (int k=0;k<R;++k) {
+    if (savedCap[k] <= 0) continue;
+    long long rem = heur_time_left_s();
+    if (rem <= 0) break;                          // parent 300s budget spent — stop tightening (keep best so far)
+    astar_timeout_seconds = rem;                  // nested GetPath arms to now()+rem = the parent's absolute deadline
+    g_subsolve_k = k;                             // shadow-cache key component (successors/h* depend on k)
+    for (int r=0;r<R;++r) resource_info[r].capacity = (r==k ? savedCap[k] : BIG);
+    get_cbs_dominance_table<N>().clear();
+    get_mda_cache<N>().clear();
+    RCPSP_CBS<N> env;
+    RCPSPState_CBS<N> first = node;                 // seed releases = node's committed schedule
+    first.h_cached = false; first.t_first = -1;
+    first.first_conflict_pool.clear(); first.rvs_activities_pool.clear(); first.conflict_solutions.clear();
+    first.compute_h_and_RVS();                      // recompute conflict for the single-resource-k problem
+                                                    // (sets found_conflict correctly; GoalTest = !found_conflict)
+    RCPSPState_CBS<N> last = first; last.start_times[g_sink_id] = 0;
+    std::vector<RCPSPState_CBS<N>> path;
+    if (g_use_lazy) { LazyAStarCBS<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> lz; lz.GetPath(&env, first, last, path); }
+    else            { TemplateAStar<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> as; as.GetPath(&env, first, last, path); }
+    if (!path.empty()) { double mk = (double)path.back().start_times[g_sink_id]; if (mk > best) best = mk; }
+    else ++g_singleres_viacbs_capped;               // no goal (timeout) — unsolvable sub-problem signal
+    // (shadow-cache states are inserted at generation time in HCost — covers open + solved)
+  }
+  // ---- restore ----
+  for (int r=0;r<R;++r) resource_info[r].capacity = savedCap[r];
+  get_cbs_dominance_table<N>() = std::move(savedDom);
+  get_mda_cache<N>() = std::move(savedMda);
+  g_incumbent=savedInc; g_cbs_singleres=sSr; g_cbs_mincut=sMc; g_cbs_theta=sTh; g_cbs_subset=sSub; g_use_ub=sUb; g_use_lazy=sLazy;
+  g_hcbs_off_now = sHcbsOff; astar_timeout_seconds = sTo; g_in_subsolve = sIn;
+  return best;
+}
+
+// Build a CBS<N> state from a TT2 node's committed schedule (releases = abs_start for
+// started activities, else current time g), forward-propagate precedence, then solve the
+// single-resource relaxation with the nested CBS engine. Admissible: releases are lower
+// bounds on the true starts (started => exact; unstarted => >= g).
+template<short N>
+inline double singleResViaCBS_fromTT2(const RCPSPState_TT2& node) {
+  const int n = (int)RCPSPex.activities.size();
+  const int g = (int)node.g;
+  RCPSPState_CBS<N> cbs;                               // precedence-earliest baseline
+  for (int i = 0; i < n && i < N; ++i) {
+    const short tid = (short)(i + 1);
+    int rel;
+    if (node.finishedActivitiys.test(tid)) rel = 0;   // done: excluded from the residual; propagate anchors it
+    else {
+      short rem = -1;                                 // running? => remaining time in the active list
+      for (const auto& at : node.activeTransitionIndices) if (at.first == tid) { rem = at.second; break; }
+      rel = (rem >= 0) ? (g - (int)RCPSPex.activities[i].duration + (int)rem)   // running: actual start = g - elapsed = abs_start
+                       : g;                                                      // unstarted: >= g
+    }
+    if (rel > (int)cbs.start_times[i]) cbs.start_times[i] = (short)rel;
+  }
+  for (int it = 0; it < n; ++it) {                    // forward-propagate precedence to fixpoint
+    bool changed = false;
+    for (int i = 0; i < n && i < N; ++i) {
+      int s = (int)cbs.start_times[i];
+      for (short p1 : RCPSPex.backword_dependencies[i]) {
+        const int p = (int)p1 - 1;
+        if (p >= 0 && p < n && p < N) s = std::max(s, (int)cbs.start_times[p] + (int)RCPSPex.activities[p].duration);
+      }
+      if (s > (int)cbs.start_times[i]) { cbs.start_times[i] = (short)s; changed = true; }
+    }
+    if (!changed) break;
+  }
+  return singleResViaCBS_CBS<N>(cbs);
+}
+
+inline double singleResViaCBS_TT2dispatch(const RCPSPState_TT2& node) {
+  const int n = (int)RCPSPex.activities.size();
+  if      (n <= 32)  return singleResViaCBS_fromTT2<32>(node);
+  else if (n <= 62)  return singleResViaCBS_fromTT2<62>(node);
+  else if (n <= 92)  return singleResViaCBS_fromTT2<92>(node);
+  else               return singleResViaCBS_fromTT2<122>(node);
+}
+
+// ── Hierarchical RS-relaxation LB (RCPSP_CBS_HIERRS=1) ────────────────────────
+// Precompute the per-resource RS-inflation profile (Kmin/Kmax) ONCE per instance,
+// and resolve this instance's target RS = the next level above g_instance_rs on the
+// {0.2,0.5,0.7,1.0} ladder. Same Kmin/Kmax as the warm-start block (Kmin = max single-
+// activity demand, Kmax = peak of the CPM earliest-start, resource-blind demand
+// profile). Call from Driver after g_instance_rs is set and resource_info is built.
+inline void precomputeRSInflation() {
+  const int n = (int)RCPSPex.activities.size();
+  const int R = (int)resource_info.size();
+  g_rs_Kmin.assign(R, 0);
+  g_rs_Kmax.assign(R, 0);
+  // resolve target RS. Default = next level up on the ladder (nothing above 1.0 =>
+  // inert). Override (RCPSP_HIERRS_TARGET>0) sets it directly: e.g. target = the
+  // instance's OWN RS keeps caps at ~real level (clamped >= real), so the residual
+  // solve captures precedence+resource INTERACTION and can exceed base max(CP,RC) —
+  // the next-ladder-up default inflates caps too far and collapses to CP <= base.
+  g_cbs_hierrs_target = -1.0;
+  if (g_hierrs_target_override > 0.0) {
+    g_cbs_hierrs_target = g_hierrs_target_override;
+  } else {
+    static const double LADDER[4] = {0.2, 0.5, 0.7, 1.0};
+    for (int i = 0; i < 4; ++i)
+      if (g_instance_rs >= 0.0 && LADDER[i] > g_instance_rs + 1e-9) { g_cbs_hierrs_target = LADDER[i]; break; }
+  }
+  if (R == 0 || n == 0) return;
+  std::vector<int> es(n, 0);                               // CPM earliest starts (precedence only)
+  for (int i = 0; i < n; ++i)
+    for (int dep : RCPSPex.backword_dependencies[i]) {
+      int d = dep - 1;
+      if (d >= 0 && d < n) es[i] = std::max(es[i], es[d] + (int)RCPSPex.activities[d].duration);
+    }
+  int horizon = 0;
+  for (int i = 0; i < n; ++i) horizon = std::max(horizon, es[i] + (int)RCPSPex.activities[i].duration);
+  for (int r = 0; r < R; ++r) {
+    const auto& ri = resource_info[r];
+    int Kmin = 0;
+    for (short d : ri.demands) Kmin = std::max(Kmin, (int)d);   // max single-activity demand
+    std::vector<int> prof(horizon + 1, 0);                      // earliest-start demand profile
+    for (size_t j = 0; j < ri.activity_indices.size(); ++j) {
+      short a = ri.activity_indices[j], d = ri.demands[j];
+      if (d == 0) continue;
+      for (int t = es[a]; t < es[a] + (int)RCPSPex.activities[a].duration && t <= horizon; ++t) prof[t] += d;
+    }
+    int Kmax = Kmin;
+    for (int t = 0; t <= horizon; ++t) Kmax = std::max(Kmax, prof[t]);
+    g_rs_Kmin[r] = Kmin;
+    g_rs_Kmax[r] = Kmax;
+  }
+}
+
+// Inflated capacity for resource r at target RS: Kmin + RS*(Kmax-Kmin), rounded up,
+// clamped to never drop below the real capacity (so it stays a relaxation).
+inline int inflatedCapForRS(int r, double targetRS) {
+  const int realCap = (int)resource_info[r].capacity;
+  if (r >= (int)g_rs_Kmin.size()) return realCap;
+  const long cap = (long)std::ceil((double)g_rs_Kmin[r] + targetRS * (double)(g_rs_Kmax[r] - g_rs_Kmin[r]));
+  return (int)std::max<long>(cap, realCap);
+}
+
+// Hierarchical RS-relaxation bound for a CBS node. Residual = movable activities
+// (finish > cut); releases = start_times; every resource capacity inflated to the
+// target-RS value. Solve the residual once with the subset mini-solver; the optimum
+// is an admissible ABSOLUTE makespan LB (more capacity => optimum <= real residual
+// optimum). Memoized by (residual set + releases). Returns 0 if inert (no target /
+// empty residual).
+template<short N>
+inline double hierRSBound_CBS(const RCPSPState_CBS<N>& s) {
+  if (g_cbs_hierrs_target < 0.0) return 0.0;               // no higher RS level => inert
+  const int nAll = (int)RCPSPex.activities.size();
+  const int R    = (int)resource_info.size();
+  if (nAll == 0 || R == 0) return 0.0;
+  const int cut = (s.t_first >= 0 ? s.t_first : 0);
+
+  // residual = real activities (dur>0) still movable (finish > cut).
+  std::vector<int> resid; std::vector<char> inSub(nAll, 0);
+  for (int i = 0; i < nAll; ++i) {
+    if (i == 0 || i == g_sink_id) continue;
+    const int d = (int)RCPSPex.activities[i].duration;
+    if (d <= 0) continue;
+    if ((int)s.start_times[i] + d > cut) { inSub[i] = 1; resid.push_back(i); }
+  }
+  const int m = (int)resid.size();
+  if (m == 0) return 0.0;
+
+  // Cache lookup: (residual activity-set + their releases) fully determines this
+  // relaxation (target RS is instance-constant), so memoize — the wide tree revisits it.
+  uint64_t sig = 1469598103934665603ULL;
+  { std::vector<int> sorted = resid;
+    std::sort(sorted.begin(), sorted.end());
+    for (int gi : sorted) {
+      sig ^= (uint64_t)(unsigned)gi;                         sig *= 1099511628211ULL;
+      sig ^= (uint64_t)(unsigned short)s.start_times[gi];    sig *= 1099511628211ULL;
+    } }
+  {
+    auto cit = g_cbs_hierrs_cache.find(sig);
+    if (cit != g_cbs_hierrs_cache.end()) { ++g_cbs_hierrs_cache_hits; return cit->second; }
+  }
+
+  std::vector<int> local(nAll, -1);
+  for (int k = 0; k < m; ++k) local[resid[k]] = k;
+
+  SubsetInstance P;
+  P.n = m; P.R = R;
+  P.dur.resize(m); P.release.resize(m);
+  P.demand.assign(m, std::vector<int>(R, 0));
+  P.preds.assign(m, {});
+  P.cap.assign(R, 0);
+  for (int r = 0; r < R; ++r) P.cap[r] = inflatedCapForRS(r, g_cbs_hierrs_target);
+  for (int k = 0; k < m; ++k) {
+    const int gi = resid[k];
+    P.dur[k]     = RCPSPex.activities[gi].duration;
+    P.release[k] = s.start_times[gi];
+    for (int r = 0; r < R; ++r) {
+      auto it = resource_info[r].demand_lookup.find((short)gi);
+      if (it != resource_info[r].demand_lookup.end()) P.demand[k][r] = it->second;
+    }
+    for (short pgi : upstream[gi]) if (pgi >= 0 && pgi < nAll && inSub[pgi]) P.preds[k].push_back(local[pgi]);
+  }
+
+  // UB pruning: stop as soon as the sub-solve proves optimum >= incumbent.
+  const long ub = (g_use_ub && g_incumbent < std::numeric_limits<short>::max())
+                  ? (long)g_incumbent : LONG_MAX;
+  SubsetResult rr = subsetRcpspLB(P, g_cbs_hierrs_expand, ub);
+  const double lb = (double)rr.lb;
+  g_cbs_hierrs_cache[sig] = lb;
+  return lb;
 }
 
 template<short N>
@@ -2810,7 +3329,10 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   // compute_h_and_RVS is expensive and state-deterministic; cache its result so
   // repeat HCost calls on the same state object (or copies of it) are free.
   if (state1.h_cached) return state1.h_cache;
+  if (g_shadow_cache && g_in_subsolve) { ++g_shadow_probes; uint64_t _sk = GetStateHash(state1)*1099511628211ull + (uint64_t)(unsigned)g_subsolve_k; if (!g_shadow_set.insert(_sk).second) ++g_shadow_hits; }  // cache-hit estimate: every GENERATED sub-state (open+solved), keyed by (state,k), hit if seen in a prior sub-solve
+  auto _hct0 = std::chrono::steady_clock::now();
   double h = state1.compute_h_and_RVS();//return h_cost
+  if (g_hcbs_off_now) h = 0.0;   // inside a nested sub-solve with HCBS disabled: use consistent h=0 (conflicts still set above)
   // RCPSP_WARMSTART: use the inflated-resource optimum as an admissible LOWER BOUND.
   // It's valid (more resources => makespan <= real optimum) and tighter than the
   // resource-blind CPM h. Floor h so f = g+h >= inflMk-rootMk, letting A* skip the
@@ -2857,7 +3379,9 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
                          && (g_incumbent - f_cur) <= g_cbs_mincut_gap;
     if (shallow || nearUB) {
       ++g_cbs_mincut_calls;
+      auto _mct0 = std::chrono::steady_clock::now();
       const double mc_rem = minCutMakespanBound_CBS(state1) - (double)g_now;
+      g_mincut_time_sec += secs_since(_mct0);
       if (mc_rem > h) { h = mc_rem; ++g_cbs_mincut_better; }
     }
   }
@@ -2873,10 +3397,35 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
                          && (g_incumbent - f_cur) <= g_cbs_singleres_gap;
     if (shallow || nearUB) {
       ++g_cbs_singleres_calls;
-      const double sr_rem = singleResourceMaxLB_CBS(state1) - (double)g_now;
+      auto _srt0 = std::chrono::steady_clock::now();
+      const double srLB  = (g_subsolver == 1) ? singleResViaCBS_CBS(state1) : singleResourceMaxLB_CBS(state1);
+      const double sr_rem = srLB - (double)g_now;
+      g_singleres_time_sec += secs_since(_srt0);
       if (sr_rem > h) { h = sr_rem; ++g_cbs_singleres_better; }
     }
   }
+  // Hierarchical RS-relaxation LB (RCPSP_CBS_HIERRS=1): solve the residual at the next-
+  // higher RS level (all caps inflated) and floor h with its optimum. Admissible; a
+  // relaxation complementary to single-res (all resources kept, looser). Costly, so
+  // gated to SHALLOW OR NEAR-INCUMBENT, plus RS-gated (a low-RS heuristic by default).
+  if (g_cbs_hierrs && g_cbs_hierrs_target >= 0.0 && cbs_rs_allows_expensive()) {
+    const int g_now = state1.start_times[g_sink_id];
+    const int f_cur = g_now + (int)h;
+    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_hierrs_maxdepth;
+    const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
+                         && f_cur < g_incumbent
+                         && (g_incumbent - f_cur) <= g_cbs_hierrs_gap;
+    if (shallow || nearUB) {
+      ++g_cbs_hierrs_calls;
+      auto _hrt0 = std::chrono::steady_clock::now();
+      const double hr_rem = hierRSBound_CBS(state1) - (double)g_now;
+      g_hierrs_time_sec += secs_since(_hrt0);
+      if (hr_rem > h) { h = hr_rem; ++g_cbs_hierrs_better; }
+    }
+  }
+  g_heur_time_sec += secs_since(_hct0);
+  ++g_heur_calls;
+  if (g_root_h < 0.0) g_root_h = h;
   state1.h_cache  = h;
   state1.h_cached = true;
   // RCPSP_LEAN=1: strip the heavy per-conflict vectors before this state is

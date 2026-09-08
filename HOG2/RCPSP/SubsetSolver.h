@@ -4,9 +4,11 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+#include <unordered_map>
 #include <algorithm>
 #include <climits>
 #include <cstdint>
+#include "Globals.h"   // g_subset_dom (DR5 cutset dominance toggle)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Mini EXACT RCPSP solver for a small activity subset, returning a PROVEN lower
@@ -49,7 +51,13 @@ struct SubsetResult {
     bool capped  = false;   // true => stopped on expandCap (lb is a partial LB, not the optimum)
 };
 
-inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
+// ub: an incumbent the CALLER wants to beat. As soon as the sub-search proves its
+// optimum >= ub (min-f-on-OPEN reaches ub), we stop and return that LB — enough for
+// the caller to prune, without solving to the exact optimum. LONG_MAX => no UB.
+// NOTE: sentinel is LONG_MAX (fits the `long` type), NOT LLONG_MAX — on LLP64 (Windows,
+// long=32-bit) LLONG_MAX truncates to -1, so `cur.f >= ub` fires at the root and the
+// solver returns the trivial bound with 0 expands. LONG_MAX is safe on LP64 and LLP64.
+inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap, long ub = LONG_MAX) {
     const int n = P.n, R = P.R;
     if (n <= 0) return {0, 0, false};
 
@@ -73,8 +81,20 @@ inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
         tail[i] = P.dur[i] + m;
     }
 
-    // Admissible ABSOLUTE makespan lower bound for a partial schedule: CPM forward
-    // pass (release + precedence, resources ignored => underestimate) plus tail.
+    // RC (resource/energetic) term the main solvers always have as max(CP,RC) but the
+    // sub-solver was missing: for each resource, ceil(total energy / capacity) is a valid
+    // makespan LB. Constant over states (all activities must run), so it floors the CPM
+    // bound — pays off together with UB pruning (raises f to cross the incumbent sooner).
+    long rcLB = 0;
+    for (int r = 0; r < R; ++r) {
+        if (P.cap[r] <= 0) continue;
+        long e = 0; for (int i = 0; i < n; ++i) e += (long)P.demand[i][r] * (long)P.dur[i];
+        long lb = (e + P.cap[r] - 1) / P.cap[r];
+        if (lb > rcLB) rcLB = lb;
+    }
+
+    // Admissible ABSOLUTE makespan lower bound for a partial schedule: max( CPM forward
+    // pass (release+precedence, resource-blind) + tail , RC energetic bound ).
     auto makespanLB = [&](const std::vector<short>& start) -> int {
         std::vector<int> est(n, 0);
         for (int i : topo) {
@@ -83,9 +103,9 @@ inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
             if (start[i] >= 0) e = start[i];
             est[i] = e;
         }
-        int lb = 0;
-        for (int i = 0; i < n; ++i) lb = std::max(lb, est[i] + tail[i]);
-        return lb;
+        long lb = rcLB;
+        for (int i = 0; i < n; ++i) lb = std::max(lb, (long)est[i] + (long)tail[i]);
+        return (int)lb;
     };
 
     // Earliest precedence-and-resource-feasible start for activity a in `start`.
@@ -120,11 +140,40 @@ inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
     struct Node { std::vector<short> start; int f; int depth; };
     struct Cmp { bool operator()(const Node& a, const Node& b) const { return a.f > b.f; } };
     std::priority_queue<Node, std::vector<Node>, Cmp> open;
+    // Exact-state dedup (fallback when dominance is off).
     std::unordered_set<uint64_t> seen;
     auto hashState = [&](const std::vector<short>& start) -> uint64_t {
         uint64_t h = 1469598103934665603ULL;
         for (int i = 0; i < n; ++i) { h ^= (uint16_t)start[i]; h *= 1099511628211ULL; }
         return h;
+    };
+    // DR5 cutset dominance: per scheduled-SET, keep only pointwise-start non-dominated
+    // partials (a skyline). Sound: same set + all starts <= => every completion carries
+    // over with makespan <=, and f=makespanLB is monotone so the dominator pops no later.
+    std::unordered_map<uint64_t, std::vector<std::vector<short>>> domStore;
+    auto setKey = [&](const std::vector<short>& s) -> uint64_t {
+        uint64_t h = 1469598103934665603ULL;
+        for (int i = 0; i < n; ++i) if (s[i] >= 0) { h ^= (uint64_t)(unsigned)(i + 1); h *= 1099511628211ULL; }
+        return h;
+    };
+    // returns true if ns should be explored; false if dominated/duplicate (skip).
+    auto admit = [&](const std::vector<short>& ns) -> bool {
+        if (!g_subset_dom) return seen.insert(hashState(ns)).second;
+        auto& lst = domStore[setKey(ns)];
+        for (size_t i = 0; i < lst.size(); ) {
+            const auto& v = lst[i];
+            bool sameset = true, vLEns = true, nsLEv = true;
+            for (int k = 0; k < n; ++k) {
+                bool vi = v[k] >= 0, ni = ns[k] >= 0;
+                if (vi != ni) { sameset = false; break; }
+                if (vi) { if (v[k] > ns[k]) vLEns = false; if (ns[k] > v[k]) nsLEv = false; }
+            }
+            if (sameset && vLEns) return false;                  // v dominates ns => prune ns
+            if (sameset && nsLEv) { lst[i] = lst.back(); lst.pop_back(); continue; } // ns dominates v => drop v
+            ++i;
+        }
+        lst.push_back(ns);
+        return true;
     };
 
     open.push({std::vector<short>(n, -1), makespanLB(std::vector<short>(n, -1)), 0});
@@ -133,7 +182,9 @@ inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
     while (!open.empty()) {
         Node cur = open.top(); open.pop();
         if (cur.depth == n) return {cur.f, expands, false};          // first goal popped = optimum
-        if (expands >= expandCap) return {cur.f, expands, true};     // cap => min-f-on-OPEN LB
+        if ((long)cur.f >= ub) return {cur.f, expands, true};        // proven optimum >= ub => enough to prune
+        if (expandCap > 0 && expands >= expandCap) return {cur.f, expands, true};  // cap<=0 => UNCAPPED (run to optimum)
+        if ((expands & 1023) == 0 && heur_deadline_hit()) return {cur.f, expands, true};  // parent 300s budget spent: cur.f is min-f-on-OPEN <= opt, a valid partial LB
         ++expands;
 
         for (int a = 0; a < n; ++a) {
@@ -142,8 +193,8 @@ inline SubsetResult subsetRcpspLB(const SubsetInstance& P, long expandCap) {
             for (int p : P.preds[a]) if (cur.start[p] < 0) { ready = false; break; }
             if (!ready) continue;
             std::vector<short> ns = cur.start;
-            ns[a] = (short)earliestFeasible(a, cur.start);
-            if (!seen.insert(hashState(ns)).second) continue;
+            ns[a] = (short)earliestFeasible(a, cur.start);           // DR4: earliest feasible => left-justified
+            if (!admit(ns)) continue;                                // DR5 cutset dominance (or exact dedup if off)
             int f = makespanLB(ns);                                  // compute f BEFORE pushing
             open.push({std::move(ns), f, cur.depth + 1});
         }

@@ -5,6 +5,7 @@
 #include <string>
 #include <cstdint>
 #include <limits>
+#include <unordered_set>
 #include "petriclasses.h"
 
 using namespace P_RCPSP;
@@ -206,10 +207,13 @@ inline bool  g_use_inline    = false;  // RCPSP_INLINE=1: expand intermediate ch
 inline bool  g_dom_skyline   = false;  // RCPSP_SKYLINE=1: keep dominance buckets as a Pareto frontier (retire stored entries dominated by a newer one). Search-IDENTICAL for pruning (transitivity), only shrinks buckets => faster checks + less memory. Unlike BIDIR it does NOT feed the kill-set, so it never changes which nodes are expanded.
 inline bool  g_use_lazy      = false;  // RCPSP_LAZY=1: use LazyAStarCBS (deferred-heuristic A*) instead of TemplateAStar — compute the expensive compute_h_and_RVS only when a node is POPPED, not at insertion, so never-expanded OPEN nodes skip it. Optimal (h=0 is an admissible lower bound + lazy re-insertion).
 inline bool  g_tt2_dr5       = false;  // RCPSP_TT2_DR5=1: cutset (DR5) dominance for the TT2/TTPNR search (DominanceTT2.h), checked+inserted in RCPSP_TT2::GetSuccessors. Includes always-on skyline thinning.
+inline int   g_tt2_dom_side  = 0;      // bidirectional DR table selector (0=forward, 1=backward); DominanceTT2.h get_tt2_dominance_table() picks the side's table.
 inline bool  g_tt2_dr4       = false;  // RCPSP_TT2_DR4=1: DR4 delayed-start dominance in TT2 successor generation (Liu et al. rule 4, ported from new_herustic). Prune firing l at delta d_l if some other available transition i has d_i < d_l and d_i + p_i <= d_l (sound left-shift; min-delta child never pruned).
 inline long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
 inline bool  g_tt2_immsel    = false;  // RCPSP_TT2_IMMSEL=1: immediate selection (D&H / Hartmann Remark 1) — when every available transition is fireable NOW and one of them cannot be co-processed with any not-yet-started activity, it is forced: emit only that single firing (a left-shift; no optimum lost). Branching reduction, not a state prune.
 inline long  g_tt2_immsel_fired = 0;   // nodes where immediate selection collapsed the branching (per instance)
+inline bool  g_tt2_freefire  = false;  // RCPSP_TT2_FREEFIRE=1 (SUB-SOLVE ONLY): force-fire an available activity with 0 demand on the constrained resource k that is ready NOW (delta==0). A left-shift of "free" activities (they never conflict), pure branching reduction. Gated to g_in_subsolve; the single-res relaxation zeroes 3/4 of demands so most activities become free.
+inline long  g_tt2_freefire_fired = 0; // nodes where a free activity was force-fired (per instance)
 inline bool  g_tt2_batch     = false;  // RCPSP_TT2_BATCH=1: batch/macro expansion — each successor starts a resource-feasible SUBSET of the now-available activities in one edge (plus the time-advancing single firings), trading depth for branching. Superset of single-firing (singletons included) => still optimal.
 inline long  g_tt2_batch_cap = 200000; // RCPSP_TT2_BATCH_CAP: safety cap on feasible subsets enumerated per node (singletons emitted first, so a cap never breaks optimality). Guards the 2^|A0| worst case on resource-abundant instances.
 
@@ -322,8 +326,126 @@ inline long g_cbs_singleres_better   = 0;     // times it strictly beat h (per i
 inline long g_cbs_singleres_calls    = 0;     // times the (gated) bound was computed (per instance; CSV: singleResCalls)
 inline int  g_cbs_singleres_maxdepth = 3;     // RCPSP_CBS_SINGLERES_MAXDEPTH: run if depth <= this (shallow arm)
 inline int  g_cbs_singleres_gap      = 8;     // RCPSP_CBS_SINGLERES_GAP: also run if 0 < UB-(g+h) <= this (near-incumbent arm; needs RCPSP_UB)
-inline long g_cbs_singleres_expand   = 800;   // RCPSP_CBS_SINGLERES_EXPAND: per single-resource sub-solve expand cap
+inline long g_cbs_singleres_expand   = 0;     // RCPSP_CBS_SINGLERES_EXPAND: per single-resource sub-solve expand cap (0 = UNCAPPED, solve to optimum)
 inline int  g_cbs_singleres_maxsize  = 45;    // RCPSP_CBS_SINGLERES_MAXSIZE: skip if residual larger than this (cost guard)
+// Single interchangeable sub-solver selector (RCPSP_SUBSOLVER = ext|cbs|tt2, or 0|1|2),
+// applies to whichever main solver is running. The nested engine uses only its base
+// heuristic (max(CP,RC)/HCBS) — the expensive bounds are recursion-guarded off inside.
+//   0 = extension mini-solver (subsetRcpspLB)   1 = nested CBS   2 = nested TT2
+inline int  g_subsolver              = 0;
+inline bool g_subsolve_hcbs_off      = false; // RCPSP_SUBSOLVE_HCBS_OFF=1: nested CBS sub-solve uses a CONSISTENT h (0) instead of the inconsistent HCBS, so the future exact-distance cache stays sound
+inline bool g_hcbs_off_now           = false; // runtime: true only while inside a nested CBS sub-solve (set by singleResViaCBS_CBS)
+inline bool g_singleres_via_cbs      = false; // (legacy alias; kept so old scripts still map to g_subsolver=1)
+inline long g_singleres_viacbs_capped= 0;     // times a nested CBS sub-solve returned no goal (timed out / no schedule) — the "unsolvable sub-problem" signal
+
+// Cutset/skyline dominance inside the subset mini-solver (subsetRcpspLB). Default
+// ON — it's the workhorse RCPSP pruning and the sub-search was missing it (only had
+// exact-state dedup). Sound: same scheduled set + pointwise-<= starts => dominates.
+// Toggle for A/B soundness tests (RCPSP_SUBSET_DOM=0).
+inline bool g_subset_dom = true;
+
+// ── Hierarchical RS-relaxation LB (RCPSP_CBS_HIERRS=1), CBS ───────────────────
+// For a LOW-RS (tight) instance, bound the remaining makespan by solving the SAME
+// residual subproblem at the NEXT-HIGHER RS level — every resource capacity inflated
+// to the value giving that RS (Kmin + RS*(Kmax-Kmin), clamped >= real cap; same
+// formula as the warm-start block). More capacity => the relaxed optimum <= the real
+// residual optimum, so it is an admissible ABSOLUTE makespan LB. Unlike single-res
+// (keep ONE resource exact, others infinite) this keeps ALL resources but LOOSER —
+// a different, complementary relaxation. Solved once per node with the subset mini-
+// solver (reusing subsetRcpspLB) and memoized by (residual set + releases), since the
+// wide tree revisits the same residual heavily. Relaxed schedule is a LOWER bound only
+// (never restricts the search) so the optimum is preserved. Recurses conceptually up
+// to RS=1 (where hCP is optimal); the flat one-level bound is implemented here.
+inline bool g_cbs_hierrs        = false; // RCPSP_CBS_HIERRS=1: enable the hierarchical RS-relaxation LB
+inline long g_cbs_hierrs_better = 0;     // times it strictly beat h (per instance; CSV: hierRsBetter)
+inline long g_cbs_hierrs_calls  = 0;     // times the (gated) bound was computed (per instance; CSV: hierRsCalls)
+inline int  g_cbs_hierrs_maxdepth = 3;   // RCPSP_CBS_HIERRS_MAXDEPTH: run if depth <= this (shallow arm)
+inline int  g_cbs_hierrs_gap    = 8;     // RCPSP_CBS_HIERRS_GAP: also run if 0 < UB-(g+h) <= this (near-incumbent arm)
+inline long g_cbs_hierrs_expand = 0;     // RCPSP_CBS_HIERRS_EXPAND: per relaxed sub-solve expand cap (0 = UNCAPPED)
+inline double g_cbs_hierrs_target = -1.0;// resolved target RS (next level up) for this instance; <0 => bound inert
+inline double g_hierrs_time_sec = 0.0;   // time inside the hier-RS bound (CSV: hierRsTimeSec)
+inline long g_cbs_hierrs_cache_hits = 0; // memo hits (per instance; CSV: hierRsCacheHits)
+inline std::unordered_map<uint64_t,double> g_cbs_hierrs_cache; // memo: (residual set + releases) -> LB
+// Per-instance RS-inflation profile (filled by precomputeRSInflation): per resource,
+// Kmin = max single-activity demand, Kmax = peak of the CPM earliest-start demand
+// profile. Inflated cap for a target RS is Kmin + RS*(Kmax-Kmin), clamped >= real cap.
+inline std::vector<int> g_rs_Kmin;       // [R]
+inline std::vector<int> g_rs_Kmax;       // [R]
+
+// ── Always-on instrumentation (no flag; reset per instance) ──────────────────
+// Recorded in every CSV regardless of feature flags: root heuristic value, total
+// time spent computing the heuristic, call count, and per-feature time for the
+// expensive bounds so we can see where runtime actually goes.
+#include <chrono>
+inline double g_heur_time_sec      = 0.0;  // cumulative wall time inside HCost compute (CSV: heurTimeSec)
+inline long   g_heur_calls         = 0;    // HCost computations, excl. cache hits (CSV: heurCalls)
+inline double g_root_h             = -1.0; // heuristic value at the root/start node (CSV: rootH)
+inline double g_singleres_time_sec = 0.0;  // time inside the single-resource bound (CSV: singleResTimeSec)
+inline double g_mincut_time_sec    = 0.0;  // time inside the min-cut bound (CSV: minCutTimeSec)
+inline double secs_since(std::chrono::steady_clock::time_point t0){
+  return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+// ── Per-instance heuristic deadline ──────────────────────────────────────────
+// The main A* checks its wall clock only BETWEEN expansions; a single HCost that
+// runs an uncapped nested sub-solve can overshoot the 300s budget badly. Set this
+// ONCE per instance (= start + astar_timeout_seconds) so every sub-solve honors the
+// SAME absolute deadline instead of re-arming a fresh 300s each call. Aborting a
+// sub-solve early is sound: the returned min-f on OPEN is still <= opt (a valid LB).
+inline std::chrono::steady_clock::time_point g_instance_deadline{};
+inline bool g_instance_deadline_set = false;
+inline long long heur_time_left_s(){
+  if(!g_instance_deadline_set) return 1LL<<30;                 // no deadline => unlimited
+  auto now = std::chrono::steady_clock::now();
+  if(now >= g_instance_deadline) return 0;
+  return (long long)std::chrono::duration_cast<std::chrono::seconds>(g_instance_deadline - now).count();
+}
+inline bool heur_deadline_hit(){
+  return g_instance_deadline_set && std::chrono::steady_clock::now() >= g_instance_deadline;
+}
+// Which sub-solver engine is active (for the self-documenting CSV column).
+inline const char* subsolver_name(){
+  switch(g_subsolver){ case 1: return "cbs"; case 2: return "tt2"; default: return "ext"; }
+}
+
+// ── Shadow cache estimator (RCPSP_SHADOW=1; measure-only, default off) ────────
+// Estimates the hit rate the future exact-distance sub-solve cache WOULD get,
+// without storing any solutions. g_shadow_set = per-instance union of state hashes
+// on PRIOR sub-solves' solution paths (exactly what the real cache would hold). While
+// inside a sub-solve (g_in_subsolve), every generated sub-state is probed against it:
+// already present => a hit the cache would serve. Cleared per instance. Reported to
+// stdout ("SHADOW ..."). Adds one set lookup per sub-state only when g_shadow_cache.
+inline bool g_shadow_cache = false;      // RCPSP_SHADOW=1
+inline bool g_in_subsolve  = false;      // true only while a nested sub-solve runs
+inline int  g_subsolve_k   = 0;          // which resource-k relaxation is being solved (part of the cache key:
+                                         // successors + h* depend on k because caps differ per relaxation)
+
+// ── Successor (transposition) cache for the TT2 sub-solve (RCPSP_SUBSOLVE_SUCC_CACHE=1) ──
+// If a (marking,k) was expanded in a PRIOR sub-solve this instance, its RAW children
+// (post-DR4/symmetry, PRE stored-state dominance) are Markovian on the marking, so we
+// splice them in and skip the available-scan + batch enumeration. Release-dependent
+// filters (order-swap, DR5) are ALWAYS re-applied fresh => sound. Capped + cleared per
+// instance to bound memory (the entry stores the key state + child states).
+inline bool g_subsolve_succ_cache = false;   // RCPSP_SUBSOLVE_SUCC_CACHE=1 (PARKED: memory-heavy, net-neg)
+inline long g_succ_cache_cap      = 0;       // RCPSP_SUCC_CACHE_CAP: max entries; 0 = UNLIMITED (server has memory).
+                                             // Only a speed knob: a very large map costs rehash/lookup/alloc time,
+                                             // so cap it only if profiling shows map growth outweighs the hits it buys.
+inline long g_succ_probes = 0;               // expansions probed (per instance)
+inline long g_succ_hits   = 0;               // served from cache (per instance)
+
+// ── h-value cache (RCPSP_SUBSOLVE_H_CACHE=1) — the light lever ────────────────
+// Memoize h=max(CP,RC) per (state,k) across sub-solves (deterministic, so sound; 128-bit
+// key guards collisions). One double/entry => tens of MB, not GB. TT2 sub-solve is eager,
+// so a hit short-circuits HCost; in the CBS LAZY sub-solve a hit sets h immediately + flags
+// the node so lazy skips its deferred recompute.
+inline bool g_h_cache      = false;          // RCPSP_SUBSOLVE_H_CACHE=1
+inline bool g_h_cache_solved = false;        // RCPSP_SUBSOLVE_H_CACHE_SOLVED=1: cache ONLY solved (proven-path) nodes with
+                                             // EXACT h*=M-g (back-filled after each sub-solve), not every open node's heuristic h
+inline long g_hcache_probes= 0;              // per instance
+inline long g_hcache_hits  = 0;              // per instance
+inline std::unordered_set<uint64_t> g_shadow_set;
+inline long g_shadow_probes = 0;
+inline long g_shadow_hits   = 0;
 
 // ── TT2 port of RS-adaptive gating + single-resource LB ──────────────────────
 // Same idea as the CBS versions above, on the relative-time TT2/TTPNR search.
@@ -340,8 +462,40 @@ inline bool tt2_rs_allows_expensive() {
 inline bool g_tt2_singleres         = false; // RCPSP_TT2_SINGLERES=1: single-resource max LB on TT2
 inline long g_tt2_singleres_better  = 0;     // times it beat base h (per instance; CSV: tt2SingleResBetter)
 inline long g_tt2_singleres_calls   = 0;     // times computed (per instance; CSV: tt2SingleResCalls)
-inline long g_tt2_singleres_expand  = 800;   // RCPSP_TT2_SINGLERES_EXPAND: per sub-solve expand cap
+inline long g_tt2_singleres_expand  = 0;     // RCPSP_TT2_SINGLERES_EXPAND: per sub-solve expand cap (0 = UNCAPPED)
+inline bool g_tt2_singleres_rel     = false; // RCPSP_TT2_SINGLERES_REL=1: build the TT2 single-res residual in RELATIVE time from the
+                                             // marking (running: dur=remaining,release=0; unstarted: dur=full,release=0) instead of
+                                             // from abs_start. Admissible + lets us delete abs_start. Validate makespans unchanged first.
+inline bool g_tt2_singleres_via_cbs = false; // RCPSP_TT2_SINGLERES_VIACBS=1: solve TT2's single-resource sub-problem with the nested CBS engine (translate TT2 node -> CBS state)
+inline bool g_tt2_singleres_via_tt2 = false; // RCPSP_TT2_SINGLERES_VIATT2=1: solve TT2's single-resource sub-problem with the nested TT2 engine (batch) from the node's own marking
 inline int  g_tt2_singleres_maxsize = 45;    // RCPSP_TT2_SINGLERES_MAXSIZE: skip if residual larger than this
+
+// ── TT2 upper-bound (incumbent) pruning (RCPSP_TT2_UB=1) ─────────────────────
+// TT2 has no free internal incumbent (an internal marking is a PARTIAL schedule),
+// so seed g_incumbent once from a real feasible primal (serialSGS_makespan — NOT the
+// datasheet-optima cheat) and drop any child whose f = g + h STRICTLY exceeds it,
+// before it enters OPEN. Sound with TT2's CONSISTENT heuristic: on any optimal path
+// f <= opt <= incumbent, so strict '>' never removes the optimum. Purpose = shrink
+// peak memory (and skip expanding provably-suboptimal nodes). Reuses g_incumbent /
+// g_ub_pruned (CBS and TT2 never run in the same process).
+inline bool g_tt2_ub = false;                // RCPSP_TT2_UB=1: enable SGS-seeded incumbent pruning on TT2
+
+// ── TT2 port of the hierarchical RS-relaxation LB (RCPSP_TT2_HIERRS=1) ────────
+// Same bound as the CBS hierRSBound: residual = unfinished activities, releases from
+// abs_start/g, every resource cap inflated to the next RS level up, solve once via
+// subsetRcpspLB, max into base h. Admissible; reuses g_cbs_hierrs_target / _cache /
+// _cache_hits / g_rs_Kmin/Kmax / inflatedCapForRS (instance-scoped; TT2 and CBS never
+// run in the same process). On TT2 the payoff is a TIGHTER h => fewer expands to solve.
+inline bool g_tt2_hierrs        = false; // RCPSP_TT2_HIERRS=1: enable the hierarchical RS-relaxation LB on TT2
+inline long g_tt2_hierrs_better = 0;     // times it beat base h (per instance; CSV: tt2HierRsBetter)
+inline long g_tt2_hierrs_calls  = 0;     // times computed (per instance; CSV: tt2HierRsCalls)
+inline long g_tt2_hierrs_expand = 0;     // RCPSP_TT2_HIERRS_EXPAND: per relaxed sub-solve expand cap (0 = UNCAPPED)
+
+// RCPSP_HIERRS_TARGET (shared CBS+TT2): if >0, override the target RS for BOTH hier-RS
+// bounds. Default (<0) = next ladder step up. Set to the instance's own RS (e.g. 0.2)
+// to solve the residual at ~real caps — a MUCH tighter bound that can beat max(CP,RC),
+// unlike the loose next-level-up default. Tighter => costlier per solve (cache offsets).
+inline double g_hierrs_target_override = -1.0;
 
 // ── Inflated-resource warm start (RCPSP_WARMSTART=1), CBS only ───────────────
 // ONE-TIME, before the real search: solve the SAME instance with every resource
@@ -378,6 +532,7 @@ inline std::string cbs_heuristic_name(bool includeGated) {
     if (g_cbs_theta)     s += "+Theta";
     if (g_cbs_mincut)    s += "+MinCut";
     if (g_cbs_singleres) s += "+SingleRes";
+    if (g_cbs_hierrs)    s += "+HierRS";
     if (g_cbs_subset)    s += "+Subset";
   }
   return s;
@@ -387,6 +542,7 @@ inline std::string tt2_heuristic_name(bool includeGated) {
   if (includeGated) {
     if (g_tt2_theta)     s += "+Theta";
     if (g_tt2_singleres) s += "+SingleRes";
+    if (g_tt2_hierrs)    s += "+HierRS";
   }
   return s;
 }

@@ -29,11 +29,20 @@
 // RCPSP_SKYLINE on the CBS side, here always-on because it is pure upside.
 // ─────────────────────────────────────────────────────────────────────────────
 
+#include <functional>
 #include <cstdint>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
 #include "RCPSPState.h"
+
+
+// Optional observer on PRUNED states (bidirectional meet). A DR-dominated state is still a
+// real state reached by a real path, so its (meet key, g) is a legitimate cut even though the
+// search will never expand it. Recording it lets the forward side keep full DR while still
+// offering the reversed side every cut it might match. Sound for the incumbent/UB direction:
+// g is an actual path cost, so g_f + g_b is an actual schedule length. Null by default.
+inline std::function<void(const RCPSPState_TT2&)> g_tt2_dr_prune_observer;
 
 class TT2DominanceTable {
 public:
@@ -100,7 +109,9 @@ public:
         auto& bucket = buckets[MakeKey(s)];
         for (const Entry& e : bucket) {
             ++comparisons;
-            if (dominates(e.active, e.g, s.activeTransitionIndices, s.g)) { ++pruned; return true; }
+            if (dominates(e.active, e.g, s.activeTransitionIndices, s.g)) { ++pruned;
+                if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
+                return true; }
         }
         // skyline: drop stored entries dominated by s (table-only; transitivity-safe)
         for (size_t i = 0; i < bucket.size();) {
@@ -123,10 +134,13 @@ private:
     std::unordered_map<Key, std::vector<Entry>, KeyHash> buckets;
 };
 
-// One table, cleared per instance by the driver.
+// One table, cleared per instance by the driver. For bidirectional search the active
+// side is selected by g_tt2_dom_side (0=forward, 1=backward) so the two directions keep
+// SEPARATE dominance tables while interleaving.
+extern int g_tt2_dom_side;
 inline TT2DominanceTable& get_tt2_dominance_table() {
-    static TT2DominanceTable t;
-    return t;
+    static TT2DominanceTable t0, t1;
+    return (g_tt2_dom_side == 0) ? t0 : t1;
 }
 
 #endif // DOMINANCE_TT2_H

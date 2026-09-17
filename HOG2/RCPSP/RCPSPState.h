@@ -163,6 +163,9 @@ public:
 };
 
 
+// Tag for the explicit-wait child constructor (RCPSP_TT2_WAIT=1): advance the clock without firing anything.
+struct TT2WaitTag {};
+
 class RCPSPState_TT2 {
 public:
     // 1. Resources: Pairs of <Amount/ID, TimeRemaining>
@@ -194,17 +197,23 @@ public:
     mutable bool  hKnown = false;   // annotation (NOT in ==/hash): h already supplied (fused successor cache) => HCost returns it
     short predessesor_h = 0;
     short lastTransitionId=0; // transition fired to create THIS state (most-recent, not final)
+    // Explicit-wait model with DR4 (RCPSP_TT2_WAIT=1): how many more units this wait chain may still wait and then
+    // start activities. -1 = not inside a wait chain (root, a firing, or DR4 off). Part of the identity (== and the
+    // hashes) because it restricts the successors.
+    short waitSlack = -1;
     mutable short nextCritical;
     // (abs_start removed: was a 256-byte shadow schedule; single-res releases are now derived
     //  from the marking, order-swap is stubbed, and the final schedule comes from the path.)
     RCPSPState_TT2();
     RCPSPState_TT2(const RCPSPState_TT2& prev, short ID, short firingTime,bool Direction =1);
+    RCPSPState_TT2(const RCPSPState_TT2& prev, short waitTime, TT2WaitTag);   // explicit-wait child (RCPSPState.cpp)
     bool order_swap_prunable() const;   // Hartmann 1998 Rule 7, TT2 form (uses abs_start)
 
     // Equality is CRITICAL for Relative Time
     bool operator==(const RCPSPState_TT2& other) const {
         // 1. Bitset comparison (fast)
         if (finishedActivitiys != other.finishedActivitiys) return false;
+        if (waitSlack != other.waitSlack) return false;   // explicit-wait model: different remaining waits
 
         // 2. Vectors must be SORTED for this to work!
         // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
@@ -513,12 +522,24 @@ short getForwardHcost_TT2(
 double getForwardHcost_TT(const std::array<short, 128>& unstartedTransitions);
 
 
-double getForwardHcost(std::vector<short>unstartedTransitions,
-                      std::vector<std::pair<short, short>>activeTransitionIndices,
-                      short& nextCritical  // ← add this
-
-                      );
-double getforwardResource(std::vector<short>unstartedTransitions,std::vector<std::pair<short, short>>activeTransitionIndices);
+double getForwardHcost(const std::vector<short>& unstartedTransitions,
+                      const std::vector<std::pair<short, short>>& activeTransitionIndices,
+                      short& nextCritical);
+bool cpFastOn();   // RCPSP_CP_FAST (default 1): array-DP critical path instead of the std::map version
+double getforwardResource(const std::vector<short>& unstartedTransitions,
+                          const std::vector<std::pair<short, short>>& activeTransitionIndices);
+bool resFastOn();
+// RCPSP_GEN_FAST (default 1): successor generation / availability fast paths; RCPSP_GEN_CHECK=1 compares with the reference.
+bool genFastOn();
+bool genCheckOn();
+struct ActDemandSlot {                       // per-instance activity demand tables (see actDemandSlot)
+    uint64_t gen = ~0ULL; const void* ptr = nullptr; int n = -1;
+    std::vector<std::vector<std::pair<short, short>>> ent;   // per activity: (resource place id, demand), resource_demands order
+    std::vector<std::array<int, 4>> byPlace;                 // per activity: positive demand summed per resource place id
+    bool placeOK = true;                                    // every positive-demand resource place id is < 4
+};
+const ActDemandSlot& actDemandSlot();
+   // RCPSP_RES_FAST (default 1): cached demand matrix instead of per-call map lookups
 double thetaResourceBound_TT2(const std::vector<short>& tempUnfinished,
                               const std::vector<std::pair<short, short>>& activeTransitionIndices);
 double getForwardHcost0Based(std::vector<short> unstartedTransitions,

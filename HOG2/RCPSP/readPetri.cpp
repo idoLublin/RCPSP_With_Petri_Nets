@@ -132,7 +132,13 @@ void getPetri(P_RCPSP::PetriExample& petriExample, int group, int exam, const st
     }
 }
 
+// Bumped on every instance load. Per-instance caches (resDemandMatrix in RCPSPState.cpp) compare
+// against it, so a new instance can never reuse a stale table.
+uint64_t g_rcpsp_load_gen = 0;
+
 void getRCPSP(P_RCPSP::RCPSP_example& rcpsp_example,int group,int exam, const std::string &instanceType = "j30") {
+    ++g_rcpsp_load_gen;   // a (re)loaded instance invalidates cached per-instance tables (resDemandMatrix)
+
     // Open the file for reading
     rcpsp_example.reset();
 

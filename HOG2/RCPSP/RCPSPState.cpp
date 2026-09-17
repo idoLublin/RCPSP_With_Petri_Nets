@@ -353,9 +353,11 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 }
 
 
-double getForwardHcost(std::vector<short>unstartedTransitions,
+// Reference implementation (the original): std::map / std::set / std::find, vectors by value.
+// Kept for RCPSP_CP_FAST=0 and as the RCPSP_CP_CHECK oracle.
+static double getForwardHcostMapRef(std::vector<short>unstartedTransitions,
                       std::vector<std::pair<short, short>>activeTransitionIndices,
-                      short& nextCritical  // ← add this
+                      short& nextCritical
 
                       ) {
   //auto startS3 = std::chrono::high_resolution_clock::now();
@@ -365,6 +367,23 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
   double h;
   std::set<int> processedDependencies;
+
+    // ── ORIENTATION FIX (see getForwardHcost_TT for the full note) ──────────────
+  // This relaxation is a SINGLE pass, so it is a correct longest-path computation only
+  // while activity-ID order is TOPOLOGICAL. PSPLIB numbers the FORWARD net that way
+  // (1 = source, NT = sink); reverseLoadedInstance() flips precedence, making the correct
+  // order DESCENDING and the terminal node activity 1 instead of NT. Unfixed, the reversed
+  // net got 31-63% of its true critical path (j30 3:1: 22 vs a CPM of 72) while the forward
+  // net was 100% tight — admissible, so results stayed correct, but it crippled every
+  // backward/bidirectional search and caused the 1.3x-238x direction asymmetry.
+  // Orientation is read off the NET, not a global, so it survives the BAE* side-swap with
+  // both nets live: only in the reversed net does activity 1 have predecessors.
+  // unstartedTransitions is BY VALUE, so reversing it here is local. RCPSP_HFIX=0 = old.
+  static const bool hfixOff2 = [](){ const char* e = std::getenv("RCPSP_HFIX"); return e && std::atoi(e) == 0; }();
+  const bool reversedNet = !hfixOff2
+                        && !RCPSPex.backword_dependencies.empty()
+                        && !RCPSPex.backword_dependencies[0].empty();
+  if (reversedNet) std::reverse(unstartedTransitions.begin(), unstartedTransitions.end());
 
   for (int activityId: unstartedTransitions) {
     int maxFinishTime = 0;
@@ -396,7 +415,7 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
     h = 0;
   }
   else {
-    h = earlyfinishMap2.rbegin()->second;;
+    h = reversedNet ? earlyfinishMap2.begin()->second : earlyfinishMap2.rbegin()->second;
 
   }
 
@@ -444,7 +463,55 @@ double getForwardHcost(std::vector<short>unstartedTransitions,
 
 }
 
-double getforwardResource(std::vector<short> tempUnfinished,
+// ── CRITICAL-PATH HEURISTIC, array DP (port of new_heuristic's getForwardHcostDP) ─────────────
+// One pass over the unfinished activities in topological order -- ID order on the forward net,
+// reversed on the reversed net (the orientation fix above, which new_heuristic's version lacks) --
+// computing each one's early FINISH: max over its already-processed predecessors (a finished
+// predecessor contributes 0) plus its own duration, or its remaining time if it is active.
+// h = max early finish, which equals the early start of the dummy sink that the map version returns.
+// No vector copies, no std::map/std::set, no std::find per predecessor.
+// RCPSP_CP_FAST=0 uses the map version; RCPSP_CP_CHECK=1 computes both and exits(5) on any difference.
+bool cpFastOn() {
+  static const bool on = [](){ const char* e = std::getenv("RCPSP_CP_FAST"); return e ? (std::atoi(e) != 0) : true; }();
+  return on;
+}
+double getForwardHcost(const std::vector<short>& unstartedTransitions,
+                      const std::vector<std::pair<short, short>>& activeTransitionIndices,
+                      short& nextCritical) {
+  if (!cpFastOn()) return getForwardHcostMapRef(unstartedTransitions, activeTransitionIndices, nextCritical);
+  static const bool hfixOff = [](){ const char* e = std::getenv("RCPSP_HFIX"); return e && std::atoi(e) == 0; }();
+  const bool reversedNet = !hfixOff
+                        && !RCPSPex.backword_dependencies.empty()
+                        && !RCPSPex.backword_dependencies[0].empty();
+  std::array<short, 130> activeRem; activeRem.fill(-1);
+  for (const auto& p : activeTransitionIndices) if (p.first > 0 && p.first < 130) activeRem[p.first] = p.second;
+  std::array<int, 130> ef; ef.fill(-1);
+  int h = 0;
+  const int n = (int)unstartedTransitions.size();
+  for (int k = 0; k < n; ++k) {
+    const int a = unstartedTransitions[reversedNet ? n - 1 - k : k];
+    int es = 0;
+    for (int dep : RCPSPex.backword_dependencies[a - 1]) if (ef[dep] > es) es = ef[dep];
+    const int v = es + (activeRem[a] != -1 ? (int)activeRem[a] : (int)RCPSPex.activities[a - 1].duration);
+    ef[a] = v;
+    if (v > h) h = v;
+  }
+  static const bool check = [](){ const char* e = std::getenv("RCPSP_CP_CHECK"); return e && std::atoi(e) != 0; }();
+  if (check) {
+    short nc = nextCritical;
+    const double ref = getForwardHcostMapRef(unstartedTransitions, activeTransitionIndices, nc);
+    if (ref != (double)h) {
+      std::cerr << "[CP-CHECK] fast=" << h << " map=" << ref << " unfinished=" << n
+                << " active=" << activeTransitionIndices.size() << " reversedNet=" << reversedNet << std::endl;
+      std::exit(5);
+    }
+  }
+  return (double)h;
+}
+
+// Reference implementation (the original): vectors by value, an unordered_set and a string-keyed
+// map lookup per activity per resource. Kept for RCPSP_RES_FAST=0 and as the RCPSP_RES_CHECK oracle.
+static double getforwardResourceMapRef(std::vector<short> tempUnfinished,
     std::vector<std::pair<short, short>> activeTransitionIndices) {
 
     double maxResourceBound = 0.0;
@@ -482,6 +549,70 @@ double getforwardResource(std::vector<short> tempUnfinished,
         maxResourceBound = std::max(maxResourceBound, bound);
     }
     return maxResourceBound;
+}
+
+// ── RESOURCE (ENERGY) BOUND with a cached demand matrix (port of new_heuristic's getforwardResource) ──
+// Same sums as the reference: per resource, remaining energy of the active activities (residual time x
+// demand) plus the unfinished non-active ones (duration x demand), divided by capacity; h = max over
+// resources; the dummy source/sink are skipped. The only cached data is demand[activity][resource],
+// rebuilt when an instance is loaded (g_rcpsp_load_gen, bumped in getRCPSP) or when RCPSPex's activity
+// buffer is a different one. Two slots, because the bidirectional search keeps the forward and the
+// reversed net alive and swaps them; their demands are identical (reversal only flips precedence).
+// Capacities and durations are read live on every call. RCPSP_RES_FAST=0 uses the reference;
+// RCPSP_RES_CHECK=1 computes both on every call and exits(6) on any difference.
+extern uint64_t g_rcpsp_load_gen;
+bool resFastOn() {
+  static const bool on = [](){ const char* e = std::getenv("RCPSP_RES_FAST"); return e ? (std::atoi(e) != 0) : true; }();
+  return on;
+}
+static const std::vector<std::array<int, 4>>& resDemandMatrix() {
+  struct Slot { uint64_t gen = ~0ULL; const P_RCPSP::Activity* ptr = nullptr; int n = -1, nres = -1;
+                std::vector<std::array<int, 4>> dem; };
+  static Slot slot[2]; static int next = 0;
+  const P_RCPSP::Activity* ptr = RCPSPex.activities.data();
+  const int n = (int)RCPSPex.activities.size(), nres = (int)RCPSPex.resources.size();
+  for (auto& s : slot)
+    if (s.gen == g_rcpsp_load_gen && s.ptr == ptr && s.n == n && s.nres == nres) return s.dem;
+  Slot& s = slot[next]; next ^= 1;
+  s.gen = g_rcpsp_load_gen; s.ptr = ptr; s.n = n; s.nres = nres;
+  s.dem.assign(n + 1, {0, 0, 0, 0});
+  for (int a = 1; a <= n; ++a)
+    for (const auto& kv : RCPSPex.activities[a - 1].resource_demands)
+      for (int k = 0; k < nres && k < 4; ++k)
+        if (RCPSPex.resources[k].first == kv.first) { s.dem[a][k] = kv.second; break; }
+  return s.dem;
+}
+double getforwardResource(const std::vector<short>& tempUnfinished,
+                          const std::vector<std::pair<short, short>>& activeTransitionIndices) {
+  const int nres = (int)RCPSPex.resources.size();
+  if (!resFastOn() || nres > 4) return getforwardResourceMapRef(tempUnfinished, activeTransitionIndices);
+  const auto& dem = resDemandMatrix();
+  const int n = (int)RCPSPex.activities.size();
+  std::array<bool, 130> executing{};
+  double tot[4] = {0.0, 0.0, 0.0, 0.0};
+  for (const auto& [id, rem] : activeTransitionIndices) {
+    if (id > 0 && id < 130) executing[id] = true;
+    if (id == 1 || id == n) continue;
+    for (int k = 0; k < nres; ++k) tot[k] += rem * dem[id][k];
+  }
+  for (short id : tempUnfinished) {
+    if (id == 1 || id == n) continue;
+    if (id > 0 && id < 130 && executing[id]) continue;
+    const int dur = RCPSPex.activities[id - 1].duration;
+    for (int k = 0; k < nres; ++k) tot[k] += dur * dem[id][k];
+  }
+  double best = 0.0;
+  for (int k = 0; k < nres; ++k) best = std::max(best, tot[k] / RCPSPex.resources[k].second);
+  static const bool check = [](){ const char* e = std::getenv("RCPSP_RES_CHECK"); return e && std::atoi(e) != 0; }();
+  if (check) {
+    const double ref = getforwardResourceMapRef(tempUnfinished, activeTransitionIndices);
+    if (ref != best) {
+      std::cerr << "[RES-CHECK] fast=" << best << " map=" << ref << " unfinished=" << tempUnfinished.size()
+                << " active=" << activeTransitionIndices.size() << std::endl;
+      std::exit(6);
+    }
+  }
+  return best;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -5316,7 +5447,8 @@ RCPSPState_BAP::RCPSPState_BAP(const RCPSPState_BAP &prev, short delayedActivity
 
 }
 
-std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
+// Reference implementation (the original). Kept for RCPSP_GEN_FAST=0 and as the RCPSP_GEN_CHECK oracle.
+static std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2_Ref(
     const std::vector<short> &unstartedTransitions,
     const std::bitset<128> &finishedActivitiys,  // ← Changed to bitset
     const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
@@ -5441,6 +5573,105 @@ std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
         }
     }
 
+    return available;
+}
+
+// ── GENERATION / AVAILABILITY FAST PATHS (RCPSP_GEN_FAST, default 1) ─────────────────────────
+// Same outputs as the reference code, without its per-call overheads:
+//  * availability: an array lookup of active activities instead of an unordered_set plus a linear scan per
+//    predecessor; cached (resource place id, demand) entries instead of a string-keyed map lookup per demand;
+//    each resource pool is checked for time order once per call and only copied + sorted if it is not
+//    (the reference copied and re-sorted it for EVERY candidate activity);
+//  * the child constructor (below): cached entries, no re-sort of a pool that is already time-ordered, and
+//    no second canonical sort+merge pass (a no-op after the first one).
+// RCPSP_GEN_CHECK=1 recomputes every availability list and every child state with the reference code and
+// exits(7) on any difference.
+bool genFastOn() {
+  static const bool on = [](){ const char* e = std::getenv("RCPSP_GEN_FAST"); return e ? (std::atoi(e) != 0) : true; }();
+  return on;
+}
+bool genCheckOn() {
+  static const bool on = [](){ const char* e = std::getenv("RCPSP_GEN_CHECK"); return e && std::atoi(e) != 0; }();
+  return on;
+}
+static thread_local bool g_gen_in_check = false;
+// Per-instance demand tables, invalidated like resDemandMatrix (instance-load counter + activity buffer, 2 slots).
+const ActDemandSlot& actDemandSlot() {
+  static ActDemandSlot slot[2]; static int next = 0;
+  const void* ptr = RCPSPex.activities.data();
+  const int n = (int)RCPSPex.activities.size();
+  for (auto& s : slot) if (s.gen == g_rcpsp_load_gen && s.ptr == ptr && s.n == n) return s;
+  ActDemandSlot& s = slot[next]; next ^= 1;
+  s.gen = g_rcpsp_load_gen; s.ptr = ptr; s.n = n; s.placeOK = true;
+  s.ent.assign(n + 1, {});
+  s.byPlace.assign(n + 1, {0, 0, 0, 0});
+  for (int a = 1; a <= n; ++a)
+    for (const auto& kv : RCPSPex.activities[a - 1].resource_demands) {
+      const int pid = petri.place_name_to_id.at(kv.first);
+      s.ent[a].push_back({(short)pid, (short)kv.second});
+      if (kv.second > 0) { if (pid >= 0 && pid < 4) s.byPlace[a][pid] += kv.second; else s.placeOK = false; }
+    }
+  return s;
+}
+std::vector<std::pair<short, short>> getAvailableTransitionIndices_TT2(
+    const std::vector<short> &unstartedTransitions,
+    const std::bitset<128> &finishedActivitiys,
+    const std::array<std::vector<std::pair<short, short>>, 4> &resource_nodes,
+    const std::vector<std::pair<short, short>> &activity_nodes,
+    const std::vector<std::pair<short, short>> &activeTransitionIndices
+) {
+    if (!genFastOn())
+        return getAvailableTransitionIndices_TT2_Ref(unstartedTransitions, finishedActivitiys, resource_nodes, activity_nodes, activeTransitionIndices);
+    std::vector<std::pair<short, short>> available;
+    std::array<short, 130> activeRem; activeRem.fill(-1);
+    for (const auto& [id, rem] : activeTransitionIndices) if (id >= 0 && id < 130) activeRem[id] = rem;
+    const auto byTime = [](const std::pair<short, short>& a, const std::pair<short, short>& b) { return a.second < b.second; };
+    std::array<std::vector<std::pair<short, short>>, 4> sortedCopy;
+    std::array<const std::vector<std::pair<short, short>>*, 4> pool{};
+    const auto poolOf = [&](int r) -> const std::vector<std::pair<short, short>>& {
+        if (!pool[r]) {
+            if (std::is_sorted(resource_nodes[r].begin(), resource_nodes[r].end(), byTime)) pool[r] = &resource_nodes[r];
+            else { sortedCopy[r] = resource_nodes[r]; std::sort(sortedCopy[r].begin(), sortedCopy[r].end(), byTime); pool[r] = &sortedCopy[r]; }
+        }
+        return *pool[r];
+    };
+    const auto& ent = actDemandSlot().ent;
+    for (short transId : unstartedTransitions) {
+        if (transId >= 0 && transId < 130 && activeRem[transId] != -1) continue;      // already active
+        bool allPredsFinished = true;
+        int maxPredFinishTime = 0;
+        for (int predId : RCPSPex.backword_dependencies[transId - 1]) {
+            if (finishedActivitiys.test(predId)) continue;
+            const short r = (predId >= 0 && predId < 130) ? activeRem[predId] : (short)-1;
+            if (r != -1) maxPredFinishTime = std::max(maxPredFinishTime, (int)r);    // active: wait for it
+            else { allPredsFinished = false; break; }                                 // not started: blocked
+        }
+        if (!allPredsFinished) continue;
+        bool resourcesOK = true;
+        int maxResourceTime = maxPredFinishTime;
+        for (const auto& [resID, demand] : ent[transId]) {
+            if (resource_nodes[resID].empty()) { resourcesOK = false; break; }
+            const auto& tokens = poolOf(resID);
+            int totalAvailable = 0, resourceReadyTime = -1;
+            for (const auto& [amt, time] : tokens) if (time <= maxPredFinishTime) totalAvailable += amt;
+            if (totalAvailable >= demand) resourceReadyTime = maxPredFinishTime;
+            else {
+                for (const auto& [amt, time] : tokens) {
+                    if (time > maxPredFinishTime) {
+                        totalAvailable += amt;
+                        if (totalAvailable >= demand) { resourceReadyTime = time; break; }
+                    }
+                }
+            }
+            if (resourceReadyTime == -1) { resourcesOK = false; break; }
+            maxResourceTime = std::max(maxResourceTime, resourceReadyTime);
+        }
+        if (resourcesOK) available.emplace_back(transId, maxResourceTime);
+    }
+    if (genCheckOn()) {
+        const auto ref = getAvailableTransitionIndices_TT2_Ref(unstartedTransitions, finishedActivitiys, resource_nodes, activity_nodes, activeTransitionIndices);
+        if (ref != available) { std::cerr << "[GEN-CHECK] availability differs: fast " << available.size() << " vs ref " << ref.size() << std::endl; std::exit(7); }
+    }
     return available;
 }
 
@@ -5718,6 +5949,61 @@ bool RCPSPState_TT2::order_swap_prunable() const {
 #endif
 }
 
+// ── Shared by the firing constructor and the explicit-wait constructor ──────────
+// Advance the clock `dt` units: tokens move closer (clamped at 0 = ready now); running activities that reach 0
+// finish (their output tokens were produced at firing time, with the delay that has now elapsed).
+static void tt2AdvanceClock(RCPSPState_TT2& s, short dt) {
+    for (auto& resVec : s.resource_nodes)
+        for (auto& token : resVec)
+            token.second = std::max(0, token.second - dt);
+    for (auto& token : s.activity_nodes)
+        if (token.first > 0) token.second = std::max(0, token.second - dt);
+    auto it = s.activeTransitionIndices.begin();
+    while (it != s.activeTransitionIndices.end()) {
+        it->second -= dt;
+        if (it->second <= 0) { s.finishedActivitiys[it->first] = 1; it = s.activeTransitionIndices.erase(it); }
+        else ++it;
+    }
+}
+// Canonical resource pools: time-ordered, one entry per release time, so equal markings compare equal.
+// `fast` (RCPSP_GEN_FAST) skips the sort when a pool is already time-ordered; equal times are merged either way.
+static void tt2CanonicalPools(RCPSPState_TT2& s, bool fast) {
+    for (auto& resVec : s.resource_nodes) {
+        if (resVec.empty()) continue;
+        if (!fast || !std::is_sorted(resVec.begin(), resVec.end(),
+                                     [](const std::pair<short, short>& a, const std::pair<short, short>& b) { return a.second < b.second; }))
+            std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
+                if (a.second != b.second) return a.second < b.second;
+                return a.first > b.first;
+            });
+        auto it = resVec.begin();
+        while (it != resVec.end() - 1) {
+            auto next = it + 1;
+            if (it->second == next->second) { it->first += next->first; resVec.erase(next); }
+            else ++it;
+        }
+    }
+}
+
+// Explicit-wait child (RCPSP_TT2_WAIT=1): the clock advances `waitTime` units and nothing fires.
+// The caller sets waitSlack (the DR4 horizon left on this wait chain).
+RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short waitTime, TT2WaitTag) {
+    direction = prev.direction;
+    isDeltaZero = false;                         // time passes: the heuristic is recomputed
+    g = prev.g + waitTime;
+    predessesor_h = prev.h;
+    lastTransitionId = 0;                        // no activity starts on a wait edge
+    finishedActivitiys = prev.finishedActivitiys;
+    resource_nodes = prev.resource_nodes;
+    activity_nodes = prev.activity_nodes;
+    activeTransitionIndices = prev.activeTransitionIndices;
+    nextCritical = prev.nextCritical;
+    transitionsCached = false;
+    isCriticalInActive = false;
+    tt2AdvanceClock(*this, waitTime);
+    tt2CanonicalPools(*this, genFastOn() && !g_gen_in_check);
+}
+
 RCPSPState_TT2::RCPSPState_TT2(const RCPSPState_TT2 &prev, short transitionId, short firingTime,bool Direction) {
     // 1. Update Global Cost (G)
     direction=Direction;
@@ -5752,79 +6038,38 @@ if (direction) {
     // }
 
     AvailableTransitionIndices_TT2.clear(); // or just leave empty
-    // 3. TIME SHIFT (Update "Remaining Time")
-    if (firingTime > 0) {
-        // Update resource tokens
-        for (auto& resVec : resource_nodes) {
-            for (auto& token : resVec) {
-                token.second = std::max(0, token.second - firingTime);
-            }
-        }
-
-        // Update activity node tokens
-        for (auto& token : activity_nodes) {
-            if (token.first > 0) {
-                token.second = std::max(0, token.second - firingTime);
-            }
-        }
-
-        // ========== UPDATE ACTIVE LIST ==========
-        // Decrement remaining time for all active activities
-        auto it = activeTransitionIndices.begin();
-        while (it != activeTransitionIndices.end()) {
-            it->second -= firingTime;  // Reduce remaining time
-
-            if (it->second <= 0) {
-                // Activity finished - mark it as complete
-                short completedTaskID = it->first;
-                finishedActivitiys[completedTaskID] = 1;
-
-                // Produce output tokens for this completed activity
-                const Transition& completedTransition = petri.Transitions[completedTaskID - 1];
-                // for (const auto& [placeID, outAmount] : completedTransition.arcs_out_indices) {
-                //     if (placeID < 4) {
-                //         // Resource output
-                //         resource_nodes[placeID].emplace_back(outAmount, 0);  // Available NOW
-                //     } else {
-                //         // Activity dependency output
-                //         short idx = placeID - 4;
-                //         activity_nodes[idx] = {outAmount, 0};  // Available NOW
-                //     }
-                // }
-
-                // Remove from active list
-                it = activeTransitionIndices.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
+    // 3. TIME SHIFT (Update "Remaining Time") -- shared with the explicit-wait constructor
+    if (firingTime > 0) tt2AdvanceClock(*this, firingTime);
 
     // 4. Consume Resources (Standard Resources Only)
     const Transition& transition = petri.Transitions[transitionId - 1];
     const Activity& act = RCPSPex.activities[transitionId - 1];
     short duration = act.duration;
 
-    for (const auto& [resName, demand] : act.resource_demands) {
-        if (demand > 0) {
-            short resID = petri.place_name_to_id.at(resName);
-            auto& tokens = resource_nodes[resID];
-
-            std::sort(tokens.begin(), tokens.end(),
-                     [](const auto& a, const auto& b) { return a.second < b.second; });
-
-            int remainingDemand = demand;
-            auto it = tokens.begin();
-            while (remainingDemand > 0 && it != tokens.end()) {
-                if (it->first > remainingDemand) {
-                    it->first -= remainingDemand;
-                    remainingDemand = 0;
-                } else {
-                    remainingDemand -= it->first;
-                    it = tokens.erase(it);
-                }
+    // RCPSP_GEN_FAST: cached (place id, demand) entries, and no re-sort of a pool that is already
+    // time-ordered (the canonical sort+merge in step 8 makes the order among equal-time tokens irrelevant).
+    const bool _gf = genFastOn() && !g_gen_in_check;
+    const auto _consume = [](std::vector<std::pair<short, short>>& tokens, int remainingDemand, bool skipIfSorted) {
+        const auto byTime = [](const std::pair<short, short>& a, const std::pair<short, short>& b) { return a.second < b.second; };
+        if (!skipIfSorted || !std::is_sorted(tokens.begin(), tokens.end(), byTime))
+            std::sort(tokens.begin(), tokens.end(), byTime);
+        auto it = tokens.begin();
+        while (remainingDemand > 0 && it != tokens.end()) {
+            if (it->first > remainingDemand) {
+                it->first -= remainingDemand;
+                remainingDemand = 0;
+            } else {
+                remainingDemand -= it->first;
+                it = tokens.erase(it);
             }
         }
+    };
+    if (_gf) {
+        for (const auto& [resID, demand] : actDemandSlot().ent[transitionId])
+            if (demand > 0) _consume(resource_nodes[resID], demand, true);
+    } else {
+        for (const auto& [resName, demand] : act.resource_demands)
+            if (demand > 0) _consume(resource_nodes[petri.place_name_to_id.at(resName)], demand, false);
     }
 
     // 5. Consume Input Dependency Token (Activity Nodes)
@@ -5884,34 +6129,10 @@ if (direction) {
     }
     // NOTE: If duration > 0, outputs are produced when activity completes (in TIME SHIFT section above)
 
-    // 8. Canonical Sort & Merge (Only for Resources)
-    // 8. Canonical Sort & Merge (CRITICAL FIX)
-    for (auto& resVec : resource_nodes) {
-        if (resVec.empty()) continue;
-
-        // A. Sort by Time (Ascending)
-        std::sort(resVec.begin(), resVec.end(), [](const auto& a, const auto& b) {
-             if (a.second != b.second) return a.second < b.second;
-             return a.first > b.first; // Optional: put larger chunks first
-        });
-
-        // B. Merge split groups with the same time
-        // This converts [(5,0), (5,0)] -> [(10,0)]
-        auto it = resVec.begin();
-        while (it != resVec.end() - 1) {
-            auto next = it + 1;
-            if (it->second == next->second) {
-                // Same time? Merge them!
-                it->first += next->first;
-                // Remove the second one
-                resVec.erase(next);
-                // Don't increment 'it', check the new neighbor
-            } else {
-                ++it;
-            }
-        }
-    }
-    if (!activeTransitionIndices.empty()) {
+    // 8. Canonical Sort & Merge (Only for Resources) -- shared with the explicit-wait constructor
+    tt2CanonicalPools(*this, _gf);
+    if (!activeTransitionIndices.empty() &&
+        (!_gf || !std::is_sorted(activeTransitionIndices.begin(), activeTransitionIndices.end()))) {
         std::sort(activeTransitionIndices.begin(), activeTransitionIndices.end());
         // std::pair default sort is (First, Second), which means (ID, Time). This is perfect.
     }
@@ -5922,8 +6143,9 @@ if (direction) {
     //     std::sort(activity_nodes.begin(), activity_nodes.end());
     // }
 //********************************************
-    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency)
-    for (auto& resVec : resource_nodes) {
+    // 3. SORT & MERGE RESOURCES (Crucial for Heuristic Consistency) -- a no-op after step 8 (unique, sorted
+    //    times), so the fast path skips it.
+    if (!_gf) for (auto& resVec : resource_nodes) {
         if (resVec.empty()) continue;
 
         // Step A: Sort by Time (Availability Time)
@@ -5946,6 +6168,16 @@ if (direction) {
             } else {
                 ++it;
             }
+        }
+    }
+    if (_gf && genCheckOn()) {                 // RCPSP_GEN_CHECK=1: rebuild with the reference path and compare
+        g_gen_in_check = true;
+        RCPSPState_TT2 ref(prev, transitionId, firingTime, Direction);
+        g_gen_in_check = false;
+        if (!(ref.finishedActivitiys == finishedActivitiys && ref.activity_nodes == activity_nodes &&
+              ref.resource_nodes == resource_nodes && ref.activeTransitionIndices == activeTransitionIndices && ref.g == g)) {
+            std::cerr << "[GEN-CHECK] child state differs: transition " << transitionId << " delay " << firingTime << std::endl;
+            std::exit(7);
         }
     }
     // if (firingTime==7&&transitionId != 26) {
@@ -6206,16 +6438,32 @@ short getForwardHcost_TT2(
 
 double getForwardHcost_TT(std::vector<short>unstartedTransitions
 ) {
+  // ── ORIENTATION FIX ─────────────────────────────────────────────────────────
+  // The relaxation below is a SINGLE pass, so it is a correct longest-path computation
+  // only while activity-ID order is a TOPOLOGICAL order. PSPLIB numbers the FORWARD net
+  // that way (1 = source, NT = sink). reverseLoadedInstance() flips the precedence, and
+  // then the topological order is DESCENDING and the terminal node is activity 1 — so the
+  // old code (ascending pass + rbegin(), i.e. the highest id) silently relaxed in the wrong
+  // order and read the SOURCE of the reversed net. Measured on j30 it returned only 31-63%
+  // of the true critical path (3:1: 22 against a CPM of 72) while the forward direction was
+  // 100% tight. It UNDER-estimates, so results stayed correct/admissible — but it crippled
+  // every backward and bidirectional search and is the root cause of the 1.3x-238x
+  // forward/backward asymmetry.
+  // Orientation is read off the NET, never a global, so it stays correct under the BAE*
+  // side-swap where both nets are live: only in the reversed net does activity 1 have
+  // predecessors. RCPSP_HFIX=0 restores the old behaviour for A/B comparison.
+  // The forward path is bit-identical to before (reversedNet == false).
+  static const bool hfixOff = [](){ const char* e = std::getenv("RCPSP_HFIX"); return e && std::atoi(e) == 0; }();
+  const bool reversedNet = !hfixOff
+                        && !RCPSPex.backword_dependencies.empty()
+                        && !RCPSPex.backword_dependencies[0].empty();
+
   std::map<int, int> earlyfinishMap2; // Map to store activity IDs and their early finish times
   double h;
-  std::set<int> processedDependencies;
-  for (int activityId: unstartedTransitions) {
+  auto relax = [&](int activityId) {
     int maxFinishTime = 0;
-    std::set<int> processedDependencies;
-
-    for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {  // Changed from const auto& to int
-      int depId = dep - 1;  // No more std::stoi!
-
+    for (int dep : RCPSPex.backword_dependencies[activityId - 1]) {
+      int depId = dep - 1;
       if (std::find(unstartedTransitions.begin(), unstartedTransitions.end(), depId + 1) != unstartedTransitions.end()) {
         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1] + RCPSPex.activities[depId].duration);
       }
@@ -6223,15 +6471,19 @@ double getForwardHcost_TT(std::vector<short>unstartedTransitions
         maxFinishTime = std::max(maxFinishTime, earlyfinishMap2[depId+1]);
       }
     }
-
     earlyfinishMap2[activityId] = maxFinishTime;
-  }
+  };
+  // unstartedTransitions is built ascending by the callers, so iterating it forwards is the
+  // forward net's topological order and backwards is the reversed net's.
+  if (!reversedNet) { for (auto it = unstartedTransitions.begin();  it != unstartedTransitions.end();  ++it) relax(*it); }
+  else              { for (auto it = unstartedTransitions.rbegin(); it != unstartedTransitions.rend(); ++it) relax(*it); }
 
   if (earlyfinishMap2.size()==0) {
     h = 0;
   }
   else {
-    h = earlyfinishMap2.rbegin()->second;
+    // terminal node of the CURRENT net: highest id forwards, lowest id reversed
+    h = reversedNet ? earlyfinishMap2.begin()->second : earlyfinishMap2.rbegin()->second;
   }
   // if (h==39) {
   //     std::cout << "Nodes Expanded: ";

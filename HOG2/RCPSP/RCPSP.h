@@ -16,6 +16,7 @@
 #include "MinCutCBS.h"      // Pragmatic min-cut / energetic resource LB (RCPSP_CBS_MINCUT)
 #include "SubsetSolver.h"   // mini subset-RCPSP LB solver for the CBS conflict look-ahead (RCPSP_CBS_SUBSET)
 #include "LazyAStarCBS.h"   // deferred-heuristic A* — used inside the nested CBS sub-solve too (RCPSP_LAZY)
+#include "CpCBS.h"         // CP elements for CBS: honest incumbent, deadline time-table, nogoods (RCPSP_CBS_TT / _NG)
 #include <queue>
 
 // h returned for a DR5-dominated node: large enough that A* never expands it,
@@ -1469,6 +1470,22 @@ inline uint64_t tt2VerifyHash(const RCPSPState_TT2& s){         // 2nd hash over
 }
 
 inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
+  // ── profiling (RCPSP_TT2_PROF; see Globals.h) ──
+  const bool _prof = g_tt2_prof;
+  std::chrono::steady_clock::time_point _pt0, _pg0, _pd0;
+  if (_prof) _pt0 = std::chrono::steady_clock::now();
+  ++g_prof_succ_calls;
+  { const int _f = (int)nodeID.g + (int)nodeID.h; if (_f > g_prof_maxf) g_prof_maxf = _f; }
+  if ((g_prof_succ_calls & 1023) == 0) {
+    const double _el = secs_since(g_prof_t0);
+    static const double _cp[5] = {1.0, 10.0, 60.0, 120.0, 240.0};
+    for (int _i = 0; _i < 5; _i++) if (_el >= _cp[_i] && g_prof_f_at[_i] < 0) g_prof_f_at[_i] = g_prof_maxf;
+    if (g_prof_trace && _el >= g_prof_next_trace) {
+      std::fprintf(g_prof_trace, "%s,%d,%d,%.1f,%ld,%d,%ld,%ld,%.3f,%.3f,%.3f\n", g_prof_size, g_prof_group, g_prof_exam, _el,
+                   g_prof_succ_calls, g_prof_maxf, g_prof_children_raw, g_prof_children_kept, g_prof_succ_sec, g_heur_time_sec, g_prof_dr5_sec);
+      std::fflush(g_prof_trace); g_prof_next_trace = _el + 5.0;
+    }
+  }
   //auto startS1 = std::chrono::high_resolution_clock::now();
   // ── Successor-cache fast path (sub-solve only): rebuild children from cached firing
   // recipes (skips the available-scan + batch enumeration). Recipes are tiny; no states stored.
@@ -1493,6 +1510,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
   }
   if (!_succHit) {
+  std::chrono::steady_clock::time_point _pa0; if (_prof) _pa0 = std::chrono::steady_clock::now();
   std::vector<short> tempUnstarted;
 
   // Optimization: Reserve max possible size to prevent re-allocations
@@ -1514,6 +1532,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // to accept 'const std::vector<int>&' for the second argument, instead of 'std::map'.
 
   std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT2(tempUnstarted, nodeID.finishedActivitiys,nodeID.resource_nodes, nodeID.activity_nodes,nodeID.activeTransitionIndices);
+  if (_prof) { _pg0 = std::chrono::steady_clock::now(); g_prof_avail_sec += std::chrono::duration<double>(_pg0 - _pa0).count(); }
 
   //std::vector<std::pair<short, short>> avilableTransitionIndices = getAvailableTransitionIndices_TT(tempUnstarted, nodeID.finishedActivitiys, nodeID.marking);
 
@@ -1525,6 +1544,9 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // branches. Sound (no optimum lost) and a pure branching reduction (does not drop
   // stored states, so it can't starve DR5 the way order-swap did).
   bool immFired = false;
+  // Explicit-wait model (RCPSP_TT2_WAIT=1): firings below keep only delta-0 transitions; the wait edge and the DR4
+  // horizon are added after them. Sub-solves keep the native model.
+  const bool waitModel = g_tt2_wait && !g_in_subsolve;
 
   // Free-activity immediate firing (RCPSP_TT2_FREEFIRE=1; SUB-SOLVE ONLY). In the
   // single-resource-k relaxation an activity with ZERO demand on the constrained
@@ -1550,7 +1572,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
   }
 
-  if (!immFired && g_tt2_immsel && !g_tt2_batch) {
+  if (!immFired && g_tt2_immsel && !g_tt2_batch && !waitModel) {
     bool allNow = true;
     for (const auto& pr : avilableTransitionIndices) if (pr.second != 0) { allNow = false; break; }
     if (allNow) {
@@ -1616,6 +1638,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     for (int k = 0; k < nAvail; k++) {
       const auto& [transId, Timedelta] =
           avilableTransitionIndices[g_tt2_gendesc ? (nAvail - 1 - k) : k];
+      if (waitModel && Timedelta != 0) continue;   // explicit-wait model: fire only when every input token is ready now
       // (3) canonical order: mode 1 = increasing id, mode 2 = decreasing id. Both sound.
       if (symOn && Timedelta == 0 &&
           (g_tt2_sym == 1 ? (transId < nodeID.lastTransitionId)
@@ -1639,6 +1662,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
         if (dr4dominated) { ++g_tt2_dr4_pruned; continue; }
       }
       neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
+      if (waitModel) neighbors.back().isDeltaZero = false;   // fresh h on wait-model firings (see the wait block below)
       if (_recON) _recs.push_back({{transId,Timedelta}});
     }
   } else if (!immFired) {
@@ -1653,6 +1677,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     std::vector<short> A0;
     for (const auto& [transId, Timedelta] : avilableTransitionIndices) {
       if (Timedelta > 0) {
+        if (waitModel) continue;   // explicit-wait model: time advances only through the wait edge
         // DR4 delayed-start dominance also applies to the batch's time-advancing
         // firings (RCPSP_TT2_DR4=1) — same rule as the single-firing path, so DR4
         // stacks with batch.
@@ -1678,6 +1703,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
 
     // Per-activity resource demand (resID -> demand), for the A0 activities.
     auto demandOf = [&](short id, std::array<int,4>& d) {
+      if (genFastOn()) { const auto& sl = actDemandSlot(); if (sl.placeOK) { d = sl.byPlace[id]; return; } }
       d = {0,0,0,0};
       for (const auto& [resName, dem] : RCPSPex.activities[id-1].resource_demands)
         if (dem > 0) d[petri.place_name_to_id.at(resName)] += dem;
@@ -1696,8 +1722,10 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
           for (int r = 0; r < 4; r++) if (used[r] + d[r] > avail0[r]) { feasible = false; break; }
           if (!feasible) continue;
           RCPSPState_TT2 child(cur, A0[i], 0, 1);    // fire A0[i] now (τ=0)
+          if (waitModel) child.isDeltaZero = false;   // fresh h on wait-model firings (see the wait block below)
           std::array<int,4> nu = { used[0]+d[0], used[1]+d[1], used[2]+d[2], used[3]+d[3] };
-          std::vector<std::pair<short,short>> npath = path; npath.push_back({(short)A0[i], (short)0});
+          std::vector<std::pair<short,short>> npath;   // only the successor cache reads it
+          if (_recON) { npath = path; npath.push_back({(short)A0[i], (short)0}); }
           neighbors.push_back(child);
           if (_recON) _recs.push_back(npath);
           ++emitted;
@@ -1705,6 +1733,55 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
         }
       };
     rec(0, nodeID, {0,0,0,0}, {});
+  }
+  // ── EXPLICIT-WAIT MODEL (RCPSP_TT2_WAIT=1) ─────────────────────────────────
+  // The firings above kept only transitions whose input tokens are all ready NOW (delta 0), so every activity
+  // starts from a node standing exactly at its start time. Time advances only through this edge: one unit, while
+  // something is running. Every integer schedule is then a path, on the forward and on the reversed net alike, so
+  // for every time t both searches contain the cut "what started before t", and two frontiers cannot pass each
+  // other without a common cut. (DR5 needs one exception for this: see DominanceTT2.h.) Firings get a fresh h:
+  // TT2's delta-0 shortcut reuses the parent's h, which HBAE's stored states do not keep.
+  // DR4 here is a HORIZON on a wait chain. Let p be the node the chain started from (a firing or the root) and d_i
+  // the delay TT2 computes for available activity i at p. Waiting to p + d_i + max(1, p_i) or later with nothing
+  // fired is dominated by starting i at p + d_i: nothing else starts meanwhile, so i is precedence- and resource-
+  // feasible there, and by then it has finished (a zero-duration i was fired strictly earlier), leaving the same
+  // state with i finished. That is Liu et al.'s rule 4 with the firing time set by the waits instead of TT2's
+  // delay. So the chain may wait H - 1 times, H = min_i d_i + max(1, p_i); waitSlack carries what is left.
+  if (waitModel && !nodeID.activeTransitionIndices.empty()) {
+    const short kNoHorizon = 32767;
+    short slack = -1;                                     // -1: DR4 off, no horizon
+    if (g_tt2_dr4) {
+      if (nodeID.waitSlack >= 0)                          // inside a chain: one wait fewer
+        slack = (nodeID.waitSlack >= kNoHorizon) ? kNoHorizon : (short)(nodeID.waitSlack - 1);
+      else {                                              // the chain starts here
+        int H = kNoHorizon;
+        for (const auto& [id, d] : avilableTransitionIndices)
+          H = std::min(H, (int)d + std::max(1, (int)RCPSPex.activities[id - 1].duration));
+        slack = (H >= kNoHorizon) ? kNoHorizon : (short)(H - 1);
+      }
+    }
+    // PASS-THROUGH JUMP (RCPSP_TT2_WAITJUMP, default 1). When nothing can start now, every node of this chain up to
+    // the first time something becomes ready (the smallest TT2 delay here, d_min) has exactly ONE successor, the next
+    // wait; with nothing left to become ready the chain just runs until the last activity ends. One edge of that
+    // length replaces them: same reachable states beyond, same costs. The DR4 horizon allows it (H >= d_min + 1, so
+    // the landing node keeps slack >= 1). HBAE re-creates the skipped nodes as CLOSED meet-only nodes
+    // (RCPSP_BiEnv::GetSuccessors, BAE_RCPSP.h), so this side still holds a cut at every integer time.
+    int dMin = kNoHorizon; bool anyReady = false;
+    for (const auto& pr : avilableTransitionIndices) { if (pr.second == 0) anyReady = true; dMin = std::min(dMin, (int)pr.second); }
+    int step = 1;
+    if (!anyReady && g_tt2_waitjump) {
+      if (dMin < kNoHorizon) step = dMin;
+      else for (const auto& a : nodeID.activeTransitionIndices) step = std::max(step, (int)a.second);
+    }
+    const short landSlack = (slack < 0) ? (short)-1 : (slack >= kNoHorizon) ? kNoHorizon : (short)(slack - (step - 1));
+    if (g_tt2_dr4 && landSlack < 1) ++g_tt2_wait_cut;      // the wait child could never start anything: dominated
+    else {
+      neighbors.emplace_back(RCPSPState_TT2(nodeID, (short)step, TT2WaitTag{}));
+      neighbors.back().waitSlack = landSlack;
+      ++g_tt2_wait_edges;
+      if (!anyReady) ++g_tt2_wait_pass;
+      g_tt2_wait_jumped += step - 1;
+    }
   }
   // successor-cache store: the firing RECIPES (post-DR4/symmetry, BEFORE stored-state dominance).
   // Tiny (a few (transId,delta) pairs per child), no states. Reset the entry if a different
@@ -1724,6 +1801,8 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
   }
   }  // end if(!_succHit): generation is skipped entirely on a cache hit
+  if (_prof && !_succHit) g_prof_gen_sec += secs_since(_pg0);
+  g_prof_children_raw += (long)neighbors.size();
 
   // Order-swap dominance (RCPSP_ORDERSWAP=1), TT2 form: drop the non-canonical
   // order of a frozen back-to-back pair whose swap is feasible (Hartmann 1998
@@ -1743,6 +1822,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // generated child, exactly like the CBS side does in RCPSP_CBS::GetSuccessors:
   // a child dominated by an earlier state (same scheduled set, no-later releases)
   // is dropped and never enqueued. Skyline thinning is folded into the insert.
+  if (_prof && g_tt2_dr5) _pd0 = std::chrono::steady_clock::now();
   if (g_tt2_dr5) {
     auto& tab = get_tt2_dominance_table();
     size_t w = 0;
@@ -1754,6 +1834,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
     neighbors.resize(w);
   }
+  if (_prof && g_tt2_dr5) g_prof_dr5_sec += secs_since(_pd0);
   // Upper-bound (incumbent) pruning (RCPSP_TT2_UB=1): drop any child whose f = g + h
   // STRICTLY exceeds the SGS-seeded feasible incumbent, before it is enqueued. Sound
   // with TT2's consistent heuristic (optimal-path f <= opt <= incumbent, so '>' never
@@ -1769,6 +1850,8 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     }
     neighbors.resize(w);
   }
+  g_prof_children_kept += (long)neighbors.size();
+  if (_prof) g_prof_succ_sec += secs_since(_pt0);
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;
 
@@ -1983,8 +2066,10 @@ inline double singleResViaTT2(const RCPSPState_TT2& node) {
 }
 
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
-  if (state1.hKnown) return state1.h;   // fused successor cache supplied h at reconstruction => no lookup, no recompute
-  if (state1.isDeltaZero){//||!state1.isCriticalInActive) {
+  ++g_prof_h_calls_all;
+  if (state1.hKnown) { ++g_prof_h_known; return state1.h; }   // fused successor cache supplied h at reconstruction => no lookup, no recompute
+  if (state1.isDeltaZero && !g_tt2_hfresh){//||!state1.isCriticalInActive) {
+    ++g_prof_h_deltazero;
     state1.h = state1.predessesor_h;
     return state1.h;
   }
@@ -2014,7 +2099,18 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     }
   }
 
-  double base = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));  // ← ADD THIS
+  double base;
+  if (g_tt2_prof) {   // the same two calls, timed separately (RCPSP_TT2_PROF)
+    auto _c0 = std::chrono::steady_clock::now();
+    const double _cpv = getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical);
+    auto _c1 = std::chrono::steady_clock::now();
+    const double _rsv = getforwardResource(tempUnfinished,state1.activeTransitionIndices);
+    g_prof_hcp_sec  += std::chrono::duration<double>(_c1 - _c0).count();
+    g_prof_hres_sec += secs_since(_c1);
+    base = std::max(_cpv, _rsv);
+  } else {
+    base = std::max(getForwardHcost(tempUnfinished,state1.activeTransitionIndices,state1.nextCritical),getforwardResource(tempUnfinished,state1.activeTransitionIndices));
+  }  // ← ADD THIS
 
   // Θ-tree resource-completion bound (RCPSP_TT2_THETA=1): a third admissible LB,
   // combined via max(). Independently admissible, so it only ever tightens h.
@@ -2099,6 +2195,8 @@ inline double RCPSP_TT2::GCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
 
 // FNV-1a 64-bit hash — true 64-bit avalanche, no birthday collision for 1M+ states.
 inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
+  ++g_prof_hash_calls; const bool _hprof = g_tt2_prof;
+  std::chrono::steady_clock::time_point _ht0; if (_hprof) _ht0 = std::chrono::steady_clock::now();
   constexpr uint64_t FNV_OFFSET = 14695981039346656037ULL;
   constexpr uint64_t FNV_PRIME  = 1099511628211ULL;
   uint64_t h = FNV_OFFSET;
@@ -2121,7 +2219,9 @@ inline uint64_t RCPSP_TT2::GetStateHash(const RCPSPState_TT2 &node) const {
     mix_int(active.first);
     mix_int(active.second);
   }
+  if (node.waitSlack != -1) { mix_int(-7); mix_int(node.waitSlack); }   // explicit-wait model with DR4: remaining waits
 
+  if (_hprof) g_prof_hash_sec += secs_since(_ht0);
   return h;
 }
 
@@ -2649,6 +2749,12 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       get_cbs_dominance_table<N>().is_killed(nodeID))
     return;
 
+  // CpCBS.h: with a REAL incumbent (root seed) a node whose f = makespan + h reaches it holds nothing better.
+  if (cpcbs::GeShift() && nodeID.h_cached && (double)nodeID.start_times[g_sink_id] + nodeID.h_cache >= (double)g_incumbent) {
+    ++cpcbs::st().ttPrunedAtExpand;
+    return;
+  }
+
   // Self-heal: states enter OPEN with their heavy conflict vectors stripped
   // (see HCost). Recompute them on demand at expansion; deterministic, so the
   // regenerated fields are identical to what was stripped.
@@ -2734,7 +2840,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       RCPSPState_CBS<N> s = std::move(work.back());
       work.pop_back();
       if (!seen.insert(s.start_times).second) continue;      // local duplicate
-      if (g_use_ub && s.start_times[g_sink_id] > g_incumbent) { ++g_ub_pruned; continue; }
+      if (g_use_ub && s.start_times[g_sink_id] > g_incumbent - cpcbs::GeShift()) { ++g_ub_pruned; continue; }
       short ru = -1;
       const bool hc = s.compute_first_conflict(ru);
       if (!hc) { neighbors.push_back(std::move(s)); continue; }   // goal child
@@ -2764,7 +2870,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       // child's own — and we already hold a feasible schedule at g_incumbent.
       // strict >: with a tight (datasheet==optimum) UB the makespan==UB
       // optimal goal must survive; a real feasible incumbent still tightens below.
-      if (g_use_ub && neighbors[i].start_times[g_sink_id] > g_incumbent) {
+      if (g_use_ub && neighbors[i].start_times[g_sink_id] > g_incumbent - cpcbs::GeShift()) {   // >= with a real incumbent (CpCBS.h)
         drop = true; ++g_ub_pruned;
       }
 
@@ -3422,6 +3528,13 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
       g_hierrs_time_sec += secs_since(_hrt0);
       if (hr_rem > h) { h = hr_rem; ++g_cbs_hierrs_better; }
     }
+  }
+  // CpCBS.h: root LB floor, deadline time-table propagation (RCPSP_CBS_TT), nogoods (RCPSP_CBS_NG). Admissible
+  // absolute makespan bound from start_times only; skipped for goals, dominated nodes and inside sub-solves.
+  if (cpcbs::Active() && state1.found_conflict && h < 1e6 && (cpcbs::TTOn() || cpcbs::ctx().rootLB > 0)) {
+    const int g_now = state1.start_times[g_sink_id];
+    const int nb = cpcbs::nodeBound(state1.start_times, g_now + (int)h);
+    if ((double)(nb - g_now) > h) h = (double)(nb - g_now);
   }
   g_heur_time_sec += secs_since(_hct0);
   ++g_heur_calls;

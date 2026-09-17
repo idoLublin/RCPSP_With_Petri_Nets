@@ -2,6 +2,7 @@
 // Created by idol on 29/12/2024.
 //
 // Your First C++ Program
+#include <queue>
 #include "Globals.h"
 #include <iostream>
 #include "RCPSPState.h"
@@ -9,12 +10,14 @@
 #include "../../HOG2/generic/TemplateAStar.h"
 #include "../../HOG2/generic/BAE.h"
 #include "../../HOG2/generic/EPEAStar.h"
+#include "BAE_RCPSP.h"   // local copy of HOG2 BAE* with a separate meet hash
 #include "AStarCompare.h"
 
 #include <filesystem>
 #include <ctime>            // timestamped, self-describing run filenames
 namespace fs = std::filesystem;
 #include "RCPSP.h"
+#include "RootBounds.h"     // RCPSP_ROOT_DLB / RCPSP_ROOT_SEED: root deadline lower bound + heuristic incumbent
 #include "LazyAStarCBS.h"   // RCPSP_LAZY=1: deferred-heuristic A* (compute conflicts/h at pop, not insertion)
 //****importent i changed GLUtil.h with recVec == operator abit****//
  //PetriExample petri;
@@ -28,6 +31,7 @@ namespace fs = std::filesystem;
 // #include <windows.h>
 #include <omp.h> // Include this at the top of Driver.cpp
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 #include <tuple>
 #include <map>
@@ -63,6 +67,8 @@ inline int serialSGS_makespan();   // feasible-schedule UB seed (defined below)
 int getDatasheetUB(int group, int exam, const std::string& problemType); // datasheet UB (defined below)
 void runBenchmarkTT2(const std::string& problemType);
 void runBenchmarkTT2BAE(const std::string& problemType);
+void runBenchmarkTT2HBAE(const std::string& problemType);
+int solveRCPSP_TT2_Trace(int group, int exam, const std::string& ptype = "j30");
 void runCbsInitF(const std::string& problemType);   // root-state f (no search) for heuristic eval
 void runTt2InitF(const std::string& problemType);   // TT2 root-state f (no search)
 void applyConfigNum(int n);
@@ -643,6 +649,44 @@ inline void reverseLoadedInstance() {
     for (auto& p : petri.places) if (p.name == oldSource) p.state = {{0}};
 }
 
+// Derive the source/sink place names for the CURRENTLY LOADED net.
+// initialstatename / finalstatename are GLOBALS (Globals.h). RCPSPState_TT2's constructor
+// WRITES them as it scans places and READS them in the same pass, so any place seen before
+// the real source is matched against whatever the PREVIOUS construction left behind. On the
+// reversed net that stale value is the forward source's name -- and reverseLoadedInstance
+// deliberately tokens the new source BY NAME MATCH -- so a stale global seeds a spurious
+// token at the new sink. Call this after loading/reversing and before building a root.
+static void deriveEndpointNames(std::string& ini, std::string& fin) {
+    for (const auto& pl : petri.places) {
+        if (pl.arcs_in.empty())  ini = pl.name;
+        if (pl.arcs_out.empty()) fin = pl.name;
+    }
+}
+// RCPSP_TT2_PROF columns, appended after `direction` on every TT2 row. Timers are 0 unless
+// RCPSP_TT2_PROF=1; counters and the f-bound checkpoints are always filled. On trivial-root
+// rows A* never ran, so the search columns are 0 / -1.
+//   profAstarSec   TemplateAStar::GetPath wall time      profSuccSec  whole GetSuccessors
+//   profAvailSec   available-transition scan             profGenSec   child construction (DR4, batch)
+//   profDR5Sec     DR5 check_and_insert                  profHashSec  GetStateHash
+//   profHeurCPSec / profHeurResSec  the two heuristic parts (heurTimeSec is their total + extras)
+//   open-list/bookkeeping time = profAstarSec - profSuccSec - heurTimeSec - profHashSec
+//   maxFExpanded   largest f expanded = proven lower bound; fAt*s the same at 1/10/60/120/240 s
+static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t itemsAtEnd, uint64_t uniqueExp, bool timedOut) {
+    auto& dt = get_tt2_dominance_table();
+    o << "," << (g_tt2_prof ? 1 : 0) << "," << g_prof_astar_sec << "," << g_prof_succ_sec << "," << g_prof_succ_calls
+      << "," << g_prof_avail_sec << "," << g_prof_gen_sec << "," << g_prof_dr5_sec << "," << g_prof_hash_sec << "," << g_prof_hash_calls
+      << "," << g_prof_hcp_sec << "," << g_prof_hres_sec << "," << g_prof_h_calls_all << "," << g_prof_h_known << "," << g_prof_h_deltazero
+      << "," << g_prof_children_raw << "," << g_prof_children_kept << "," << dt.bucketCount() << "," << dt.comparisons
+      << "," << openAtEnd << "," << itemsAtEnd << "," << uniqueExp << "," << g_prof_maxf;
+    for (int v : g_prof_f_at) o << "," << v;
+    o << "," << (timedOut ? 1 : 0) << "," << (cpFastOn() ? 1 : 0) << "," << (resFastOn() ? 1 : 0) << "," << (TT2DominanceTable::FastOn() ? 1 : 0) << "," << (TT2DominanceTable::SortedOn() ? 1 : 0) << "," << (genFastOn() ? 1 : 0) << "," << (TT2DominanceTable::MtfOn() ? 1 : 0)
+      << "," << (g_tt2_wait ? 1 : 0) << "," << g_tt2_wait_edges << "," << g_tt2_wait_cut << "," << dt.waitExempt << "," << g_tt2_wait_pass << "," << (g_tt2_waitjump ? 1 : 0) << "," << g_tt2_wait_jumped;
+    o << "," << (rootb::DlbOn() ? 1 : 0) << "," << (rootb::SeedOn() ? 1 : 0) << "," << rootb::info().lbPlain << "," << rootb::info().lb
+      << "," << rootb::info().lbSec << "," << (rootb::info().budgetHit ? 1 : 0) << "," << rootb::info().seed << "," << rootb::info().seedSec
+      << "," << (rootb::info().closed ? 1 : 0)   // RootBounds.h
+      << "," << (rootb::ProbeOn() ? 1 : 0) << "," << rootb::info().probeSeedIn << "," << rootb::info().probeBest << "," << rootb::info().probeNodes
+      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec;
+}
  int solveRCPSP_TT2(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving TT2: " << group<<":"<<exam << std::endl;
     count=0;
@@ -659,6 +703,7 @@ inline void reverseLoadedInstance() {
     if (g_tt2_singleres || g_tt2_ub || g_tt2_hierrs) { precomputeResourceInfo(); precomputeUpstream(); precomputeDownstream(); }
     if (g_tt2_hierrs) precomputeRSInflation();   // Kmin/Kmax profile + resolve target RS (needs g_instance_rs + resource_info)
 
+    deriveEndpointNames(initialstatename, finalstatename);   // before ANY root construction
     RCPSPState_TT2 first;
     RCPSPState_TT2 last = first;
 
@@ -668,6 +713,7 @@ inline void reverseLoadedInstance() {
     get_tt2_dominance_table().clear();   // DR5 table is per-instance (RCPSP_TT2_DR5=1)
     g_tt2_sym_pruned = 0;                // symmetry-breaking counter is per-instance
     g_tt2_dr4_pruned = 0;                // DR4 delayed-start prune counter is per-instance
+    g_tt2_wait_edges = 0; g_tt2_wait_cut = 0; g_tt2_wait_pass = 0; g_tt2_wait_jumped = 0;   // explicit-wait model counters are per-instance
     g_tt2_immsel_fired = 0;              // immediate-selection counter is per-instance
     g_tt2_freefire_fired = 0;            // free-fire counter is per-instance
     g_tt2_theta_better = 0;              // Θ-tree "bound beat existing" counter is per-instance
@@ -675,6 +721,14 @@ inline void reverseLoadedInstance() {
     g_tt2_hierrs_better = g_tt2_hierrs_calls = g_cbs_hierrs_cache_hits = 0;   // hier-RS LB telemetry, per-instance
     g_hierrs_time_sec = 0.0; g_cbs_hierrs_cache.clear();   // hier-RS timer + result cache, per-instance
     g_heur_time_sec = g_singleres_time_sec = g_mincut_time_sec = 0.0; g_heur_calls = 0; g_root_h = -1.0; g_shadow_set.clear(); g_shadow_probes = g_shadow_hits = 0; g_succ_probes = g_succ_hits = g_hcache_probes = g_hcache_hits = 0; if (g_subsolve_succ_cache || g_h_cache) get_tt2_cache().clear();  // always-on instrumentation, per-instance
+    // RCPSP_TT2_PROF: per-instance phase timers and counters (Globals.h)
+    g_prof_succ_sec = g_prof_avail_sec = g_prof_gen_sec = g_prof_dr5_sec = g_prof_hash_sec = 0.0;
+    g_prof_hcp_sec = g_prof_hres_sec = g_prof_astar_sec = 0.0;
+    g_prof_succ_calls = g_prof_hash_calls = g_prof_children_raw = g_prof_children_kept = 0;
+    g_prof_h_calls_all = g_prof_h_known = g_prof_h_deltazero = 0;
+    g_prof_maxf = -1; for (int& v : g_prof_f_at) v = -1;
+    g_prof_group = group; g_prof_exam = exam; g_prof_size = problemType.c_str(); g_prof_next_trace = 5.0;
+    g_prof_t0 = std::chrono::steady_clock::now();
     // TT2 UB (RCPSP_TT2_UB=1): seed the incumbent from a REAL feasible primal (serial
     // SGS, not the datasheet-optima cheat). Off => incumbent stays MAX => no pruning.
     g_ub_pruned = 0; g_incumbent = std::numeric_limits<short>::max();
@@ -695,11 +749,24 @@ inline void reverseLoadedInstance() {
         auto tstart = std::chrono::high_resolution_clock::now();
         std::vector<int> trivEst;
         int trivMakespan = 0;
-        if (tryTrivialRootSchedule_TT2(trivEst, trivMakespan)) {
+        rootb::reset();
+        bool closedByRootBounds = false;
+        bool trivOK = tryTrivialRootSchedule_TT2(trivEst, trivMakespan);
+        if (!trivOK && (rootb::DlbOn() || rootb::SeedOn() || rootb::ProbeOn()) && rootb::computeRootBounds()) {
+            // RCPSP_ROOT_SEED schedule meets the root lower bound => optimal without A*
+            closedByRootBounds = true; trivOK = true;
+            trivMakespan = rootb::info().seed;
+            trivEst.assign(RCPSPex.activities.size() + 1, 0);
+            for (size_t i = 0; i < rootb::info().seedStart.size(); ++i) trivEst[i + 1] = rootb::info().seedStart[i];
+        }
+        if (trivOK) {
             auto tend = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double> telapsed = tend - tstart;
             long peakMemKB = getPeakMemoryKB();
 
+            if (closedByRootBounds)
+                std::cout << "TT2 closed at root: seed schedule " << trivMakespan << " <= root lower bound " << std::max(rootb::info().lb, rootb::info().lbPlain) << " => ";
+            else
             std::cout << "TT2 trivial-at-root: EST schedule is resource-feasible => "
                       << "optimal makespan=" << trivMakespan
                       << " (0 expansions, A* skipped)" << std::endl;
@@ -724,7 +791,7 @@ inline void reverseLoadedInstance() {
                  << 0 << ","                       // expandNumber (A* never ran)
                  << 0 << ","                       // generatedNumber
                  << 0 << ","                       // depth
-                 << "TT2" << ","
+                 << (g_tt2_wait ? (g_tt2_reverse ? "TT2Wbwd" : "TT2Wfwd") : (g_tt2_reverse ? "TT2bwd" : "TT2fwd")) << ","
                  << problemType << ","
                  << peakMemKB << ","
                  << LB << ","
@@ -741,7 +808,7 @@ inline void reverseLoadedInstance() {
                  << g_tt2_gendesc << ","
                  << g_tt2_sym_tiebreak << ","
                  << astar_timeout_seconds << ","
-                 << 1 << ","                       // trivialAtRoot
+                 << (closedByRootBounds ? 0 : 1) << ","   // trivialAtRoot (0 when closed by RootBounds.h: see closedAtRoot)
                  << (g_tt2_theta ? 1 : 0) << ","   // useThetaBound
                  << g_tt2_theta_better << ","      // thetaBoundBetter (0 here: A* never ran)
                  << g_tt2_dr4 << "," << g_tt2_dr4_pruned << ","   // useTT2DR4, dr4Pruned
@@ -752,7 +819,9 @@ inline void reverseLoadedInstance() {
                  << g_root_h << "," << g_heur_time_sec << "," << g_heur_calls << "," << g_singleres_time_sec << "," << subsolver_name() << "," << g_shadow_probes << "," << g_shadow_hits   // ...,subsolver,shadowProbes,shadowHits
                  << "," << (g_tt2_ub ? 1 : 0) << "," << g_ub_pruned   // useTT2UB,ubPruned
                  << "," << (g_tt2_hierrs ? 1 : 0) << "," << g_tt2_hierrs_better << "," << g_tt2_hierrs_calls << "," << g_hierrs_time_sec << "," << g_cbs_hierrs_cache_hits   // useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits
-                 << "\n";
+                 << "," << (g_tt2_reverse ? "bwd" : "fwd");   // direction: which net was searched
+            writeTT2ProfCols(file, 0, 0, 0, false);   // RCPSP_TT2_PROF columns (A* never ran)
+            file << "\n";
             return 0;
         }
     }
@@ -768,7 +837,12 @@ inline void reverseLoadedInstance() {
     std::chrono::duration<double> elapsed;
 
     auto start = std::chrono::high_resolution_clock::now();
+   g_prof_t0 = std::chrono::steady_clock::now(); g_prof_next_trace = 5.0;
+   const auto rootSavedTO = astar_timeout_seconds;   // root bounds already used part of the per-instance budget
+   if (rootb::seconds() > 0) astar_timeout_seconds = std::max<decltype(rootSavedTO)>(1, rootSavedTO - (decltype(rootSavedTO))std::ceil(rootb::seconds()));
    astar.GetPath(&as1, first, last, path);
+   astar_timeout_seconds = rootSavedTO;
+   g_prof_astar_sec = secs_since(g_prof_t0);
     // // 1. Setup the search
     // astar.InitializeSearch(&as1, first, last, path);
     //
@@ -909,15 +983,21 @@ inline void reverseLoadedInstance() {
         std::cout << "TT2 DR4: successors pruned = " << g_tt2_dr4_pruned << std::endl;
     if (g_tt2_immsel)
         std::cout << "TT2 IMMSEL: forced-single-branch nodes = " << g_tt2_immsel_fired << std::endl;
+    if (g_tt2_prof)
+        std::cout << "TT2 PROF: astar=" << g_prof_astar_sec << "s succ=" << g_prof_succ_sec << " (avail=" << g_prof_avail_sec
+                  << " gen=" << g_prof_gen_sec << " dr5=" << g_prof_dr5_sec << ") heur=" << g_heur_time_sec
+                  << " (cp=" << g_prof_hcp_sec << " res=" << g_prof_hres_sec << ") hash=" << g_prof_hash_sec
+                  << " other=" << (g_prof_astar_sec - g_prof_succ_sec - g_heur_time_sec - g_prof_hash_sec)
+                  << "s maxF=" << g_prof_maxf << " children raw/kept=" << g_prof_children_raw << "/" << g_prof_children_kept << std::endl;
 
     std::ofstream file(filename, std::ios::app);
-    file << group << "," << exam << "," << elapsed.count() << ","
+    file << group << "," << exam << "," << (elapsed.count() + rootb::seconds()) << ","   // + RootBounds.h time
          << (!path.empty() ? "True" : "False") << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
          << path.size() << ","
-        << "TT2"<< ","
+        << (g_tt2_wait ? (g_tt2_reverse ? "TT2Wbwd" : "TT2Wfwd") : (g_tt2_reverse ? "TT2bwd" : "TT2fwd")) << ","
         << problemType<< ","
         << peakMemKB << ","  // ADD THIS
         << LB << ","  // ADD THIS
@@ -947,7 +1027,9 @@ inline void reverseLoadedInstance() {
                  << g_root_h << "," << g_heur_time_sec << "," << g_heur_calls << "," << g_singleres_time_sec << "," << subsolver_name() << "," << g_shadow_probes << "," << g_shadow_hits   // ...,subsolver,shadowProbes,shadowHits
                  << "," << (g_tt2_ub ? 1 : 0) << "," << g_ub_pruned   // useTT2UB,ubPruned
                  << "," << (g_tt2_hierrs ? 1 : 0) << "," << g_tt2_hierrs_better << "," << g_tt2_hierrs_calls << "," << g_hierrs_time_sec << "," << g_cbs_hierrs_cache_hits   // useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits
-         << "\n";
+                 << "," << (g_tt2_reverse ? "bwd" : "fwd");   // direction: which net was searched
+    writeTT2ProfCols(file, astar.GetNumOpenItems(), (uint64_t)astar.GetNumItems(), astar.GetUniqueNodesExpanded(), path.empty());
+    file << "\n";
 
     return 0;
 }
@@ -1627,6 +1709,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     // ── RCPSP_WARMSTART: one-time inflated-resource solve to seed branch order ──
     // Runs before the UB reset/seed below so it can freely reset the incumbent and
     // per-instance caches; it restores everything it touches.
+    cpcbs::resetInstance();   // CpCBS.h hooks stay off (built=false) while warm start swaps RCPSPex
     if (g_use_warmstart) computeWarmstartOrder<N>();
 
     // ── Upper-bound pruning: per-instance reset + SGS seed ──
@@ -1648,11 +1731,25 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     g_orderswap_cand = 0;                     // order-swap measurement (RCPSP_ORDERSWAP), per-instance
     g_nmd_overshoot_events = 0; g_nmd_lost_siblings = 0;   // NMD overshoot diagnostic, per-instance
     LB = 0;   // proven-LB accumulator (TemplateAStar: LB = max(LB, popped f))
-    if (g_use_ub) {
+    // CpCBS.h step 1: with RootBounds.h flags the incumbent is the verified root seed, not the datasheet.
+    cpcbs::resetInstance();
+    rootb::computeRootBounds();   // no-op (and 0 s) when RCPSP_ROOT_DLB / _SEED / _PROBE are all off
+    if (cpcbs::RootOn()) {
+        const auto& ri = rootb::info();
+        if (ri.seed > 0) {
+            g_use_ub = true; g_incumbent = (short)ri.seed;
+            cpcbs::st().realInc = true; cpcbs::st().ubSource = 2;
+        }
+        cpcbs::st().closedAtRoot = ri.closed;
+        std::cout << "UB seed (root bounds): " << ri.seed << " root LB " << std::max(ri.lb, ri.lbPlain)
+                  << (ri.closed ? " -> closed at root" : "") << std::endl;
+    } else if (g_use_ub) {
         int ub = getDatasheetUB(group, exam, problemType);
-        if (ub > 0) g_incumbent = (short)ub;
+        if (ub > 0) { g_incumbent = (short)ub; cpcbs::st().ubSource = 1; }
         std::cout << "UB seed (datasheet): " << ub << std::endl;
     }
+    if (cpcbs::RootOn() || cpcbs::TTOn())
+        cpcbs::buildInstance(rootb::DlbOn() ? std::max(rootb::info().lb, rootb::info().lbPlain) : -1);
 
     RCPSP_CBS<N> as1;
 
@@ -1679,7 +1776,11 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     // GetNodesTouched and share the AStarOpenClosed data type, so the rest of the
     // function (and the wrong-answer debug's openClosedList access) is unchanged.
     long nExpanded = 0, nTouched = 0;
-    if (g_use_lazy) {
+    const auto cbsSavedTO = astar_timeout_seconds;   // root bounds already used part of the per-instance budget
+    if (rootb::seconds() > 0) astar_timeout_seconds = std::max<decltype(cbsSavedTO)>(1, cbsSavedTO - (decltype(cbsSavedTO))std::ceil(rootb::seconds()));
+    if (cpcbs::st().closedAtRoot) {
+        // seed <= root LB: optimal without search; the UB-exhaust block below reports the incumbent
+    } else if (g_use_lazy) {
         LazyAStarCBS<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> lazyAstar;
         lazyAstar.GetPath(&as1, first, last, path);
         nExpanded = (long)lazyAstar.GetNodesExpanded();
@@ -1715,6 +1816,8 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
         }
     }
 
+    astar_timeout_seconds = cbsSavedTO;   // restored only after the UB-exhaust timeout test above
+
     if (!path.empty() || first.rvs_activities_pool.empty()) {
         RCPSPState_CBS<N>& finalState = path.empty() ? first : path.back();
 
@@ -1739,6 +1842,11 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
 
     std::cout << "Nodes Expanded: " << nExpanded << std::endl;
     std::cout << "Nodes Touched: " << nTouched << std::endl;
+    if (cpcbs::RootOn() || cpcbs::TTOn())
+        std::cout << "CPCBS ubSource=" << cpcbs::st().ubSource << " closedAtRoot=" << cpcbs::st().closedAtRoot
+                  << " ttCalls=" << cpcbs::st().ttCalls << " ttRaised=" << cpcbs::st().ttRaised
+                  << " prunedAtExpand=" << cpcbs::st().ttPrunedAtExpand << " ngLearned=" << cpcbs::st().ngLearned
+                  << " ngHits=" << cpcbs::st().ngHits << " ttSec=" << cpcbs::st().ttSec << " rootSec=" << rootb::seconds() << std::endl;
 
     // ── Per-rule prune breakdown (debug) ──
     {
@@ -1764,7 +1872,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
 
     file << group << ","
          << exam << ","
-         << elapsed.count() << ","
+         << (elapsed.count() + rootb::seconds()) << ","   // + RootBounds.h time
          << makespan << ",";
 
     if (problemType == "j30") {
@@ -1993,7 +2101,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << (g_warmstart_ok ? 1 : 0) << ","
          << g_warmstart_infl_mk << ","
          << root_f_csv << ","
-         << (root_mk_csv + (int)LB) << ","
+         << std::min(root_mk_csv + (int)LB, cpcbs::st().realInc ? (int)g_incumbent : INT_MAX) << ","   // provenLB; with a real incumbent, nodes popped at f >= incumbent are pruned, not bounds
          << g_warmstart_sec << ","
          << g_use_dr4 << ","
          << (g_cbs_theta ? 1 : 0) << ","   // useThetaBound
@@ -2030,7 +2138,11 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << g_cbs_hierrs_better << ","                      // hierRsBetter
          << g_cbs_hierrs_calls << ","                       // hierRsCalls
          << g_hierrs_time_sec << ","                        // hierRsTimeSec
-         << g_cbs_hierrs_cache_hits << "," << subsolver_name() << "," << g_shadow_probes << "," << g_shadow_hits << "\n";   // hierRsCacheHits,subsolver,shadowProbes,shadowHits
+         << g_cbs_hierrs_cache_hits << "," << subsolver_name() << "," << g_shadow_probes << "," << g_shadow_hits   // hierRsCacheHits,subsolver,shadowProbes,shadowHits
+         << "," << cpcbs::st().ubSource << "," << (rootb::DlbOn() ? 1 : 0) << "," << (rootb::SeedOn() ? 1 : 0) << "," << (rootb::ProbeOn() ? 1 : 0)
+         << "," << std::max(rootb::info().lb, rootb::info().lbPlain) << "," << rootb::info().seed << "," << rootb::seconds() << "," << (cpcbs::st().closedAtRoot ? 1 : 0)
+         << "," << (cpcbs::TTOn() ? 1 : 0) << "," << (cpcbs::NGOn() ? 1 : 0) << "," << cpcbs::TTSteps() << "," << cpcbs::st().ttCalls << "," << cpcbs::st().ttRaised
+         << "," << cpcbs::st().ttPrunedAtExpand << "," << cpcbs::st().ttSec << "," << cpcbs::st().ngLearned << "," << cpcbs::st().ngHits << "," << cpcbs::ctx().ng.size() << "," << (cpcbs::FloorOn() ? 1 : 0) << "," << (cpcbs::TTFull() ? 1 : 0) << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << "\n";   // CpCBS.h
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
         // exit(0); // disabled: log wrong answers and continue benchmark
@@ -2250,10 +2362,10 @@ int solveoldRCPSP(int group, int exam, const std::string& filename, const std::s
 // Compact tag of the ACTIVE feature flags, so a filename says what it ran instead
 // of an opaque _1/_2/_3 counter. Adapts to whatever is on (CBS or TT2). Empty when
 // nothing beyond the base config is enabled (e.g. plain baseline).
-static std::string activeFeatureTag() {
+// Feature tags for result file names, one per solver family, from the flags actually in force.
+static std::string cbsFeatureTag() {
     std::string t;
     auto add = [&](const std::string& s){ if(!t.empty()) t += "-"; t += s; };
-    // CBS dominance / experiment flags
     if (setting.use_dr5) add(g_dom_rule==DOM_BP?"bp":g_dom_rule==DOM_DR5?"dr5":g_dom_rule==DOM_DR5S?"dr5s":"both");
     if (g_use_hybrid)    add("hyb");
     if (g_use_ub)        add("ub");
@@ -2263,12 +2375,80 @@ static std::string activeFeatureTag() {
     if (g_use_bidir)     add("bidir");
     if (g_use_lean)      add("lean");
     if (g_use_inline)    add("inl");
-    // TT2 flags
-    if (g_tt2_dr5)       add("tt2dr5");
+    if (g_use_setdelay)  add("setdelay");
+    if (g_use_warmstart) add("warmstart");
+    if (g_use_nmd)       add("nmd");
+    if (rootb::DlbOn())  add("rootdlb");
+    if (rootb::SeedOn()) add("seedub");
+    if (rootb::ProbeOn()) add("probe");
+    if (rootb::PairOn()) add("pair");
+    if (rootb::LnsOn())  add(rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
+    if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY")) add("only");
+    if (cpcbs::TTOn())   add("tt");
+    if (cpcbs::NGOn())   add("ng");
+    if (!cpcbs::FloorOn()) add("nofloor");
+    if (cpcbs::TTOn() && !cpcbs::TTFull()) add("tt0");
+    return t;
+}
+static std::string tt2FeatureTag() {
+    std::string t;
+    auto add = [&](const std::string& s){ if(!t.empty()) t += "-"; t += s; };
+    if (g_tt2_wait)      add(g_tt2_waitjump ? "wait" : "wait-nojump");
+    if (g_tt2_dr5)       add("dr5");
+    if (g_tt2_dr4)       add("dr4");
     if (g_tt2_batch)     add("batch");
     if (g_tt2_sym)       add("sym");
     if (g_tt2_gendesc)   add("gendesc");
     if (g_tt2_theta)     add("theta");
+    if (g_tt2_prof)      add("prof");
+    if (rootb::DlbOn())  add("rootdlb");
+    if (rootb::SeedOn()) add("seedub");
+    if (rootb::ProbeOn()) add("probe");
+    if (rootb::PairOn()) add("pair");
+    if (rootb::LnsOn())  add(rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
+    if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY")) add("only");
+    return t;
+}
+// HBAE / BAE read their settings from RCPSP_BI_* at solve time, so the tag reads the same variables
+// with the same defaults.
+static std::string biFeatureTag() {
+    auto env = [](const char* k, const char* d){ const char* e = std::getenv(k); return std::string(e ? e : d); };
+    std::string t = (env("RCPSP_BI_PRIO", "0") != "0") ? "fgh" : "b2g";
+    if (env("RCPSP_TT2_WAIT", "0") != "0") {   t += (env("RCPSP_TT2_WAITJUMP", "1") != "0") ? "-wait" : "-wait-nojump";
+        const std::string mo = env("RCPSP_BI_MEETONLY", "both"); if (mo != "both") t += "-meetonly" + mo; }
+    const std::string m = env("RCPSP_BI_DR5", "3");
+    if (m != "0") t += "-dr5" + std::string(m == "3" ? "both" : m == "1" ? "fwd" : m == "2" ? "bwd" : m);
+    if (env("RCPSP_BI_DR4", "0") != "0") {     t += "-dr4";
+        const std::string s4 = env("RCPSP_BI_DR4SIDE", "both"); if (s4 == "fwd" || s4 == "bwd") t += s4; }
+    if (env("RCPSP_BI_BATCH", "0") != "0")     t += "-batch";
+    if (env("RCPSP_BI_NIP", "1") == "0")       t += "-nonip";
+    if (env("RCPSP_BI_DRAINCERT", "0") != "0") t += "-draincert";
+    if (m == "0" && env("RCPSP_BI_DR4", "0") == "0") t += "-nodr";
+    if (env("RCPSP_BI_ALT", "0") != "0")        t += "-alt";
+    if (env("RCPSP_BI_ACTIVETB", "0") != "0")   t += "-activetb";
+    if (env("RCPSP_BI_HFRESH", "1") != "0")     t += "-hfresh";
+    if (env("RCPSP_BI_DZFIRST", "1") != "0")    t += "-dzfirst";
+    if (rootb::DlbOn())                         t += "-rootdlb";
+    if (rootb::SeedOn())                        t += "-seedub";
+    if (rootb::ProbeOn())                       t += "-probe";
+    if (rootb::PairOn())                        t += "-pair";
+    if (rootb::LnsOn())                         t += std::string("-") + (rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
+    if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY"))                        t += "-only";
+    if (env("RCPSP_BI_MINF_HEAP", "1") == "0")  t += "-minfscan";
+    { const std::string bw = env("RCPSP_BI_BWD", "");
+      if (bw == "unfire" || bw == "1") { t += "-unfire"; if (env("RCPSP_BWD_FULLVERIFY", "1") == "0") t += "-lightverify"; } }
+    if (env("RCPSP_BI_HFUSE", "0") != "0")  t += "-hfuse1";
+    if (env("RCPSP_BI_STRHASH", "0") != "0") t += "-strhash";
+    if (env("RCPSP_CP_FAST", "1") == "0")    t += "-cpmap";
+    if (env("RCPSP_RES_FAST", "1") == "0")   t += "-resmap";
+    if (env("RCPSP_DR5_FAST", "1") == "0")   t += "-dr5vec";
+    if (env("RCPSP_DR5_SORTED", "0") != "0") t += "-dr5sorted";
+    if (env("RCPSP_GEN_FAST", "1") == "0")   t += "-genref";
+    if (env("RCPSP_DR5_MTF", "1") == "0")    t += "-dr5nomtf";
+    if (env("RCPSP_BI_STOP", "avg") == "max") t += "-stopmax";
+    if (env("RCPSP_BI_AUDIT", "0") != "0")      t += "-audit";
+    if (env("RCPSP_BI_DOMMEET", "0") != "0") { t += "-dommeet"; if (env("RCPSP_BI_MEET_GHOST", "0") != "0") t += "-ghost";
+                                                if (env("RCPSP_BI_SHIFTMEET", "0") != "0") t += "-shift"; }
     return t;
 }
 
@@ -2281,25 +2461,76 @@ static std::string nowStamp() {
     return std::string(buf);
 }
 
+// ── RESULT FILES: one folder, readable names ─────────────────────────────────
+// FOLDER: every CSV goes to ONE place whatever directory the run starts in: RCPSP_RESULTS_DIR if set,
+// else <repo>/new_results, the repo root being the first ancestor of the working directory that
+// contains HOG2/RCPSP (j30 runs start in HOG2/RCPSP, j60/j90 at the root). An absolute folder argument
+// is kept as given.
+static std::string resultsDir(const std::string& folder) {
+    if (const char* e = std::getenv("RCPSP_RESULTS_DIR")) if (*e) return e;
+    if (fs::path(folder).is_absolute()) return folder;
+    std::error_code ec;
+    fs::path p = fs::current_path(ec);
+    for (int i = 0; i < 6 && !ec && !p.empty(); ++i) {
+        if (fs::exists(p / "HOG2" / "RCPSP", ec)) return (p / folder).string();
+        if (p == p.parent_path()) break;
+        p = p.parent_path();
+    }
+    return folder;
+}
+
+// NAME: <solver>_<size>_<info>_vNN.csv, e.g. TT2fwd_j60_dr5-dr4-batch-prof_v01.csv or
+// HBAE_j30_fgh-dr5both-dr4-nonip-draincert_v01.csv. The solver and size come from the call site's
+// baseName ("output_tt2rev_j60_" -> TT2bwd, j60); <info> is any remaining baseName tokens plus the
+// feature tag; vNN is the first free version. The file is created at once so parallel runs cannot
+// take the same name.
 std::string getNextFilename(const std::string& folder, const std::string& baseName, const std::string& extension) {
-    // Ensure folder exists
-    if (!fs::exists(folder)) {
-        fs::create_directories(folder);
+    const std::string dir = resultsDir(folder);
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+
+    std::vector<std::string> tok;
+    { std::string cur;
+      for (char ch : baseName) { if (ch == '_') { if (!cur.empty()) tok.push_back(cur); cur.clear(); } else cur += ch; }
+      if (!cur.empty()) tok.push_back(cur); }
+    if (!tok.empty() && tok[0] == "output") tok.erase(tok.begin());
+
+    std::string size;
+    for (size_t i = 0; i < tok.size(); ++i) {
+        const std::string& x = tok[i];
+        bool isSize = x.size() >= 2 && x[0] == 'j';
+        for (size_t k = 1; isSize && k < x.size(); ++k) isSize = (x[k] >= '0' && x[k] <= '9');
+        if (isSize) { size = x; tok.erase(tok.begin() + i); break; }
     }
 
-    // baseName (e.g. "output_j30_cfg8_") + active-feature tag + timestamp, so the
-    // name is self-documenting and sorts chronologically. The old numeric counter
-    // is kept only to break same-second collisions.
-    const std::string tag = activeFeatureTag();
-    std::string stem = baseName + (tag.empty() ? "" : tag + "_") + nowStamp();
-
-    std::string newFilename = folder + "/" + stem + extension;
-    int count = 2;
-    while (fs::exists(newFilename)) { // same-second collision -> disambiguate
-        newFilename = folder + "/" + stem + "_" + std::to_string(count) + extension;
-        count++;
+    static const std::map<std::string, std::string> solverOf = {
+        {"tt2", "TT2fwd"}, {"tt2rev", "TT2bwd"}, {"tt2one", "TT2one"}, {"tt2oldbwd", "TT2oldbwd"},
+        {"tt2bwd", "TT2bwdmeet"}, {"tt2bae", "BAE"}, {"tt2hbae", "HBAE"}, {"dumpdom", "CBSdumpdom"}};
+    std::string solver = "CBS", family = "cbs";
+    if (!tok.empty() && tok[0] == "initF") {
+        const bool cbs = tok.size() > 1 && tok[1] == "cbs";
+        solver = cbs ? "initFCBS" : "initFTT2"; family = cbs ? "cbs" : "tt2";
+        tok.erase(tok.begin(), tok.begin() + std::min<size_t>(2, tok.size()));
+    } else if (!tok.empty() && solverOf.count(tok[0])) {
+        solver = solverOf.at(tok[0]);
+        family = (solver == "HBAE" || solver == "BAE") ? "bi" : (solver.rfind("TT2", 0) == 0) ? "tt2" : "cbs";
+        tok.erase(tok.begin());
     }
-    return newFilename;
+
+    std::string info;
+    for (const auto& x : tok) info += (info.empty() ? "" : "-") + x;
+    const std::string tag = (family == "bi") ? biFeatureTag() : (family == "tt2") ? tt2FeatureTag() : cbsFeatureTag();
+    if (!tag.empty()) info += (info.empty() ? "" : "-") + tag;
+    if (info.empty()) info = "base";
+    const std::string stem = solver + (size.empty() ? "" : "_" + size) + "_" + info;
+
+    for (int v = 1; ; ++v) {
+        char vb[16]; std::snprintf(vb, sizeof vb, "_v%02d", v);
+        const std::string f = dir + "/" + stem + vb + extension;
+        if (fs::exists(f, ec)) continue;
+        { std::ofstream reserve(f); }
+        return f;
+    }
 }
 
 // RCPSP_OUT overrides the auto-generated output path with one explicit file, so
@@ -2339,7 +2570,7 @@ void runCrashDiagnostic() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
          << std::endl;
     file.close();
 
@@ -2398,7 +2629,7 @@ void runWrongAnswerDebug() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
          << std::endl;
     file.close();
 
@@ -2443,7 +2674,7 @@ void runNonMinimalDelayTest() {
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
 
     setting.use_non_minimal_delay = true;
 
@@ -2673,7 +2904,7 @@ void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam)
     { std::ofstream h(f);
       h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
         << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits\n"; }
+        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
     for (int g = startG; g <= endG; g++) {
         std::cout << "\n=== sweep cfg" << cfg << " group " << g << " exam " << exam << " ===\n";
         solveRCPSP_CBS(g, exam, f, ptype);
@@ -3234,6 +3465,55 @@ static std::string meetKeyReversedTranslatedNorm(const RCPSPState_TT2& b, int NT
     for (auto& p : av) { k += std::to_string(p.first); k += ':'; k += std::to_string(p.second); k += ';'; }
     return k;
 }
+// ── ADMISSIBILITY PROBE ON THE OPTIMAL PATH ─────────────────────────────────
+// For any node n on an OPTIMAL path, g*(n) + h*(n) = C*, so an admissible h must give
+// g(n) + h(n) <= C* at EVERY node of that path. HBAE prunes anything with f >= U (the
+// incumbent). If some optimal-path node reads f > C*, HBAE discards it, the side can
+// never complete the optimal schedule, it drains, and the drain certifies the stale
+// incumbent -- exactly the j30 3:9 failure (drains at 66, true optimum 65).
+// Runs each side's own A* to optimality, then walks the returned path.
+// tt2admis <type> <group> <exam>
+static void tt2AdmisSide(const char* label, bool reversed, int group, int exam, const std::string& ptype) {
+    getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+    if (reversed) reverseLoadedInstance();
+    { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs = RSL[((group-1)%4+4)%4]; }
+    deriveEndpointNames(initialstatename, finalstatename);
+    get_tt2_dominance_table().clear();
+    RCPSP_TT2 env; RCPSPState_TT2 first; RCPSPState_TT2 last = first;
+    last.g = HCost_TT2(last, first);
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+    astar.GetPath(&env, first, last, path);
+    if (path.empty()) { std::cout << "  " << label << ": no path (timeout)" << std::endl; return; }
+    const int C = (int)path.back().g;
+    int worst = INT_MIN, worstAt = -1, violations = 0;
+    std::cout << "  " << label << " optimum C*=" << C << "  path length=" << path.size() << std::endl;
+    for (size_t i = 0; i < path.size(); ++i) {
+        RCPSPState_TT2 x = path[i], d0 = path[i];
+        const int g = (int)path[i].g, h = (int)env.HCost(x, d0), f = g + h;
+        if (f > C) { ++violations;
+            if (violations <= 10)
+                std::cout << "    VIOLATION node " << i << ": g=" << g << " h=" << h
+                          << " f=" << f << " > C*=" << C << std::endl; }
+        if (f - C > worst) { worst = f - C; worstAt = (int)i; }
+    }
+    std::cout << "  " << label << ": violations=" << violations << "/" << path.size()
+              << "   worst f-C* = " << worst << " (node " << worstAt << ")"
+              << (violations ? "   => HEURISTIC OVERESTIMATES ON THE OPTIMAL PATH"
+                             : "   => admissible along this path") << std::endl;
+}
+int solveRCPSP_TT2_Admis(int group, int exam, const std::string& ptype="j30") {
+    std::cout << "=== ADMISSIBILITY ON THE OPTIMAL PATH " << group << ":" << exam << " ===" << std::endl;
+    g_instance_deadline = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(astar_timeout_seconds);
+    g_instance_deadline_set = true;
+    bool s5=g_tt2_dr5, s4=g_tt2_dr4, sb=g_tt2_batch;
+    tt2AdmisSide("FORWARD ", false, group, exam, ptype);
+    tt2AdmisSide("REVERSED", true,  group, exam, ptype);
+    g_tt2_dr5=s5; g_tt2_dr4=s4; g_tt2_batch=sb;
+    return 0;
+}
+
 int solveRCPSP_TT2_Meet(int group, int exam, const std::string& ptype="j30") {
     std::cout << "=== MEET validation " << group << ":" << exam << " ===" << std::endl;
     int NT = 0, fwdOpt = -1;
@@ -3247,6 +3527,9 @@ int solveRCPSP_TT2_Meet(int group, int exam, const std::string& ptype="j30") {
     const bool pruneIdx = std::getenv("RCPSP_MEET_PRUNEIDX")!=nullptr;
     uint64_t prunedIndexedF=0, prunedIndexedB=0;
     std::unordered_map<std::string,int> fwdMap;   // meet key -> min g_fwd over closed states
+    double rootH = -1;
+    std::vector<std::tuple<std::string,int,int>> pathCuts;   // optimal-path cuts: (key, g, #started)
+    std::unordered_map<std::string,int> bAll;           // EVERY reversed closed key -> min g_b
     auto setRS = [&](){ static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs=RSL[((group-1)%4+4)%4]; };
     g_instance_deadline = std::chrono::steady_clock::now()+std::chrono::seconds(astar_timeout_seconds); g_instance_deadline_set=true;
     // ---- FORWARD ----
@@ -3262,6 +3545,15 @@ int solveRCPSP_TT2_Meet(int group, int exam, const std::string& ptype="j30") {
         astar.GetPath(&env, first, last, path);
         g_tt2_dr_prune_observer = nullptr;
         fwdOpt = path.empty()? -1 : (int)path.back().g;
+        { RCPSPState_TT2 r, d0; rootH = env.HCost(r, d0); }
+        // DEPTH, not time, is what the "two shallower searches" argument is about: one long
+        // activity can eat most of the makespan while the search barely advances. So position a
+        // cut by how many activities have STARTED (finished + active), not by g.
+        for (auto& st : path) {
+            int started = (int)st.activeTransitionIndices.size();
+            for (int q=1; q<=NT; q++) if (st.finishedActivitiys.test(q)) ++started;
+            pathCuts.push_back({meetKeyForwardNorm(st, NT), (int)st.g, started});
+        }
         int closed=0;
         for (int i=0;i<astar.GetNumItems();i++){ const auto& it=astar.GetItem(i); if (it.where!=kClosedList) continue; ++closed;
             std::string kk=meetKeyForwardNorm(it.data, NT); int gg=(int)it.g;
@@ -3285,6 +3577,7 @@ int solveRCPSP_TT2_Meet(int group, int exam, const std::string& ptype="j30") {
         revOpt = path.empty()? -1 : (int)path.back().g;
         for (int i=0;i<astar.GetNumItems();i++){ const auto& it=astar.GetItem(i); if (it.where!=kClosedList) continue;
             std::string kk=meetKeyReversedTranslatedNorm(it.data, NT); int gb=(int)it.g;
+            { auto q=bAll.find(kk); if (q==bAll.end()||gb<q->second) bAll[kk]=gb; }
             if (fwdMap.count(kk)){ auto m=matchedBestGb.find(kk); if (m==matchedBestGb.end()||gb<m->second) matchedBestGb[kk]=gb; } }
     }
     // classify matches: INTERIOR (g_f>0 AND g_b>0) = a real middle meet; else an endpoint
@@ -3304,6 +3597,36 @@ int solveRCPSP_TT2_Meet(int group, int exam, const std::string& ptype="j30") {
     if (interior) std::cout << " interiorMinSum=" << mmInt << " interior g_f range=[" << gfMinInt << ".." << gfMaxInt << "]";
     std::cout << std::endl;
     if (pruneIdx) std::cout << "  prune-indexed states: fwd=" << prunedIndexedF << " rev=" << prunedIndexedB << std::endl;
+    // WHERE ALONG THE SCHEDULE can we meet? Only cuts on an OPTIMAL path can produce a meet at
+    // the optimum, so walk the forward optimal path and ask, per cut, whether the reversed search
+    // ever closed the matching state. Position = g_f/opt: 0 = at the source, 1 = at the goal,
+    // 0.5 = the true middle, which is what the "two shallower searches" argument needs.
+    if (fwdOpt > 0 && !pathCuts.empty()) {
+        int nCut=0, nMatch=0; std::vector<double> posD, posG;
+        int dec[10]={0,0,0,0,0,0,0,0,0,0};
+        for (auto& pc : pathCuts) {
+            const std::string& k=std::get<0>(pc); int gf=std::get<1>(pc), nst=std::get<2>(pc);
+            if (nst<=0 || nst>=NT) continue;          // skip the two trivial endpoints
+            ++nCut;
+            if (!bAll.count(k)) continue;
+            ++nMatch;
+            double rd=(double)nst/(double)NT; posD.push_back(rd);
+            posG.push_back(fwdOpt>0 ? (double)gf/(double)fwdOpt : 0.0);
+            int d=(int)(rd*10); if(d<0)d=0; if(d>9)d=9; dec[d]++;
+        }
+        std::sort(posD.begin(), posD.end()); std::sort(posG.begin(), posG.end());
+        std::cout << "  OPT-PATH CUTS: rootH=" << rootH << " opt=" << fwdOpt
+                  << " gap=" << (fwdOpt - rootH)
+                  << " interior=" << nCut << " meetable=" << nMatch;
+        if (nMatch) {
+            std::cout << "  DEPTH started/NT min=" << posD.front()
+                      << " median=" << posD[posD.size()/2] << " max=" << posD.back()
+                      << "  (time g/opt median=" << posG[posG.size()/2] << ")"
+                      << "  depth deciles:";
+            for (int d=0; d<10; d++) std::cout << " " << dec[d];
+        }
+        std::cout << std::endl;
+    }
     std::cout << "MEET " << group << ":" << exam << " min(g_f+g_b)=" << mm
               << " (interior=" << mmInt << ") forwardOpt=" << fwdOpt
               << "  => " << ((interior>0 && mmInt==fwdOpt)?"REAL-MIDDLE-MEET" : (mm==fwdOpt?"ENDPOINTS-ONLY":"MISMATCH")) << std::endl;
@@ -3595,7 +3918,7 @@ int solveRCPSP_TT2_MeetUnfire(int group, int exam, const std::string& ptype="j30
 // deadline exit that merely holds a meet-derived incumbent (a valid UB, not a proof).
 static uint64_t g_bae_expF=0, g_bae_expB=0, g_bae_meets=0;
 static long     g_bae_firstMeet=-1;
-static int      g_bae_uMeet=-1, g_bae_biDR4=0;
+static int      g_bae_uMeet=-1, g_bae_biDR4=0, g_bae_dr4mask=0;
 static bool     g_bae_proven=false;
 static double   g_bae_time=0.0;
 int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
@@ -3605,6 +3928,49 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
     { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs=RSL[((group-1)%4+4)%4]; }
     g_instance_deadline = std::chrono::steady_clock::now()+std::chrono::seconds(astar_timeout_seconds);
     g_instance_deadline_set = true;
+    // ── PARITY with the forward benchmark preamble (solveRCPSP_TT2) ─────────────
+    // BAE* was skipping instance-level work the forward path always does, which made
+    // any head-to-head unfair: the forward returns easy (high-RF / loose-RS) instances
+    // in ZERO expansions via the trivial-root shortcut, while BAE* ran a full
+    // bidirectional search on them. Same shortcut, same resource precomputes, same
+    // SGS-seeded incumbent. Seeding U is sound: U is an achievable schedule length, and
+    // min(f_F,f_B) >= U still means no cheaper solution exists, so a stop at U is optimal.
+    // ── SIDE-SYMMETRY SAFETY ────────────────────────────────────────────────────
+    // Three things in the TT2 pipeline are keyed to ONE net and are therefore unsafe when
+    // two nets share the globals:
+    //  (a) resource_info / upstream / downstream — net-specific precomputes. The reversed
+    //      side would read the FORWARD net's tables, so the single-resource and hier-RS
+    //      bounds would be wrong (possibly inadmissible) on that side. Disabled here.
+    //  (b) the sub-solve h-cache and successor cache — keyed by MARKING, and a forward and
+    //      a reversed marking can coincide numerically while having different h. Disabled.
+    //  (c) the SGS UB seed is SAFE: it needs only the incumbent value, which is the same
+    //      makespan for both nets, so it is kept.
+    if (g_tt2_singleres || g_tt2_hierrs) {
+        std::cout << "  [BAE] disabling singleres/hierRS: their precomputes are per-net "
+                     "and the two sides share globals" << std::endl;
+        g_tt2_singleres = false; g_tt2_hierrs = false;
+    }
+    if (g_h_cache || g_subsolve_succ_cache) {
+        std::cout << "  [BAE] disabling sub-solve caches: keyed by marking, shared across "
+                     "two different nets" << std::endl;
+        g_h_cache = false; g_subsolve_succ_cache = false;
+    }
+    get_tt2_cache().clear();
+    if (g_tt2_ub) { precomputeResourceInfo(); precomputeUpstream(); precomputeDownstream(); }
+    g_tt2_dr4_pruned = 0; g_tt2_sym_pruned = 0; g_ub_pruned = 0;   // per-instance telemetry
+    { std::vector<int> trivEst; int trivMk = 0;
+      if (tryTrivialRootSchedule_TT2(trivEst, trivMk)) {
+          std::cout << "BAE* " << group << ":" << exam << " makespan=" << trivMk
+                    << " expandedF=0 expandedB=0 total=0 time=0s"
+                    << "  norm=" << (g_meet_norm?1:0) << " trivialAtRoot=1" << std::endl;
+          g_bae_expF=0; g_bae_expB=0; g_bae_meets=0; g_bae_firstMeet=-1; g_bae_uMeet=-1;
+          g_bae_proven=true; g_bae_time=0.0; g_bae_biDR4=0; g_bae_dr4mask=0;
+          return trivMk;
+      } }
+    int seedUB = INT_MAX;
+    g_incumbent = std::numeric_limits<short>::max();
+    if (g_tt2_ub) { int sgs = serialSGS_makespan();
+        if (sgs > 0 && sgs < (int)std::numeric_limits<short>::max()) { g_incumbent=(short)sgs; seedUB=sgs; } }
     bool sDR5=g_tt2_dr5,sDR4=g_tt2_dr4,sB=g_tt2_batch;
     // DR4 OFF by default: DR5 and DR4 TOGETHER leave the two sides' surviving cut states
     // DISJOINT, so the middle meet never fires (measured on j30: DR5-only 7/7 real middle
@@ -3621,7 +3987,24 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
     // DR4 on BOTH sides collapses the meet back to the trivial endpoint on 5/7. Use 0 when
     // the goal is the EARLIEST optimal upper bound (first meet at 14-69% vs 40-99%).
     int biDR4 = 2; if (const char* b4=std::getenv("RCPSP_BI_DR4")) biDR4 = std::atoi(b4);
-    g_tt2_dr5=true; g_tt2_dr4=false; g_tt2_batch=false;
+    // biDR4 == 4 = ADAPTIVE. DR4 must stay OFF on one side or the two searches canonicalise
+    // onto different schedules and the middle meet dies; but WHICH side can afford to lose it
+    // is instance-dependent (j30 1:1 is backward-heavy 14784/68554, 2:2 is forward-heavy
+    // 321092/3936, and fixed DR4-on-reversed costs 15x there). So: probe with DR4 off both
+    // sides, then commit it to whichever side is doing more work and leave the cheap side
+    // DR4-free. Toggling is sound - DR4 is a local per-expansion left-shift test, not state.
+    long probeN = 2000; if (const char* pn=std::getenv("RCPSP_BI_PROBE")) probeN = std::atol(pn);
+    int dr4mask = (biDR4==4) ? 0 : biDR4;
+    bool dr4committed = (biDR4!=4);
+    // batch was ruled out with the OLD (un-normalised) key, where multi-fire edges landed
+    // the two directions on disjoint cut sets. Worth re-testing under the normalised key,
+    // since batch is part of the forward BEST config -- RCPSP_BI_BATCH=1 to try it.
+    // batch ON by default, matching the forward BEST config. The old "batch kills the meet"
+    // verdict was an artifact of the UN-normalised key; under the normalised cut-marking key
+    // batch keeps the middle meet AND cuts nodes hard (j30 2:2 325028->94267, 3:2 35965->18516).
+    // RCPSP_BI_BATCH=0 to disable.
+    { const char* bb=std::getenv("RCPSP_BI_BATCH"); g_tt2_batch = bb? (std::atoi(bb)!=0) : true; }
+    g_tt2_dr5=true; g_tt2_dr4=false;
     g_tt2_dom_side=0; get_tt2_dominance_table().clear();
     g_tt2_dom_side=1; get_tt2_dominance_table().clear();
     // Stash holds the non-current side; start with global=forward, stash=reversed.
@@ -3631,7 +4014,7 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
     std::swap(petri, petriStash); std::swap(RCPSPex, rcpspStash);  // global := forward, stash := reversed
     bool curFwd = true;
     auto useFwd = [&](bool want){ if (want!=curFwd){ std::swap(petri,petriStash); std::swap(RCPSPex,rcpspStash); curFwd=want; }
-        g_tt2_dom_side = want?0:1; g_tt2_dr4 = (want ? (biDR4&1) : (biDR4&2)) != 0; };
+        g_tt2_dom_side = want?0:1; g_tt2_dr4 = (want ? (dr4mask&1) : (dr4mask&2)) != 0; };
 
     RCPSP_TT2 env;                               // stateless; reads globals
     useFwd(true);  RCPSPState_TT2 firstF; RCPSPState_TT2 lastF=firstF;
@@ -3642,13 +4025,16 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
     useFwd(false); astarB.InitializeSearch(&env, firstB, lastB, pathB);
 
     std::unordered_map<std::string,int> fClosed, bClosed;
-    int U = INT_MAX; bool doneF=false, doneB=false; uint64_t expF=0, expB=0;
+    int U = seedUB; bool doneF=false, doneB=false; uint64_t expF=0, expB=0;
     uint64_t meets=0; long firstMeetExp=-1; int uMeet=INT_MAX;   // did the middle meet fire, and when?
     bool proven=false;   // true only if we exited with optimality PROVEN (not on the deadline)
     const double INF = 1e18;
     auto t0 = std::chrono::high_resolution_clock::now();
     while (true) {
         if (g_instance_deadline_set && std::chrono::steady_clock::now() > g_instance_deadline) break;
+        if (!dr4committed && (long)(expF+expB) >= probeN) {          // probe over: arm the heavy side
+            dr4mask = (expF > expB) ? 1 : 2; dr4committed = true;
+        }
         // frontier f on each live side
         double fF=INF, fB=INF, gF=INF, gB=INF;
         useFwd(true);
@@ -3690,10 +4076,10 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
     std::cout << "BAE* " << group << ":" << exam << " makespan=" << mk
               << " expandedF=" << expF << " expandedB=" << expB << " total=" << (expF+expB)
               << " time=" << el.count() << "s"
-              << "  norm=" << (g_meet_norm?1:0) << " biDR4=" << biDR4 << " meets=" << meets
+              << "  norm=" << (g_meet_norm?1:0) << " batch=" << (g_tt2_batch?1:0) << " biDR4=" << biDR4 << " dr4mask=" << dr4mask << " meets=" << meets
               << " firstMeetAtExp=" << firstMeetExp << " U_from_meet=" << (uMeet==INT_MAX?-1:uMeet) << std::endl;
     g_bae_expF=expF; g_bae_expB=expB; g_bae_meets=meets; g_bae_firstMeet=firstMeetExp;
-    g_bae_uMeet=(uMeet==INT_MAX?-1:uMeet); g_bae_proven=proven; g_bae_time=el.count(); g_bae_biDR4=biDR4;
+    g_bae_uMeet=(uMeet==INT_MAX?-1:uMeet); g_bae_proven=proven; g_bae_time=el.count(); g_bae_biDR4=biDR4; g_bae_dr4mask=dr4mask;
     g_tt2_dr5=sDR5; g_tt2_dr4=sDR4; g_tt2_batch=sB;
     return mk;
 }
@@ -3704,6 +4090,1148 @@ int solveRCPSP_TT2_BAE(int group, int exam, const std::string& ptype="j30") {
 // a node with g > C*/2, which caps the (harder) reversed half — the win the f-balanced
 // tt2bae lacks. Per-side DR via g_tt2_dom_side; meet via the translated key. Consistent
 // heuristic (paper Prop. 2-4) ⇒ no reopening; lazy-deleted stale PQ entries.
+// ── PROPER BAE* (Shperberg/Felner et al.) over N and its reversal N^R ─────────
+// WHY NOT HOG2/generic/BAE.h: it uses env->GetStateHash for TWO different jobs —
+// the within-queue node IDENTITY and the cross-queue MEET lookup. Our two sides
+// need those to be DIFFERENT keys:
+//   identity MUST be the FULL marking. Collapsing forward states onto the cut key
+//     would merge states that differ only in what has just been committed at this
+//     instant, and "start a at delay 0" would then map a state onto ITSELF — a
+//     zero-cost self-loop that breaks the search space.
+//   the meet MUST be on the NORMALISED CUT key, the only key both frames can agree
+//     on (forward sits on START events, reversed on FINISH events).
+// Making BAE.h separate the two would mean editing HOG2 core, so the ALGORITHM is
+// implemented here instead, over the existing pieces: env.GetSuccessors (so DR5 /
+// DR4 / batch all still apply), HCost_TT2, and the per-side dominance tables.
+// What this adds over solveRCPSP_TT2_BAE's hand-rolled f-balance:
+//   * the real BAE* priority  b(n) = 2g(n) + h(n) - h_opp(n)
+//   * alternating expansion (the original BAE* policy)
+//   * the (min b_F + min b_B)/2 lower bound, and termination at U <= LB
+// h_opp is a genuine admissible bound on the distance already travelled: an activity
+// x active with remaining r started at t-(dur_x-r) >= EST(x), so t >= EST(x)+dur_x-r;
+// a finished x gives t >= EST(x)+dur_x. The max over started activities lower-bounds g.
+static std::vector<int> computeESTforCurrentNet() {
+    int n = (int)RCPSPex.activities.size();
+    std::vector<int> est(n + 2, 0);
+    bool changed = true; int guard = 0;
+    while (changed && guard++ < n + 2) {           // DAG relaxation to fixpoint
+        changed = false;
+        for (int i = 1; i <= n; i++) {
+            int m = 0;
+            for (short p : RCPSPex.backword_dependencies[i - 1]) {
+                int v = est[p] + RCPSPex.activities[p - 1].duration;
+                if (v > m) m = v;
+            }
+            if (m > est[i]) { est[i] = m; changed = true; }
+        }
+    }
+    return est;
+}
+static int hOppOf(const RCPSPState_TT2& s, const std::vector<int>& est, int NT) {
+    int m = 0;
+    for (int i = 1; i <= NT; i++)
+        if (s.finishedActivitiys.test(i)) {
+            int v = est[i] + RCPSPex.activities[i - 1].duration; if (v > m) m = v;
+        }
+    for (const auto& p : s.activeTransitionIndices) {
+        int v = est[p.first] + RCPSPex.activities[p.first - 1].duration - p.second;
+        if (v > m) m = v;
+    }
+    return m;
+}
+
+// ── HOG2 BAE* over the two nets: state / environment / heuristic wrapper ──────
+// The algorithm is HOG2's own (HOG2/RCPSP/BAE_RCPSP.h, a copy of generic/BAE.h whose only
+// structural change is that the cross-queue MEET lookup goes through a separate hash).
+// Everything below is glue so that one BAE* instance can drive TWO different nets:
+//   * the state carries which side it belongs to; successors inherit it
+//   * GetSuccessors swaps the globals to that side's net before delegating to RCPSP_TT2,
+//     so DR5/DR4/batch and the heuristic all behave exactly as in the unidirectional search
+//   * GetStateHash = FULL marking (+ side bit) -> correct node identity within a queue
+//   * GetMeetHash  = NORMALISED CUT key       -> frame-independent, so the two frontiers
+//     collide on the same cut even though forward states sit on START events and reversed
+//     states on FINISH events
+struct RCPSPState_BI {
+    RCPSPState_TT2 s;
+    bool rev = false;                 // false = forward net, true = reversed net
+    bool pass = false;                // RCPSP_TT2_WAITJUMP: a skipped wait node re-created only for the meet (never expanded; not identity)
+    RCPSPState_BI() {}
+    RCPSPState_BI(const RCPSPState_TT2& st, bool r) : s(st), rev(r) {}
+    RCPSPState_BI(RCPSPState_TT2&& st, bool r) : s(std::move(st)), rev(r) {}
+};
+static int g_bi_NT = 0;               // activity count, set once per instance
+// RCPSP_BI_BWD=unfire: the backward side un-fires on the FORWARD net (BWMEET::backwardSuccessors)
+// instead of searching the reversed net. Both sides then hold forward-frame states.
+static bool g_bi_unfire = false;
+static inline uint64_t biFnv(const std::string& k) {
+    uint64_t h = 1469598103934665603ULL;
+    for (unsigned char c : k) { h ^= c; h *= 1099511628211ULL; }
+    return h;
+}
+// FULL identity. RCPSPState_TT2::operator== compares FOUR things: finishedActivitiys,
+// activity_nodes, resource_nodes, activeTransitionIndices. meetKeyForward covers only the
+// first and last -- it is the CUT key, deliberately blind to token markings. Using it as the
+// BI identity made GetStateHash lossy, so two states differing only in their activity/resource
+// tokens hashed alike, and AStarOpenClosed silently merged them: the second was dropped as a
+// duplicate. That deletes states from the bidirectional frontier that the unidirectional
+// search keeps, which drains a queue early and lets a drain certify a non-optimal incumbent.
+// Mirrors tt2VerifyHash in RCPSP.h, which documents the same full-identity field list.
+// ── OPTIMAL-PATH TRACER ──────────────────────────────────────────────────────
+// Marks the states of a KNOWN optimal path and reports, per state, what the
+// bidirectional search did with it: generated / added to open / expanded / rejected
+// by the f>=U cut / skipped by lazy nipping / never seen at all. Turns "something
+// removes nodes" into a specific state and a specific branch. Off unless a trace is
+// loaded, and it only ever reads -- it never changes the search.
+enum PPEvent { PP_GEN = 0, PP_EXPAND = 1, PP_ADD = 2, PP_REJECT = 3, PP_NIPPED = 4 };
+struct PathProbe {
+    std::vector<std::string> keys;                 // identity keys, in path order
+    std::vector<int> g;                            // g along the optimal path
+    std::unordered_map<std::string,int> idx;       // key -> position
+    std::vector<std::array<int,5>> ev;             // per position, count per PPEvent
+    std::vector<double> rejG, rejH, rejU;          // first rejection seen
+    void reset(size_t n) { ev.assign(n, {0,0,0,0,0});
+        rejG.assign(n,-1); rejH.assign(n,-1); rejU.assign(n,-1); }
+};
+static PathProbe g_pp[2];        // [0] = forward net, [1] = reversed net
+static bool g_pp_on = false;
+static long long g_pp_calls[2] = {0,0};       // how many states the search offered per side
+static std::string g_pp_sample[2];            // first key the search offered, for comparison
+static inline std::string ppIdKey(const RCPSPState_TT2& st, int NT) {
+    std::string k = meetKeyForward(st, NT);
+    k += "|N:";
+    for (const auto& q : st.activity_nodes) {
+        k += std::to_string(q.first); k += ':'; k += std::to_string(q.second); k += ';'; }
+    k += "|R:";
+    for (int r = 0; r < 4; ++r) { k += '#';
+        for (const auto& q : st.resource_nodes[r]) {
+            k += std::to_string(q.first); k += ':'; k += std::to_string(q.second); k += ';'; } }
+    if (st.waitSlack != -1) { k += "|W:"; k += std::to_string(st.waitSlack); }   // explicit-wait model with DR4
+    return k;
+}
+static inline void ppMark(int side, const RCPSPState_TT2& st, int NT, PPEvent e,
+                          double g = -1, double h = -1, double U = -1) {
+    if (!g_pp_on) return;
+    PathProbe& P = g_pp[side];
+    const std::string k = ppIdKey(st, NT);
+    ++g_pp_calls[side];
+    if (g_pp_sample[side].empty()) g_pp_sample[side] = k;
+    auto it = P.idx.find(k);
+    if (it == P.idx.end()) return;
+    P.ev[it->second][e]++;
+    if (e == PP_REJECT && P.rejU[it->second] < 0) {
+        P.rejG[it->second] = g; P.rejH[it->second] = h; P.rejU[it->second] = U; }
+}
+// FULL identity, matching RCPSPState_TT2::operator== (finished, activity_nodes,
+// resource_nodes, activeTransitionIndices). meetKeyForward alone is the CUT key and is
+// deliberately blind to token markings, so it cannot serve as the identity.
+static inline std::string biIdKey(const RCPSPState_BI& a) { return ppIdKey(a.s, g_bi_NT); }
+static inline std::string biCutKey(const RCPSPState_BI& a) {
+    return (a.rev && !g_bi_unfire) ? meetKeyReversedTranslatedNorm(a.s, g_bi_NT)
+                                   : meetKeyForwardNorm(a.s, g_bi_NT);
+}
+
+// ── NUMERIC identity / meet hashes ───────────────────────────────────────────
+// Same fields and the same normalisation as biIdKey / biCutKey, mixed straight from the state
+// instead of being printed to a std::string first (~15% of HBAE time). Equal keys give equal
+// hashes and different keys differ with 64-bit probability, so the search is unchanged.
+// RCPSP_BI_STRHASH=1 restores the string keys (A/B check).
+static const bool g_bi_strhash = [](){ const char* e = std::getenv("RCPSP_BI_STRHASH"); return e && std::atoi(e) != 0; }();
+static inline const std::bitset<128>& biFinMask() {          // bits 1..NT, as the string keys use
+    static std::bitset<128> m; static int nt = -1;
+    if (nt != g_bi_NT) { m.reset(); for (int i = 1; i <= g_bi_NT && i < 128; ++i) m.set(i); nt = g_bi_NT; }
+    return m;
+}
+static inline uint64_t biMix(uint64_t h, uint64_t v) {
+    uint64_t x = h ^ (v + 0x9e3779b97f4a7c15ULL);
+    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
+    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+static inline uint64_t biPair(const std::pair<short,short>& p) { return ((uint64_t)(uint16_t)p.first << 16) | (uint16_t)p.second; }
+// finished set + (id, value) pairs sorted, i.e. exactly the "F:...|A:..." part of the string keys
+static inline uint64_t biHashCut(const std::bitset<128>& fin, std::pair<short,short>* av, int n) {
+    static const std::bitset<128> LOW(~0ULL);
+    std::sort(av, av + n);
+    uint64_t h = biMix(0x243f6a8885a308d3ULL, (fin & LOW).to_ullong());
+    h = biMix(h, (fin >> 64).to_ullong());
+    h = biMix(h, (uint64_t)n);
+    for (int i = 0; i < n; ++i) h = biMix(h, biPair(av[i]));
+    return h;
+}
+static inline uint64_t biCutHashFwd(const RCPSPState_TT2& s) {               // = meetKeyForwardNorm
+    std::pair<short,short> av[128]; int n = 0;
+    for (const auto& p : s.activeTransitionIndices) {
+        if ((int)p.second == (int)RCPSPex.activities[p.first-1].duration) continue;   // started AT T_c => unstarted
+        if (n < 128) av[n++] = p;
+    }
+    return biHashCut(s.finishedActivitiys & biFinMask(), av, n);
+}
+static inline uint64_t biCutHashRevTranslated(const RCPSPState_TT2& b) {    // = meetKeyReversedTranslatedNorm
+    std::bitset<128> fin = biFinMask() & ~b.finishedActivitiys;
+    std::pair<short,short> av[128]; int n = 0;
+    for (const auto& p : b.activeTransitionIndices) {
+        const int tf = (int)RCPSPex.activities[p.first-1].duration - (int)p.second;
+        if (tf == 0) { fin.set(p.first); continue; }                          // finished AT T_c => finished
+        fin.reset(p.first);
+        if (n < 128) av[n++] = {p.first, (short)tf};
+    }
+    return biHashCut(fin, av, n);
+}
+static inline uint64_t biIdHash(const RCPSPState_TT2& s) {                   // = ppIdKey
+    std::pair<short,short> av[128]; int n = 0;
+    for (const auto& p : s.activeTransitionIndices) if (n < 128) av[n++] = p;
+    uint64_t h = biHashCut(s.finishedActivitiys & biFinMask(), av, n);
+    h = biMix(h, 0xA11CE000ULL + (uint64_t)s.activity_nodes.size());
+    for (const auto& q : s.activity_nodes) h = biMix(h, biPair(q));
+    for (int r = 0; r < 4; ++r) {
+        h = biMix(h, 0x5E500000ULL + (uint64_t)r * 131ULL + ((uint64_t)s.resource_nodes[r].size() << 24));
+        for (const auto& q : s.resource_nodes[r]) h = biMix(h, biPair(q));
+    }
+    if (s.waitSlack != -1) h = biMix(h, 0x5A170000ULL + (uint64_t)(uint16_t)s.waitSlack);   // explicit-wait model with DR4
+    return h;
+}
+// BAE* compares states for equality (start==goal, and childData.data==middleNode). Identity
+// is the full marking plus the side, matching GetStateHash.
+static inline bool operator==(const RCPSPState_BI& a, const RCPSPState_BI& b) {
+    return a.rev == b.rev && biIdKey(a) == biIdKey(b);
+}
+static inline bool operator!=(const RCPSPState_BI& a, const RCPSPState_BI& b) { return !(a == b); }
+static inline std::ostream& operator<<(std::ostream& o, const RCPSPState_BI& a) {
+    return o << (a.rev ? "B:" : "F:") << biIdKey(a);
+}
+
+// Holds the non-current net and swaps the globals. petri/RCPSPex are globals, so the swap is
+// how "which net am I on" is expressed; std::swap on these is O(1).
+struct BiSides {
+    P_RCPSP::PetriExample petriStash; RCPSP_example rcpspStash; bool curFwd = true;
+    // initialstatename / finalstatename are GLOBALS (Globals.h) that RCPSPState_TT2's
+    // constructor both writes and READS inside the same loop over places: a place seen
+    // BEFORE the real source is compared against whatever value the previous construction
+    // left behind, and gets a spurious token if the names match. They are per-net, so they
+    // must be swapped with petri/RCPSPex. Without this the backward root was built on the
+    // reversed net while still holding the FORWARD source name, giving it an extra token
+    // at the sink -- so HBAE's backward search started from a marking no reversed state
+    // can ever equal, and could not meet the forward side on any true cut.
+    std::string initF, finalF, initB, finalB;
+    void use(bool wantFwd) {
+        const bool net = g_bi_unfire ? true : wantFwd;      // un-fire backward states are forward-net states
+        if (net != curFwd) { std::swap(petri, petriStash); std::swap(RCPSPex, rcpspStash); curFwd = net; }
+        initialstatename = net ? initF : initB;
+        finalstatename   = net ? finalF : finalB;
+        g_tt2_dom_side = wantFwd ? 0 : 1;      // per-side DR5 table
+        // per-side DR5 enable: bit0 = forward, bit1 = reversed
+        g_tt2_dr5 = (dr5Mask & (wantFwd ? 1 : 2)) != 0;
+        // per-side DR4 (RCPSP_BI_DR4SIDE): with DR4 on both sides the forward keeps left-shifted and the reversed
+        // net right-shifted schedules, so the two may share no optimal schedule; on one side the other side still
+        // contains every schedule the DR4 side keeps
+        g_tt2_dr4 = dr4On && (dr4Mask & (wantFwd ? 1 : 2)) != 0;
+    }
+    int dr5Mask = 3;
+    bool dr4On = false; int dr4Mask = 3;
+};
+
+// HBAE hashing cost. Node identity and meet keys are built as strings, the suspected main extra
+// per-node cost over unidirectional TT2. Calls always counted; time only with RCPSP_TT2_PROF=1.
+static double   g_hb_bihash_sec = 0.0, g_hb_meethash_sec = 0.0;
+static uint64_t g_hb_bihash_calls = 0, g_hb_meethash_calls = 0;
+
+// RCPSP_BI_MEETONLY = both (default) | fwd | bwd | none: which side re-creates the wait nodes a pass-through jump skipped.
+// ONE side is enough for the meeting guarantee: that side holds a common schedule's cut at every integer time up to its
+// progress, and the other side's progress point on that schedule is a real node (a jump's landing node or a firing), so
+// once the frontiers cross, that time is held by both. "none" gives the guarantee up (experiments only).
+static int biMeetOnlyMask() {
+    static const int m = [](){ const char* e = std::getenv("RCPSP_BI_MEETONLY"); const std::string v = e ? e : "both";
+                               return v == "fwd" ? 1 : v == "bwd" ? 2 : v == "none" ? 0 : 3; }();
+    return m;
+}
+class RCPSP_BiEnv {
+public:
+    RCPSP_BiEnv(BiSides* sd) : sides(sd) {}
+    void GetSuccessors(const RCPSPState_BI& st, std::vector<RCPSPState_BI>& nb) {
+        sides->use(!st.rev);
+        rawBuf.clear();
+        if (g_bi_unfire && st.rev) rawBuf = BWMEET::backwardSuccessors(st.s);   // un-fire, one predecessor per activity
+        else env.GetSuccessors(st.s, rawBuf);          // RCPSP_TT2::GetSuccessors only reads its parent: no copy
+        if (g_pp_on) { const int sd = st.rev ? 1 : 0;
+            ppMark(sd, st.s, g_bi_NT, PP_EXPAND);
+            for (auto& c : rawBuf) ppMark(sd, c, g_bi_NT, PP_GEN); }
+        nb.clear(); nb.reserve(rawBuf.size());
+        for (auto& c : rawBuf) {
+            // RCPSP_TT2_WAITJUMP: a wait edge longer than one unit skipped nodes whose only successor was the next wait.
+            // Re-create them, in time order and before the landing node, as meet-only nodes (BAE_RCPSP.h adds them
+            // CLOSED), with the remaining waits they would have had, so this side still holds a cut at every time.
+            const int span = (int)c.g - (int)st.s.g;
+            if (g_tt2_wait && c.lastTransitionId == 0 && span > 1 && !(g_bi_unfire && st.rev) && (biMeetOnlyMask() & (st.rev ? 2 : 1))) {
+                for (int j = 1; j < span; ++j) {
+                    RCPSPState_TT2 m(st.s, (short)j, TT2WaitTag{});
+                    m.waitSlack = (c.waitSlack < 0) ? (short)-1 : (c.waitSlack >= 32767) ? (short)32767 : (short)(c.waitSlack + (span - j));
+                    nb.emplace_back(std::move(m), st.rev);
+                    nb.back().pass = true;
+                }
+                g_tt2_wait_meetonly += span - 1;
+            }
+            nb.emplace_back(std::move(c), st.rev);   // successors inherit the side
+        }
+    }
+    bool IsPassThrough(const RCPSPState_BI& st) const { return st.pass; }
+    std::vector<RCPSPState_TT2> rawBuf;
+
+    // ── DOMINANCE MEET (RCPSP_BI_DOMMEET) ─────────────────────────────────────
+    // A cut is (finished set, active activities with their FORWARD remaining times), normalised exactly like
+    // the meet key: a forward activity started at the cut instant counts as not started, a reversed one ending
+    // at the cut instant counts as finished. Forward cut F and backward cut B with the same scheduled set
+    // (finished + active) JOIN when F dominates B in the DR5 sense: every activity active in F finishes no later
+    // than in B (0 if B has it finished). Then B's suffix replays from F with no later releases, so
+    // g_F + g_B is the length of a real schedule. Exact cut matches are the special case of equal releases.
+    // Per side, a bucket keeps only non-redundant entries: forward F1 makes F2 redundant if g1 <= g2 and F1
+    // dominates F2; backward B1 makes B2 redundant if g1 <= g2 and B2 dominates B1.
+    using DmKey = TT2DominanceTable::Key;
+    struct DmEntry : TT2DominanceTable::FEntry { uint64_t ref = UINT64_MAX; };   // ref: its queue node (RCPSP_BI_AUDIT); none for a DR5-pruned state
+    std::unordered_map<DmKey, std::vector<DmEntry>, TT2DominanceTable::KeyHash> dmTab[2];
+    uint64_t dmInserts = 0, dmSkipped = 0, dmThinned = 0, dmJoinCmp = 0;
+    uint64_t dmLastRef = UINT64_MAX; int dmLastShift = 0;   // the other side's entry and the shift of the join DomMeet last returned
+    void DomMeetReset() { dmTab[0].clear(); dmTab[1].clear(); dmInserts = dmSkipped = dmThinned = dmJoinCmp = 0; dmShiftBest = 0; }
+    size_t DomMeetEntries(int side) const { size_t n = 0; for (const auto& kv : dmTab[side]) n += kv.second.size(); return n; }
+    // forward-frame normalised cut of st: key = scheduled set, (ids, rels) sorted by id, R = max(0, max rel)
+    int domMeetSig(const RCPSPState_BI& st, DmKey& key, short* ids, short* rels, int& R) {
+        std::bitset<128> sched;
+        int n = 0;
+        if (!st.rev || g_bi_unfire) {
+            sched = st.s.finishedActivitiys & biFinMask();
+            for (const auto& p : st.s.activeTransitionIndices) {
+                if ((int)p.second == (int)RCPSPex.activities[p.first - 1].duration) continue;   // started at the cut
+                if (n < 128) { ids[n] = p.first; rels[n] = p.second; ++n; }
+            }
+        } else {
+            sched = biFinMask() & ~st.s.finishedActivitiys;          // not reversed-finished ...
+            for (const auto& p : st.s.activeTransitionIndices) {
+                const int tf = (int)RCPSPex.activities[p.first - 1].duration - (int)p.second;
+                if (tf == 0) { sched.set(p.first); continue; }         // ends at the cut: finished
+                sched.reset(p.first);
+                if (n < 128) { ids[n] = p.first; rels[n] = (short)tf; ++n; }
+            }
+        }
+        for (int i = 1; i < n; ++i) {                                   // insertion sort by id (n is small)
+            short a = ids[i], r = rels[i]; int j = i - 1;
+            while (j >= 0 && ids[j] > a) { ids[j + 1] = ids[j]; rels[j + 1] = rels[j]; --j; }
+            ids[j + 1] = a; rels[j + 1] = r;
+        }
+        R = 0;
+        for (int i = 0; i < n; ++i) { sched.set(ids[i]); if (rels[i] > R) R = rels[i]; }
+        static const std::bitset<128> low64(~0ULL);
+        key.lo = (sched & low64).to_ullong();
+        key.hi = (sched >> 64).to_ullong();
+        return n;
+    }
+    // ── SHIFT MEET (RCPSP_BI_SHIFTMEET, with RCPSP_BI_DOMMEET) ─────────────────
+    // Every forward cut F and backward cut B with the same scheduled set join, not only when F dominates B:
+    // run F's prefix, then B's whole suffix shifted LATER by
+    //   delta = max(0, max over i active in F of  rem_F(i) - (i active in B ? rem_B(i) : 0)),
+    // so every activity still running in F ends by the time the shifted suffix expects it (precedence and
+    // resource releases no later than in B's own schedule). Cost g_F + g_B + delta, a real schedule. Never
+    // shifted earlier: B's suffix may start something right after its cut. Dominance is the delta = 0 case.
+    static bool ShiftMeetOn() { static const bool on = [](){ const char* e = std::getenv("RCPSP_BI_SHIFTMEET");
+                                                            return e && std::atoi(e) != 0; }();
+                                return on; }
+    uint64_t dmShiftBest = 0;      // improving joins that needed a positive shift
+    // lateness of A against B: max(0, max over i active in A of relA(i) - (i active in B ? relB(i) : 0))
+    static int shiftOver(int nA, const short* idA, const short* relA, int nB, const short* idB, const short* relB) {
+        int dlt = 0, ib = 0;
+        for (int ia = 0; ia < nA; ++ia) {
+            while (ib < nB && idB[ib] < idA[ia]) ++ib;
+            const int bound = (ib < nB && idB[ib] == idA[ia]) ? (int)relB[ib] : 0;
+            const int late = (int)relA[ia] - bound;
+            if (late > dlt) dlt = late;
+        }
+        return dlt;
+    }
+    // Insert st (path cost g on its own side) and return the cheapest join with the other side (DBL_MAX if none)
+    double DomMeet(const RCPSPState_BI& st, double g, double U, uint64_t ref = UINT64_MAX) {
+        sides->use(!st.rev);                                            // durations of st's own net
+        short ids[128], rels[128]; int R = 0; DmKey key;
+        const int n = domMeetSig(st, key, ids, rels, R);
+        const int side = st.rev ? 1 : 0;
+        const bool shift = ShiftMeetOn();
+        const auto dom = [](int nA, int RA, const short* idA, const short* relA, int nB, int RB, const short* idB, const short* relB) {
+            return TT2DominanceTable::domFast(0, nA, RA, idA, relA, 0, nB, RB, idB, relB);
+        };
+        double best = DBL_MAX; bool bestShifted = false;
+        dmLastRef = UINT64_MAX; dmLastShift = 0;
+        auto oit = dmTab[1 - side].find(key);
+        if (oit != dmTab[1 - side].end()) {
+            for (const DmEntry& e : oit->second) {
+                const double base = g + e.g;
+                if (!(base < U && base < best)) continue;
+                ++dmJoinCmp;
+                if (shift) {
+                    const int RF = (side == 0) ? R : e.R, RB = (side == 0) ? e.R : R;
+                    if (!(base + std::max(0, RF - RB) < std::min(U, best))) continue;          // delta >= RF - RB
+                    const int dlt = (side == 0) ? shiftOver(n, ids, rels, e.n, e.ids(), e.rels())
+                                                : shiftOver(e.n, e.ids(), e.rels(), n, ids, rels);
+                    const double c = base + dlt;
+                    if (c < U && c < best) { best = c; bestShifted = (dlt > 0); dmLastRef = e.ref; dmLastShift = dlt; }
+                } else {
+                    const bool ok = (side == 0) ? dom(n, R, ids, rels, e.n, e.R, e.ids(), e.rels())     // F (new) dominates B
+                                                : dom(e.n, e.R, e.ids(), e.rels(), n, R, ids, rels);    // F (entry) dominates B (new)
+                    if (ok) { best = base; bestShifted = false; dmLastRef = e.ref; dmLastShift = 0; }
+                }
+            }
+        }
+        if (best < U && bestShifted) ++dmShiftBest;
+        auto& bucket = dmTab[side][key];
+        const short gs = (short)g;
+        // Redundancy. Forward: E makes F redundant if g_E + lateness(E over F) <= g_F.
+        // Backward: E makes B redundant if g_E + lateness(B over E) <= g_B. (Without shift: the dominance forms.)
+        for (const DmEntry& e : bucket) {
+            if (e.g > gs) continue;
+            bool redundant;
+            if (shift) {
+                const int s = (side == 0) ? shiftOver(e.n, e.ids(), e.rels(), n, ids, rels)
+                                          : shiftOver(n, ids, rels, e.n, e.ids(), e.rels());
+                redundant = (e.g + s <= gs);
+            } else {
+                redundant = (side == 0) ? dom(e.n, e.R, e.ids(), e.rels(), n, R, ids, rels)
+                                        : dom(n, R, ids, rels, e.n, e.R, e.ids(), e.rels());
+            }
+            if (redundant) { ++dmSkipped; return best; }
+        }
+        size_t w = 0;
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            const DmEntry& e = bucket[i];
+            bool drop = false;
+            if (gs <= e.g) {
+                if (shift) {
+                    const int s = (side == 0) ? shiftOver(n, ids, rels, e.n, e.ids(), e.rels())
+                                              : shiftOver(e.n, e.ids(), e.rels(), n, ids, rels);
+                    drop = (gs + s <= e.g);
+                } else {
+                    drop = (side == 0) ? dom(n, R, ids, rels, e.n, e.R, e.ids(), e.rels())
+                                       : dom(e.n, e.R, e.ids(), e.rels(), n, R, ids, rels);
+                }
+            }
+            if (drop) { ++dmThinned; continue; }
+            if (w != i) bucket[w] = std::move(bucket[i]);
+            ++w;
+        }
+        bucket.resize(w);
+        bucket.emplace_back();
+        DmEntry& ne = bucket.back();
+        ne.g = gs; ne.side = (short)side; ne.n = (short)n; ne.R = (short)R; ne.ref = ref;
+        if (n <= TT2DominanceTable::K) { for (int j = 0; j < n; ++j) { ne.id[j] = ids[j]; ne.rel[j] = rels[j]; } }
+        else { ne.big.reset(new short[2 * n]); for (int j = 0; j < n; ++j) { ne.big[j] = ids[j]; ne.big[n + j] = rels[j]; } }
+        ++dmInserts;
+        return best;
+    }
+    // Called from BAE_RCPSP.h so the tracer can see what the SEARCH did, not just what
+    // the successor function produced.
+    void Probe(const RCPSPState_BI& st, int ev, double g, double h, double U) {
+        if (g_pp_on) ppMark(st.rev ? 1 : 0, st.s, g_bi_NT, (PPEvent)ev, g, h, U);
+    }
+    static uint64_t idHashOf(const RCPSPState_BI& st) {
+        return (g_bi_strhash ? biFnv(biIdKey(st)) : biIdHash(st.s)) ^ (st.rev ? 0x9e3779b97f4a7c15ULL : 0ULL);
+    }
+    static uint64_t cutHashOf(const RCPSPState_BI& st) {
+        if (g_bi_strhash || !g_meet_norm) return biFnv(biCutKey(st));
+        return (st.rev && !g_bi_unfire) ? biCutHashRevTranslated(st.s) : biCutHashFwd(st.s);
+    }
+    uint64_t GetStateHash(const RCPSPState_BI& st) {
+        ++g_hb_bihash_calls;
+        if (!g_tt2_prof) return idHashOf(st);
+        const auto t0 = std::chrono::steady_clock::now();
+        const uint64_t h = idHashOf(st);
+        g_hb_bihash_sec += secs_since(t0);
+        return h;
+    }
+    uint64_t GetMeetHash(const RCPSPState_BI& st) {   // frame-independent: no side bit
+        ++g_hb_meethash_calls;
+        sides->use(!st.rev);                          // durations are read from the current net
+        if (!g_tt2_prof) return cutHashOf(st);
+        const auto t0 = std::chrono::steady_clock::now();
+        const uint64_t h = cutHashOf(st);
+        g_hb_meethash_sec += secs_since(t0);
+        return h;
+    }
+    // BAE* relaxes the NODE's g (childData.g) but the stored STATE keeps its own short g,
+    // set when it was generated. RCPSP_TT2::GetSuccessors derives each child's g from the
+    // PARENT STATE's g, and DR5 dominates on s.g -- so once the two diverge, dominance is
+    // comparing inflated costs and prunes states it must keep. TemplateAStar never showed
+    // this because it does not relax the way BAE* does. Keep them in sync.
+    static uint64_t gDesyncs;
+    void SetStateG(RCPSPState_BI& st, double g) {
+        if ((short)g != st.s.g) { ++gDesyncs; st.s.g = (short)g; }
+    }
+    // Activities started on the state's OWN net (active + finished). Read by BAE_RCPSP.h for the
+    // maxDepthF / maxDepthB columns only.
+    int Progress(const RCPSPState_BI& st) const {
+        const int started = (int)st.s.activeTransitionIndices.size() + (int)st.s.finishedActivitiys.count()
+                          - (st.s.finishedActivitiys.test(0) ? 1 : 0);
+        return (g_bi_unfire && st.rev) ? g_bi_NT - started : started;
+    }
+    double GCost(const RCPSPState_BI& a, const RCPSPState_BI& b) {
+        double d = (double)b.s.g - (double)a.s.g;
+        return d < 0 ? 0 : d;                         // e==0 fires are legitimate zero-cost edges
+    }
+    // RCPSP_BI_HFUSE (default 0). TT2's HCost writes h into the state it scores; under TemplateAStar that lets
+    // a zero-time child reuse its parent's h (predessesor_h). This wrapper scores the state and then RESTORES
+    // h, which is the search HBAE has always run (stored states keep h = 0, so zero-time children, ~19% of
+    // heuristic requests on j30, score h = 0) -- now without the two full state copies the old wrapper made.
+    // HFUSE=1 keeps the written h: still optimal, but MORE expansions locally (j30 1:1 17k -> 34k, 1:4 93k ->
+    // 133k, 3:9 2.2k -> 3.5k; likely the reused parent h makes f non-monotone along zero-cost edges).
+    // RCPSP_BI_HFRESH (default 1): with h restored to 0 in stored states, the zero-delay shortcut in RCPSP_TT2::HCost
+    // scored those children h = 0 (f = g) -- admissible but inconsistent (min f per side fell by 30-40 mid-run).
+    // HFRESH sets g_tt2_hfresh for the instance, so every child gets a fresh h. HFRESH=0 restores the old search.
+    static bool HFuseOn() { static const bool on = [](){ const char* e = std::getenv("RCPSP_BI_HFUSE");
+                                                         return e ? (std::atoi(e) != 0) : false; }();
+                            return on; }
+    double HCost(const RCPSPState_BI& a, const RCPSPState_BI&) {
+        sides->use(!a.rev);
+        if (HFuseOn()) return env.HCost(a.s, a.s);
+        const short h0 = a.s.h, nc0 = a.s.nextCritical;
+        const double r = env.HCost(a.s, a.s);
+        a.s.h = h0; a.s.nextCritical = nc0;
+        return r;
+    }
+    bool GoalTest(const RCPSPState_BI& a, const RCPSPState_BI&) {
+        int fin = 0; for (int i = 1; i <= g_bi_NT; i++) if (a.s.finishedActivitiys.test(i)) ++fin;
+        return fin == g_bi_NT;
+    }
+    BiSides* sides;
+    RCPSP_TT2 env;
+};
+
+// One heuristic object per direction. BAE* calls heuristic->HCost(n, target) on nodes of its
+// own side, and reverse_heuristic->HCost(n, source) on those SAME nodes to get h_opp. The
+// forward/backward distinction is carried by the state, so both delegate to the same code and
+// the reverse one is the admissible "distance already travelled" bound (EST-based).
+// BAE* uses EACH heuristic object in BOTH roles. For the forward side it calls
+// forwardHeuristic as the own cost-to-go and backwardHeuristic as h_opp; for the backward
+// side it calls backwardHeuristic as the own cost-to-go and forwardHeuristic as h_opp.
+// So an object cannot be "the cost-to-go one" or "the h_opp one" -- it must DISPATCH ON THE
+// STATE'S SIDE: own cost-to-go for its own side, h_opp for the other. Getting this wrong made
+// the backward search use h_opp (distance ALREADY TRAVELLED, ~= g) as its cost-to-go, which
+// grossly overestimates: on j30 3:9 an optimal-path node at g=35 with a true cost-to-go of 30
+// was scored h=35, so f=70 >= U=66 and the node was discarded along with the whole remainder
+// of the optimal path. The backward frontier then drained and certified a non-optimal 66.
+uint64_t RCPSP_BiEnv::gDesyncs = 0;
+
+class BiHeuristic : public Heuristic<RCPSPState_BI> {
+public:
+    // ownSideRev = the side for which THIS object supplies the own cost-to-go.
+    BiHeuristic(RCPSP_BiEnv* e, bool ownSideRev, std::vector<int>* estF, std::vector<int>* estB)
+        : env(e), ownRev(ownSideRev), eF(estF), eB(estB) {}
+    double HCost(const RCPSPState_BI& a, const RCPSPState_BI& b) const override {
+        static const bool zeroHopp = [](){ const char* e = std::getenv("RCPSP_BI_HOPP");
+                                           return e && std::atoi(e) == 0; }();
+        if (g_bi_unfire) {
+            // Both sides hold FORWARD-frame states, so there are exactly two admissible estimates:
+            // H_end = TT2 heuristic (time still to go), H_start = hOppOf on the forward net (time since
+            // the start). Forward: h = H_end, h_opp = H_start. Un-fire backward: h = H_start, h_opp = H_end.
+            const bool own = (a.rev == ownRev);
+            if (!own && zeroHopp) return 0.0;
+            const bool toEnd = own ? !a.rev : a.rev;
+            if (toEnd) return const_cast<RCPSP_BiEnv*>(env)->HCost(a, b);
+            env->sides->use(true);
+            return (double)hOppOf(a.s, *eF, g_bi_NT);
+        }
+        if (a.rev == ownRev)                                    // own side => cost-to-go
+            return const_cast<RCPSP_BiEnv*>(env)->HCost(a, b);
+        if (zeroHopp) return 0.0;      // consistent by construction => bound stays valid
+        env->sides->use(!a.rev);                                // other side => h_opp
+        return (double)hOppOf(a.s, a.rev ? *eB : *eF, g_bi_NT);
+    }
+    RCPSP_BiEnv* env; bool ownRev; std::vector<int>* eF; std::vector<int>* eB;
+};
+
+// Per-instance HBAE telemetry for the benchmark writer.
+// g_hb_proven is the one that matters: a drained queue under DOMINANCE cannot certify
+// optimality (dominance discards states the opposite side needed to meet on), so those rows
+// carry an upper bound only. See g_hb_stop.
+static uint64_t g_hb_exp=0, g_hb_unique=0, g_hb_touched=0, g_hb_necessary=0;
+static uint64_t g_hb_reopened=0, g_hb_solUpd=0;
+static int      g_hb_mk=-1, g_hb_ub=-1, g_hb_pathLen=0;
+static bool     g_hb_proven=false, g_hb_trivial=false;
+static double   g_hb_time=0.0, g_hb_meetDepth=-1;
+static const char* g_hb_stop = "none";
+static const char* g_hb_meetAt = "none";
+static int      g_hb_dr5mask=0, g_hb_dr4f=0, g_hb_batchf=0;   // ACTUAL flags used
+static int      g_hb_nip=1, g_hb_noub=1, g_hb_fbound=1, g_hb_draincert=0;   // stop/certify switches
+// Extra per-instance diagnostics (column list in runBenchmarkTT2HBAE). Side index 0 = forward, 1 = backward.
+static uint64_t g_hb_expF=0, g_hb_expB=0, g_hb_openF=0, g_hb_openB=0, g_hb_itemsF=0, g_hb_itemsB=0, g_hb_meetIdxF=0, g_hb_meetIdxB=0;
+static double   g_hb_timeF=0.0, g_hb_timeB=0.0, g_hb_minFF=-1, g_hb_minFB=-1;
+static double   g_hb_minFAt[3][2] = {{-1, -1}, {-1, -1}, {-1, -1}};   // min open f at 60 / 120 / 240 s
+static int64_t  g_hb_expAtMax=-1;
+static double   g_hb_uAtMax=-1, g_hb_rssMB=0.0;
+static uint64_t g_hb_domPrunedF=0, g_hb_domPrunedB=0, g_hb_domInsertsF=0, g_hb_domInsertsB=0;
+// Where/when the frontiers met (the FINAL incumbent unless named first*) and how deep each side got.
+static int64_t  g_hb_meetExp=-1, g_hb_firstMeetExp=-1;
+static double   g_hb_firstU=-1, g_hb_meetGF=-1, g_hb_meetGB=-1, g_hb_meetTimeFrac=-1;
+static const char* g_hb_meetSide = "none";
+static uint64_t g_hb_meetHits=0, g_hb_fBoundCalls=0;
+static double   g_hb_maxDepthF=-1, g_hb_maxDepthB=-1, g_hb_maxGF=-1, g_hb_maxGB=-1, g_hb_fBoundSec=0.0;
+static int      g_hb_minfHeap=1;
+static int      g_hb_hfuse=1, g_hb_strhash=0;
+static int      g_hb_hfresh=1;                       // RCPSP_BI_HFRESH (CSV hFresh)
+static uint64_t g_hb_fDropF=0, g_hb_fDropB=0;        // children with lower f than their parent, per side (CSV fDropF/fDropB)
+static double   g_hb_fDropMax=0;                     // largest such drop (CSV fDropMax)
+static double   g_hb_bx[5] = {0, 0, 0, 0, 0};   // Expand split: pop, successors, child loop, heuristic calls, add to OPEN
+static int      g_hb_domMeet=0, g_hb_meetGhost=0;
+static uint64_t g_hb_dmUpdates=0, g_hb_dmInserts=0, g_hb_dmSkipped=0, g_hb_dmThinned=0, g_hb_dmJoinCmp=0, g_hb_dmEntF=0, g_hb_dmEntB=0;
+static int      g_hb_shiftMeet=0, g_hb_stopMax=0, g_hb_maxStop=0;
+static uint64_t g_hb_dmShiftBest=0;
+// explicit-wait model (RCPSP_TT2_WAIT) and the meeting audit (RCPSP_BI_AUDIT); filled by solveRCPSP_TT2_HBAE
+static int      g_hb_dr4side=0;
+static uint64_t g_hb_waitExemptF=0, g_hb_waitExemptB=0;
+static const char* g_hb_auditStatus = "off";
+static int      g_hb_auditHorizon=-1, g_hb_auditBoth=-1, g_hb_auditFwd=-1, g_hb_auditBwd=-1, g_hb_auditBothDom=-1, g_hb_auditMissed=-1;
+static int64_t  g_hb_auditCrossExp=-1, g_hb_auditMeetExp=-1;
+static int      g_hb_auditFwdMaxT=-1, g_hb_auditBwdMinT=-1, g_hb_auditFwdHoles=-1, g_hb_auditBwdHoles=-1;
+int solveRCPSP_TT2_HBAE(int group, int exam, const std::string& ptype = "j30") {
+    std::cout << "=== HOG2 BAE* " << group << ":" << exam << " ===" << std::endl;
+    { const char* bw = std::getenv("RCPSP_BI_BWD");
+      g_bi_unfire = bw && (std::string(bw) == "unfire" || std::string(bw) == "1"); }
+    getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+    g_bi_NT = (int)petri.Transitions.size();
+    { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs=RSL[((group-1)%4+4)%4]; }
+    g_instance_deadline = std::chrono::steady_clock::now()+std::chrono::seconds(astar_timeout_seconds);
+    g_instance_deadline_set = true;
+    if (g_tt2_singleres || g_tt2_hierrs) { g_tt2_singleres=false; g_tt2_hierrs=false; }
+    if (g_h_cache || g_subsolve_succ_cache) { g_h_cache=false; g_subsolve_succ_cache=false; }
+    get_tt2_cache().clear();
+    // per-instance diagnostics: the TT2 phase timers are shared with the unidirectional solver
+    g_prof_succ_sec = g_prof_avail_sec = g_prof_gen_sec = g_prof_dr5_sec = g_prof_hash_sec = 0.0;
+    g_prof_hcp_sec = g_prof_hres_sec = g_prof_astar_sec = 0.0;
+    g_prof_succ_calls = g_prof_hash_calls = g_prof_children_raw = g_prof_children_kept = 0;
+    g_prof_h_calls_all = g_prof_h_known = g_prof_h_deltazero = 0; g_prof_maxf = -1;
+    g_prof_t0 = std::chrono::steady_clock::now(); g_prof_next_trace = 5.0;
+    g_heur_time_sec = 0.0; g_heur_calls = 0; g_tt2_dr4_pruned = 0;
+    g_hb_bihash_sec = g_hb_meethash_sec = 0.0; g_hb_bihash_calls = g_hb_meethash_calls = 0;
+    g_hb_expF = g_hb_expB = g_hb_openF = g_hb_openB = g_hb_itemsF = g_hb_itemsB = g_hb_meetIdxF = g_hb_meetIdxB = 0;
+    g_hb_timeF = g_hb_timeB = 0.0; g_hb_minFF = g_hb_minFB = -1;
+    for (auto& r : g_hb_minFAt) { r[0] = -1; r[1] = -1; }
+    g_hb_expAtMax = -1; g_hb_uAtMax = -1; g_hb_rssMB = 0.0;
+    g_hb_domPrunedF = g_hb_domPrunedB = g_hb_domInsertsF = g_hb_domInsertsB = 0;
+    g_hb_meetExp = g_hb_firstMeetExp = -1; g_hb_firstU = g_hb_meetGF = g_hb_meetGB = g_hb_meetTimeFrac = -1;
+    g_hb_meetSide = "none"; g_hb_meetHits = g_hb_fBoundCalls = 0; g_hb_fBoundSec = 0.0;
+    g_hb_maxDepthF = g_hb_maxDepthB = g_hb_maxGF = g_hb_maxGB = -1;
+    g_hb_minfHeap = BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv>::MinFHeapOn() ? 1 : 0;
+    g_hb_hfuse = RCPSP_BiEnv::HFuseOn() ? 1 : 0; g_hb_strhash = g_bi_strhash ? 1 : 0;
+    { const char* e = std::getenv("RCPSP_BI_HFRESH"); g_hb_hfresh = (e && std::atoi(e) == 0) ? 0 : 1; }
+    g_hb_fDropF = g_hb_fDropB = 0; g_hb_fDropMax = 0;
+    struct HFreshGuard { bool saved; explicit HFreshGuard(bool on) : saved(g_tt2_hfresh) { g_tt2_hfresh = on; }
+                         ~HFreshGuard() { g_tt2_hfresh = saved; } } hfreshGuard(g_hb_hfresh != 0);
+    for (double& x : g_hb_bx) x = 0.0;
+    g_hb_domMeet = BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv>::DomMeetOn() ? 1 : 0;
+    { const char* e = std::getenv("RCPSP_BI_MEET_GHOST"); g_hb_meetGhost = (g_hb_domMeet && e && std::atoi(e) != 0) ? 1 : 0; }
+    g_hb_dmUpdates = g_hb_dmInserts = g_hb_dmSkipped = g_hb_dmThinned = g_hb_dmJoinCmp = g_hb_dmEntF = g_hb_dmEntB = 0;
+    g_hb_shiftMeet = (g_hb_domMeet && RCPSP_BiEnv::ShiftMeetOn()) ? 1 : 0; g_hb_dmShiftBest = 0;
+    { const char* e = std::getenv("RCPSP_BI_STOP"); g_hb_stopMax = (e && std::string(e) == "max") ? 1 : 0; } g_hb_maxStop = 0;
+    g_tt2_wait_edges = 0; g_tt2_wait_cut = 0; g_tt2_wait_pass = 0; g_tt2_wait_jumped = 0; g_tt2_wait_meetonly = 0; g_hb_waitExemptF = g_hb_waitExemptB = 0;
+    g_hb_auditStatus = BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv>::AuditOn() ? "trivial" : "off";
+    g_hb_auditHorizon = g_hb_auditBoth = g_hb_auditFwd = g_hb_auditBwd = g_hb_auditBothDom = g_hb_auditMissed = -1;
+    g_hb_auditCrossExp = g_hb_auditMeetExp = -1;
+    g_hb_auditFwdMaxT = g_hb_auditBwdMinT = g_hb_auditFwdHoles = g_hb_auditBwdHoles = -1;
+    rootb::reset();   // RootBounds.h values are per instance (also on the trivial-root row)
+    { std::vector<int> te; int tm=0;
+      if (tryTrivialRootSchedule_TT2(te, tm)) {
+          std::cout << "HBAE " << group << ":" << exam << " makespan=" << tm
+                    << " expanded=0 trivialAtRoot=1" << std::endl;
+          g_hb_exp=g_hb_unique=g_hb_touched=g_hb_necessary=0; g_hb_reopened=g_hb_solUpd=0;
+          g_hb_mk=g_hb_ub=tm; g_hb_pathLen=0; g_hb_proven=true; g_hb_trivial=true;
+          g_hb_time=0.0; g_hb_meetDepth=-1; g_hb_stop="trivial"; g_hb_meetAt="none";
+          return tm; } }
+    // RCPSP_ROOT_DLB / RCPSP_ROOT_SEED (RootBounds.h), computed on the forward instance before the nets are swapped
+    if (rootb::computeRootBounds()) {
+        const int tm = rootb::info().seed;
+        std::cout << "HBAE " << group << ":" << exam << " makespan=" << tm << " expanded=0 closedAtRoot=1 (seed <= root LB "
+                  << std::max(rootb::info().lb, rootb::info().lbPlain) << ")" << std::endl;
+        g_hb_exp=g_hb_unique=g_hb_touched=g_hb_necessary=0; g_hb_reopened=g_hb_solUpd=0;
+        g_hb_mk=g_hb_ub=tm; g_hb_pathLen=0; g_hb_proven=true; g_hb_trivial=false;
+        g_hb_time=rootb::seconds(); g_hb_meetDepth=-1; g_hb_stop="rootclosed"; g_hb_meetAt="none";
+        return tm;
+    }
+    bool sDR5=g_tt2_dr5, sDR4=g_tt2_dr4, sB=g_tt2_batch;
+    int dr5MaskCfg = 3; if (const char* d5=std::getenv("RCPSP_BI_DR5")) dr5MaskCfg = std::atoi(d5);
+    if (g_bi_unfire) dr5MaskCfg &= 1;   // the forward DR5 rule is unsound on un-fire states (see BWMEET)
+    g_tt2_dr5 = (dr5MaskCfg != 0);
+    { const char* b4=std::getenv("RCPSP_BI_DR4"); g_tt2_dr4 = b4 ? (std::atoi(b4)!=0) : false; }
+    g_hb_dr5mask = dr5MaskCfg; g_hb_dr4f = g_tt2_dr4 ? 1 : 0;
+    // RCPSP_BI_DR4SIDE = both (default) | fwd | bwd: the side(s) DR4 applies to (BiSides::use). 0 when DR4 is off.
+    { const char* ds = std::getenv("RCPSP_BI_DR4SIDE"); const std::string v = ds ? ds : "both";
+      g_hb_dr4side = !g_tt2_dr4 ? 0 : (v == "fwd") ? 1 : (v == "bwd") ? 2 : 3; }
+    g_tt2_wait_edges = 0; g_tt2_wait_cut = 0;
+    { const char* bb=std::getenv("RCPSP_BI_BATCH"); g_tt2_batch = bb ? (std::atoi(bb)!=0) : false; }
+    g_hb_batchf = g_tt2_batch ? 1 : 0;
+    g_tt2_dom_side=0; get_tt2_dominance_table().clear();
+    const uint64_t domP0F = (uint64_t)get_tt2_dominance_table().pruned, domI0F = (uint64_t)get_tt2_dominance_table().inserts;
+    g_tt2_dom_side=1; get_tt2_dominance_table().clear();
+    const uint64_t domP0B = (uint64_t)get_tt2_dominance_table().pruned, domI0B = (uint64_t)get_tt2_dominance_table().inserts;
+
+    BiSides sides;
+    sides.dr5Mask = dr5MaskCfg;
+    sides.dr4On = (g_hb_dr4side != 0); sides.dr4Mask = g_hb_dr4side;
+    sides.petriStash = petri; sides.rcpspStash = RCPSPex;
+    deriveEndpointNames(sides.initF, sides.finalF);      // globals currently hold the FORWARD net
+    reverseLoadedInstance();
+    deriveEndpointNames(sides.initB, sides.finalB);      // ... and now the REVERSED one
+    std::swap(petri, sides.petriStash); std::swap(RCPSPex, sides.rcpspStash);  // global = forward
+    sides.curFwd = true;
+    if (g_bi_unfire) {
+        sides.use(true);
+        BWMEET::precompute();
+        { const char* fv = std::getenv("RCPSP_BWD_FULLVERIFY");       // default ON: every un-fire edge is
+          BWMEET::g_bwd_fullverify = fv ? (std::atoi(fv) != 0) : true; } // re-fired and must reproduce the state
+        BWMEET::g_bwd_enum = false; BWMEET::g_bwd_dr = false;
+    }
+
+    sides.use(true);  std::vector<int> estF = computeESTforCurrentNet();
+    sides.use(false); std::vector<int> estB = computeESTforCurrentNet();
+
+    RCPSP_BiEnv benv(&sides);
+    sides.use(true);  RCPSPState_TT2 rf; rf.g = 0; RCPSPState_BI start(rf, false);
+    sides.use(false); RCPSPState_TT2 rb; rb.g = 0;
+    if (g_bi_unfire) {                     // backward root = the forward GOAL marking: all finished, sink token
+        for (int i = 1; i <= BWMEET::NT; ++i) rb.finishedActivitiys.set(i);
+        for (auto& an : rb.activity_nodes) an = {0,0};
+        if (BWMEET::g_sinkOutIdx >= 0) rb.activity_nodes[BWMEET::g_sinkOutIdx] = {1,0};
+        rb.activeTransitionIndices.clear();
+        BWMEET::deriveResources(rb.activeTransitionIndices, rb.resource_nodes);
+        rb.transitionsCached = false; rb.AvailableTransitionIndices_TT2.clear(); rb.hKnown = false; rb.g = 0;
+    }
+    RCPSPState_BI goal (rb, true);
+
+    // Each object serves BOTH roles, selected by the state's side (see BiHeuristic).
+    BiHeuristic hSideF(&benv, false, &estF, &estB);  // cost-to-go for FORWARD states, h_opp for backward
+    BiHeuristic hSideB(&benv, true,  &estF, &estB);  // cost-to-go for BACKWARD states, h_opp for forward
+
+    // epsilon = 0: e==0 fires make zero-cost edges legal here. gcd = 1: costs are integers.
+    // RCPSP_BI_ALT=1 strict alternation (original BAE*), =0 Pohl cardinality (default):
+    // alternation drags the cheap side up to match the expensive one, which hurts whenever
+    // the two directions are asymmetric.
+    int altMode = 0; if (const char* am=std::getenv("RCPSP_BI_ALT")) altMode = std::atoi(am);
+    BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv> bae(altMode != 0, 0.0, 1.0);
+    std::vector<RCPSPState_BI> path;
+    // RCPSP_BI_MEET_GHOST (needs RCPSP_BI_DOMMEET): states DR5 prunes are real states reached by a real path, so
+    // they are offered to the dominance-meet tables too (their g is an actual path cost). They are never expanded.
+    if (g_hb_meetGhost) {
+        g_tt2_dr_prune_observer = [&](const RCPSPState_TT2& s) {
+            const bool rev = (g_tt2_dom_side == 1);
+            RCPSPState_BI gs(s, rev);
+            const double c = benv.DomMeet(gs, (double)s.g, bae.GetSolutionCost());
+            if (c < bae.GetSolutionCost()) bae.OfferSolution(c, gs, !rev, (double)s.g);
+        };
+    }
+    bae.SetRootBounds(rootb::info().seed > 0 ? (double)rootb::info().seed : DBL_MAX,
+                      rootb::DlbOn() ? (double)std::max(rootb::info().lb, rootb::info().lbPlain) : 0.0);
+    const auto rootSavedTO = astar_timeout_seconds;   // root bounds already used part of the per-instance budget
+    if (rootb::seconds() > 0) astar_timeout_seconds = std::max<decltype(rootSavedTO)>(1, rootSavedTO - (decltype(rootSavedTO))std::ceil(rootb::seconds()));
+    auto t0 = std::chrono::high_resolution_clock::now();
+    bae.GetPath(&benv, start, goal, &hSideF, &hSideB, path);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    astar_timeout_seconds = rootSavedTO;
+    g_tt2_dr_prune_observer = nullptr;
+    std::chrono::duration<double> el = t1 - t0;
+
+    double cost = bae.GetSolutionCost();
+    int ub = (cost >= DBL_MAX/2) ? -1 : (int)cost;
+    // A drained queue proves optimality when nothing unsound was removed from THAT side.
+    // DR5 is per-side (bit0 forward, bit1 reversed); DR4 is global, so it taints both.
+    const int drained = bae.GetDrainedSide();
+    // A DRAIN (one queue empty) certifies optimality only when that side provably exhausted a
+    // search that must contain an optimal path ending at its goal, whose meet with the opposite
+    // ROOT (indexed at initialisation) records U <= C*. That needs:
+    //  * lazy nipping OFF (RCPSP_BI_NIP=0): nipping closes a node WITHOUT expanding it on a
+    //    many-to-one cut-key match with an opposite state that need not be the cheapest for that
+    //    cut yet -- so a side can lose its optimal path and still drain;
+    //  * no discard (RCPSP_BI_NOUB, default on);
+    //  * that side's dominance off, OR RCPSP_BI_DRAINCERT=1: DR5/DR4/batch are sound for a side's
+    //    own search, so an optimal path survives in it. Retrospective (nipping on): all 367
+    //    drained-unproven rows in four j30 gates had ub == C*.
+    // TIGHTENED 2026-09-10: a dominance-free drain used to certify even with nipping on.
+    static const bool nipOffC = [](){ const char* e = std::getenv("RCPSP_BI_NIP");
+                                      return e && std::atoi(e) == 0; }();
+    static const bool noubC   = [](){ const char* e = std::getenv("RCPSP_BI_NOUB");
+                                      return e ? (std::atoi(e) != 0) : true; }();
+    static const bool drainC  = [](){ const char* e = std::getenv("RCPSP_BI_DRAINCERT");
+                                      return e && std::atoi(e) != 0; }();
+    const bool drainedSideClean = nipOffC && noubC && !(g_bi_unfire && drained == 2) &&
+        ((drained == 1 && ((!(dr5MaskCfg & 1) && !(g_hb_dr4side & 1)) || drainC)) ||
+         (drained == 2 && ((!(dr5MaskCfg & 2) && !(g_hb_dr4side & 2)) || drainC)));
+    const bool proven = (ub >= 0) && (bae.StoppedByBound() || drainedSideClean);
+    int mk = proven ? ub : -1;
+    double meetDepth = -1; const char* meetWhere = "none";
+    if (ub >= 0 && bae.GetMeetFromFwd() < 0) meetWhere = "seed";   // RCPSP_ROOT_SEED incumbent never improved by a meet
+    if (ub >= 0 && bae.GetMeetFromFwd() >= 0) {   // an incumbent from a meet
+        const RCPSPState_BI& m = bae.GetMiddleNode();
+        int started;
+        if (!m.rev || g_bi_unfire) { started = (int)m.s.activeTransitionIndices.size();
+                      for (int q = 1; q <= g_bi_NT; q++) if (m.s.finishedActivitiys.test(q)) ++started; }
+        else        { int rf = 0; for (int q = 1; q <= g_bi_NT; q++) if (m.s.finishedActivitiys.test(q)) ++rf;
+                      started = g_bi_NT - rf; }
+        meetDepth = (double)started / (double)g_bi_NT;
+        meetWhere = (started <= 1) ? "AT-SOURCE" : (started >= g_bi_NT - 1) ? "AT-GOAL" : "MIDDLE";
+    }
+    // where and when the frontiers met, and how deep each side got (see BAE_RCPSP.h)
+    g_hb_meetExp = bae.GetMeetExp(); g_hb_firstMeetExp = bae.GetFirstMeetExp(); g_hb_firstU = bae.GetFirstU();
+    g_hb_meetHits = bae.GetMeetHits();
+    g_hb_meetSide = (ub < 0 || bae.GetMeetFromFwd() < 0) ? "none" : (bae.GetMeetFromFwd() ? "fwd" : "bwd");
+    g_hb_meetGF = bae.GetMeetGF(); g_hb_meetGB = bae.GetMeetGB();
+    g_hb_meetTimeFrac = (ub > 0 && g_hb_meetGF >= 0) ? g_hb_meetGF / (double)ub : -1;
+    g_hb_maxDepthF = bae.GetMaxProg(true)  >= 0 ? (double)bae.GetMaxProg(true)  / (double)g_bi_NT : -1;
+    g_hb_maxDepthB = bae.GetMaxProg(false) >= 0 ? (double)bae.GetMaxProg(false) / (double)g_bi_NT : -1;
+    g_hb_maxGF = bae.GetMaxG(true); g_hb_maxGB = bae.GetMaxG(false);
+    g_hb_fBoundCalls = bae.GetFBoundCalls(); g_hb_fBoundSec = bae.GetFBoundSec();
+    for (int i = 0; i < 5; ++i) g_hb_bx[i] = bae.GetExpandSplit(i);
+    g_hb_dmUpdates = bae.GetDomMeetUpdates(); g_hb_dmInserts = benv.dmInserts; g_hb_dmSkipped = benv.dmSkipped;
+    g_hb_dmThinned = benv.dmThinned; g_hb_dmJoinCmp = benv.dmJoinCmp;
+    if (g_hb_domMeet) { g_hb_dmEntF = benv.DomMeetEntries(0); g_hb_dmEntB = benv.DomMeetEntries(1); }
+    g_hb_dmShiftBest = benv.dmShiftBest;
+    g_hb_maxStop = bae.StoppedByMax() ? 1 : 0;
+    // DR5 wait-chain exemptions per side (explicit-wait model)
+    g_tt2_dom_side=0; g_hb_waitExemptF = get_tt2_dominance_table().waitExempt;
+    g_tt2_dom_side=1; g_hb_waitExemptB = get_tt2_dominance_table().waitExempt;
+    g_tt2_dom_side=0;
+    // ── MEETING AUDIT (RCPSP_BI_AUDIT=1) ─────────────────────────────────────
+    // Rebuild the schedule S of the best exact meet (the forward path to one node, the reversed path to the other),
+    // check that S is feasible with makespan C, then for every integer t in [0, C] look up S's cut at t (what started
+    // before t; running activities with their remaining time) in both sides' meet indexes, which keep the best-g node
+    // per cut:
+    //   auditFwdExact / auditBwdExact / auditBothExact  t with a node of that cut at g = t (forward), g = C - t (reversed)
+    //   auditCrossExp   the first expansion at which BOTH sides held S's cut at the same t
+    //   auditMeetExp    the expansion at which the incumbent reached C
+    //   auditMissed     1 if auditMeetExp > auditCrossExp: both sides held a common cut of S and no meet was recorded
+    //                   when the second one appeared (what the explicit-wait model must never show)
+    //   auditBothDom    t whose scheduled set holds a forward and a reversed dominance-meet entry joining at <= C
+    // Status INCONSISTENT / INFEASIBLE means the meet produced something that is not a schedule of cost C (a bug).
+    if (BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv>::AuditOn()) {
+        uint64_t fid = 0, bid = 0; double ec = DBL_MAX; int shift = 0; const int C = (int)cost;
+        if (!proven) g_hb_auditStatus = "unproven";
+        else if (g_bi_unfire) g_hb_auditStatus = "unfire";
+        else if (!bae.GetExactMeet(fid, bid, shift, ec) || ec != cost) g_hb_auditStatus = "nojoin";   // e.g. found by a DR5-pruned state
+        else {
+            const int NT = g_bi_NT;
+            sides.use(true);
+            std::vector<int> dur(NT + 1, 0);
+            for (int i = 1; i <= NT; ++i) dur[i] = RCPSPex.activities[i - 1].duration;
+            std::vector<int> st(NT + 1, INT_MIN);
+            const auto setStart = [&](int id, int s) { if (id >= 1 && id <= NT && st[id] == INT_MIN) st[id] = s; };
+            std::vector<std::pair<RCPSPState_BI, double>> pth;
+            // The join runs the forward path up to node fid (time T), then the reversed suffix of node bid (length GB)
+            // shifted `shift` later. The forward side places what its node started before T (finished, or running and
+            // not started exactly at T: the cut key counts that as not started); the suffix places everything else.
+            bae.PathFromID(true, fid, pth);
+            const int T = (int)pth.back().second;
+            std::vector<char> own(NT + 1, 0);
+            { const auto& xs = pth.back().first.s;
+              for (int i = 1; i <= NT; ++i) if (xs.finishedActivitiys.test(i)) own[i] = 1;
+              for (const auto& a : xs.activeTransitionIndices) if (a.first >= 1 && a.first <= NT && a.second != dur[a.first]) own[a.first] = 1; }
+            for (const auto& pr : pth) {        // running (id, r) at node time g started at g - (p - r)
+                const int gg = (int)pr.second;
+                for (const auto& a : pr.first.s.activeTransitionIndices)
+                    if (a.first >= 1 && a.first <= NT && own[a.first]) setStart(a.first, gg - (dur[a.first] - a.second));
+                for (int i = 1; i <= NT; ++i) if (dur[i] == 0 && own[i] && pr.first.s.finishedActivitiys.test(i)) setStart(i, gg);
+            }
+            bae.PathFromID(false, bid, pth);
+            const int GB = (int)pth.back().second;
+            for (const auto& pr : pth) {        // reversed clock: started at sigma = tau - (p - r), which on the forward
+                const int gg = (int)pr.second;  // clock is a start at T + shift + GB - sigma - p
+                for (const auto& a : pr.first.s.activeTransitionIndices)
+                    if (a.first >= 1 && a.first <= NT && !own[a.first]) setStart(a.first, T + shift + GB - (gg - (dur[a.first] - a.second)) - dur[a.first]);
+                for (int i = 1; i <= NT; ++i) if (dur[i] == 0 && !own[i] && pr.first.s.finishedActivitiys.test(i)) setStart(i, T + shift + GB - gg);
+            }
+            bool complete = true;
+            for (int i = 1; i <= NT; ++i) if (st[i] == INT_MIN) complete = false;
+            bool feasible = complete && (T + shift + GB == C);
+            if (feasible) {
+                int mkS = 0;
+                for (int i = 1; i <= NT; ++i) { if (st[i] < 0) feasible = false; mkS = std::max(mkS, st[i] + dur[i]); }
+                if (mkS != C) feasible = false;
+                for (int a = 1; a <= NT && feasible; ++a)
+                    for (int p : RCPSPex.backword_dependencies[a - 1])
+                        if (p >= 1 && p <= NT && st[p] + dur[p] > st[a]) { feasible = false; break; }
+                for (const auto& [resName, cap] : RCPSPex.resources) {
+                    if (!feasible) break;
+                    std::vector<int> use(C + 1, 0);
+                    for (int a = 1; a <= NT; ++a)
+                        for (const auto& [rn, dem] : RCPSPex.activities[a - 1].resource_demands)
+                            if (rn == resName && dem > 0)
+                                for (int t = std::max(0, st[a]); t < st[a] + dur[a] && t <= C; ++t) use[t] += dem;
+                    for (int t = 0; t <= C; ++t) if (use[t] > cap) { feasible = false; break; }
+                }
+            }
+            if (!complete) g_hb_auditStatus = "incomplete";
+            else if (!feasible) g_hb_auditStatus = "INFEASIBLE";
+            else {
+                g_hb_auditStatus = "ok";
+                g_hb_auditHorizon = C + 1; g_hb_auditFwd = g_hb_auditBwd = g_hb_auditBoth = g_hb_auditBothDom = 0;
+                g_hb_auditMeetExp = g_hb_meetExp;
+                for (int t = 0; t <= C; ++t) {
+                    bool hasF = false, hasB = false; int64_t eF = -1, eB = -1;
+                    std::bitset<128> sched;
+                    for (int variant = 0; variant < 2; ++variant) {   // 1: zero-duration activities starting at t count as finished
+                        std::bitset<128> fin; std::pair<short, short> av[128]; int n = 0; bool zeroAt = false;
+                        for (int i = 1; i <= NT; ++i) {
+                            const int s = st[i], e = st[i] + dur[i];
+                            if (dur[i] == 0 && s == t) { zeroAt = true; if (variant == 1) fin.set(i); continue; }
+                            if (s < t && e <= t) fin.set(i);
+                            else if (s < t && t < e && n < 128) av[n++] = {(short)i, (short)(e - t)};
+                        }
+                        if (variant == 1 && !zeroAt) break;
+                        if (variant == 0) { sched = fin; for (int k = 0; k < n; ++k) sched.set(av[k].first); }
+                        const uint64_t h = biHashCut(fin & biFinMask(), av, n);
+                        double gg; int64_t ee;
+                        if (bae.MeetNode(true, h, gg, ee) && (int)gg == t && (!hasF || ee < eF)) { hasF = true; eF = ee; }
+                        if (bae.MeetNode(false, h, gg, ee) && (int)gg == C - t && (!hasB || ee < eB)) { hasB = true; eB = ee; }
+                    }
+                    if (hasF) { ++g_hb_auditFwd; g_hb_auditFwdMaxT = t; }
+                    if (hasB) { ++g_hb_auditBwd; if (g_hb_auditBwdMinT < 0) g_hb_auditBwdMinT = t; }
+                    if (hasF && hasB) {
+                        ++g_hb_auditBoth;
+                        const int64_t both = std::max(eF, eB);
+                        if (g_hb_auditCrossExp < 0 || both < g_hb_auditCrossExp) g_hb_auditCrossExp = both;
+                    }
+                    if (g_hb_domMeet) {
+                        static const std::bitset<128> low64(~0ULL);
+                        RCPSP_BiEnv::DmKey key; key.lo = (sched & low64).to_ullong(); key.hi = (sched >> 64).to_ullong();
+                        auto itF = benv.dmTab[0].find(key), itB = benv.dmTab[1].find(key);
+                        bool joined = false;
+                        if (itF != benv.dmTab[0].end() && itB != benv.dmTab[1].end())
+                            for (const auto& ef : itF->second) {
+                                for (const auto& eb : itB->second)
+                                    if ((int)ef.g + (int)eb.g + RCPSP_BiEnv::shiftOver(ef.n, ef.ids(), ef.rels(), eb.n, eb.ids(), eb.rels()) <= C) { joined = true; break; }
+                                if (joined) break;
+                            }
+                        if (joined) ++g_hb_auditBothDom;
+                    }
+                }
+                g_hb_auditMissed = (g_hb_auditCrossExp >= 0 && g_hb_auditMeetExp > g_hb_auditCrossExp) ? 1 : 0;
+                g_hb_auditFwdHoles = (g_hb_auditFwdMaxT >= 0) ? (g_hb_auditFwdMaxT + 1 - g_hb_auditFwd) : 0;
+                g_hb_auditBwdHoles = (g_hb_auditBwdMinT >= 0) ? (C - g_hb_auditBwdMinT + 1 - g_hb_auditBwd) : 0;
+            }
+        }
+        std::cout << "AUDIT " << group << ":" << exam << " status=" << g_hb_auditStatus << " C=" << C << " joinShift=" << shift
+                  << " fwdExact=" << g_hb_auditFwd << " bwdExact=" << g_hb_auditBwd << " bothExact=" << g_hb_auditBoth
+                  << " crossExp=" << g_hb_auditCrossExp << " meetExp=" << g_hb_auditMeetExp
+                  << " missed=" << g_hb_auditMissed << " bothDom=" << g_hb_auditBothDom
+                  << " fwdMaxT=" << g_hb_auditFwdMaxT << " bwdMinT=" << g_hb_auditBwdMinT
+                  << " fwdHoles=" << g_hb_auditFwdHoles << " bwdHoles=" << g_hb_auditBwdHoles << std::endl;
+        if (g_hb_auditMissed == 1) std::cout << "!! AUDIT MISSED MEET " << group << ":" << exam << std::endl;
+    }
+    std::cout << "HBAE " << group << ":" << exam << " makespan=" << mk
+              << " ub=" << ub << " proven=" << (proven ? 1 : 0)
+              << " stop=" << (bae.StoppedByBound() ? "bound"
+                              : drained == 1 ? "fwd-drained"
+                              : drained == 2 ? "bwd-drained" : "deadline")
+              << " expanded=" << bae.GetNodesExpanded()
+              << " unique=" << bae.GetUniqueNodesExpanded()
+              << " touched=" << bae.GetNodesTouched()
+              << " necessary=" << bae.GetNecessaryExpansions()
+              << " pathLen=" << path.size()
+              << " reopened=" << bae.GetReopenedNodes()
+              << " fDrop=" << bae.GetFDrop(true) << "/" << bae.GetFDrop(false) << " fDropMax=" << bae.GetFDropMax() << " hfresh=" << g_hb_hfresh
+              << " solUpdates=" << bae.GetSolutionUpdates()
+              << " meetDepth=" << meetDepth << " meetAt=" << meetWhere
+              << " meetSide=" << g_hb_meetSide << " gF=" << g_hb_meetGF << " gB=" << g_hb_meetGB
+              << " meetExp=" << g_hb_meetExp << " maxDepthF=" << g_hb_maxDepthF << " maxDepthB=" << g_hb_maxDepthB
+              << " dmUpdates=" << bae.GetDomMeetUpdates() << " stopRule=" << (g_hb_stopMax ? "max" : "avg")
+              << " maxStop=" << (bae.StoppedByMax() ? 1 : 0) << " minfHeap=" << g_hb_minfHeap << " fBoundCalls=" << g_hb_fBoundCalls << " fBoundSec=" << g_hb_fBoundSec
+              << " bwd=" << (g_bi_unfire ? "unfire" : "reversed")
+              << " alt=" << altMode
+              << " batch=" << (g_tt2_batch?1:0) << " dr4=" << g_hb_dr4f << " dr4side=" << g_hb_dr4side << " wait=" << (g_tt2_wait?1:0)
+              << " time=" << el.count() << "s" << std::endl;
+    g_hb_exp=bae.GetNodesExpanded(); g_hb_unique=bae.GetUniqueNodesExpanded();
+    g_hb_touched=bae.GetNodesTouched(); g_hb_necessary=bae.GetNecessaryExpansions();
+    g_hb_reopened=bae.GetReopenedNodes(); g_hb_solUpd=bae.GetSolutionUpdates();
+    g_hb_fDropF=bae.GetFDrop(true); g_hb_fDropB=bae.GetFDrop(false); g_hb_fDropMax=bae.GetFDropMax();
+    g_hb_mk=mk; g_hb_ub=ub; g_hb_pathLen=(int)path.size(); g_hb_proven=proven;
+    g_hb_trivial=false; g_hb_time=el.count() + rootb::seconds(); g_hb_meetDepth=meetDepth; g_hb_meetAt=meetWhere;
+    g_hb_stop = bae.StoppedByFloor() ? "rootfloor" : bae.StoppedByBound() ? "bound"
+              : drained == 1 ? "fwd-drained"
+              : drained == 2 ? "bwd-drained" : "deadline";
+    g_hb_expF = bae.GetExpanded(true);       g_hb_expB = bae.GetExpanded(false);
+    g_hb_timeF = bae.GetSideSec(true);       g_hb_timeB = bae.GetSideSec(false);
+    g_hb_openF = bae.GetOpenCount(true);     g_hb_openB = bae.GetOpenCount(false);
+    g_hb_itemsF = bae.GetItemCount(true);    g_hb_itemsB = bae.GetItemCount(false);
+    g_hb_meetIdxF = bae.GetMeetIndexSize(true); g_hb_meetIdxB = bae.GetMeetIndexSize(false);
+    g_hb_minFF = bae.GetMinFOpenNow(true);   g_hb_minFB = bae.GetMinFOpenNow(false);
+    for (int i = 0; i < 3; i++) { g_hb_minFAt[i][0] = bae.GetMinFAt(i, true); g_hb_minFAt[i][1] = bae.GetMinFAt(i, false); }
+    g_hb_expAtMax = bae.GetExpAtMaxBound();  g_hb_uAtMax = bae.GetUAtMaxBound();
+    g_hb_rssMB = (double)std::max(bae.GetPeakRSSKB(), bae_rcpsp_rss_kb()) / 1024.0;
+    g_tt2_dom_side=0; g_hb_domPrunedF = (uint64_t)get_tt2_dominance_table().pruned - domP0F; g_hb_domInsertsF = (uint64_t)get_tt2_dominance_table().inserts - domI0F;
+    g_tt2_dom_side=1; g_hb_domPrunedB = (uint64_t)get_tt2_dominance_table().pruned - domP0B; g_hb_domInsertsB = (uint64_t)get_tt2_dominance_table().inserts - domI0B;
+    g_tt2_dom_side=0;
+    g_tt2_dr5=sDR5; g_tt2_dr4=sDR4; g_tt2_batch=sB;
+    return mk;
+}
+
+// ── Does BAE2's successor generation match the UNIDIRECTIONAL searches? ───────
+// The concern is real: BAE2 keeps BOTH nets alive in the same globals and std::swaps
+// between them, so a stale global would silently give one side a different graph from
+// the one tt2one / tt2rev would search. This compares the two directly: build the same
+// root three ways (standalone forward, standalone reversed, and BAE2's stash+swap) and
+// compare the SET of states reachable within k fires, keyed by (marking, g). DR is
+// forced OFF so we compare raw generation, not table history.
+static std::set<std::string> biReach(RCPSP_TT2& env, const RCPSPState_TT2& root, int NT, int depth) {
+    std::set<std::string> seen;
+    std::vector<RCPSPState_TT2> frontier{root};
+    for (int d = 0; d < depth; ++d) {
+        std::vector<RCPSPState_TT2> next;
+        for (auto& s : frontier) {
+            RCPSPState_TT2 c = s; c.transitionsCached = false;
+            c.AvailableTransitionIndices_TT2.clear(); c.hKnown = false;
+            std::vector<RCPSPState_TT2> nb; env.GetSuccessors(c, nb);
+            for (auto& ch : nb) {
+                std::string k = meetKeyForward(ch, NT) + "#g" + std::to_string((int)ch.g);
+                if (seen.insert(k).second) next.push_back(ch);
+            }
+        }
+        frontier.swap(next);
+    }
+    return seen;
+}
+int solveRCPSP_TT2_BiCheck(int group, int exam, const std::string& ptype = "j30") {
+    int depth = 3; if (const char* d = std::getenv("RCPSP_BICHECK_DEPTH")) depth = std::atoi(d);
+    std::cout << "=== BI-GENERATION CHECK " << group << ":" << exam
+              << " (depth " << depth << ") ===" << std::endl;
+    bool s5=g_tt2_dr5, s4=g_tt2_dr4, sb=g_tt2_batch;
+    g_tt2_dr5=false; g_tt2_dr4=false;   // raw generation; batch left as the caller set it
+    RCPSP_TT2 env; int NT = 0;
+    double hF0 = 0, hB0 = 0;
+
+    // A: standalone forward, exactly what tt2one searches
+    std::set<std::string> A;
+    { getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+      NT = (int)petri.Transitions.size();
+      RCPSPState_TT2 r, d0; hF0 = env.HCost(r, d0); A = biReach(env, r, NT, depth); }
+
+    // B: standalone reversed, exactly what tt2rev searches
+    std::set<std::string> B;
+    { getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+      reverseLoadedInstance();
+      RCPSPState_TT2 r, d0; hB0 = env.HCost(r, d0); B = biReach(env, r, NT, depth); }
+
+    // C: BAE2's own setup — stash the reversed net, swap between sides
+    std::set<std::string> Cf, Cb; double hF1 = 0, hB1 = 0;
+    { getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+      P_RCPSP::PetriExample petriStash; RCPSP_example rcpspStash;
+      petriStash = petri; rcpspStash = RCPSPex;
+      reverseLoadedInstance();
+      std::swap(petri, petriStash); std::swap(RCPSPex, rcpspStash);   // global = forward
+      bool curFwd = true;
+      auto useFwd = [&](bool want){
+          if (want != curFwd) { std::swap(petri, petriStash); std::swap(RCPSPex, rcpspStash); curFwd = want; }
+          g_tt2_dom_side = want ? 0 : 1; };
+      // interleave the two sides the way the real search does, to catch stale globals
+      useFwd(true);  { RCPSPState_TT2 r, d0; hF1 = env.HCost(r, d0); }
+      useFwd(false); { RCPSPState_TT2 r, d0; hB1 = env.HCost(r, d0); }
+      useFwd(true);  { RCPSPState_TT2 r; Cf = biReach(env, r, NT, depth); }
+      useFwd(false); { RCPSPState_TT2 r; Cb = biReach(env, r, NT, depth); }
+      useFwd(true);  { RCPSPState_TT2 r; std::set<std::string> again = biReach(env, r, NT, depth);
+                       if (again != Cf) std::cout << "  !! forward generation CHANGED after touching"
+                                                     " the reversed side (stale global)" << std::endl; } }
+
+    bool okF = (A == Cf), okB = (B == Cb);
+    // CPM critical path is DIRECTION-INVARIANT: reversing a DAG preserves longest paths.
+    // So if the heuristic disagrees with CPM on the reversed net, the heuristic is wrong
+    // there, not the net. getForwardHcost relaxes in ASCENDING activity-ID order and reads
+    // rbegin() (highest id) as the answer — valid only while ID order is topological, which
+    // PSPLIB guarantees for the FORWARD net and which reversal destroys.
+    double cpmF = 0, cpmB = 0;
+    { getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+      std::vector<int> e = computeESTforCurrentNet();
+      for (int i = 1; i <= NT; i++) cpmF = std::max(cpmF, (double)(e[i] + RCPSPex.activities[i-1].duration)); }
+    { getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+      reverseLoadedInstance();
+      std::vector<int> e = computeESTforCurrentNet();
+      for (int i = 1; i <= NT; i++) cpmB = std::max(cpmB, (double)(e[i] + RCPSPex.activities[i-1].duration)); }
+    std::cout << "  CPM critical path: forward=" << cpmF << " reversed=" << cpmB
+              << (cpmF == cpmB ? "  (invariant, as expected)" : "  ** NOT INVARIANT **") << std::endl;
+    std::cout << "  heuristic vs CPM : forward h=" << hF0 << "/" << cpmF
+              << "  reversed h=" << hB0 << "/" << cpmB
+              << (hB0 < cpmB ? "   ** reversed heuristic LOSES the critical path **" : "") << std::endl;
+    std::cout << "  root h: forward standalone=" << hF0 << " in-BAE2=" << hF1
+              << (hF0==hF1 ? "  MATCH" : "  ** MISMATCH **") << std::endl;
+    std::cout << "  root h: reversed standalone=" << hB0 << " in-BAE2=" << hB1
+              << (hB0==hB1 ? "  MATCH" : "  ** MISMATCH **") << std::endl;
+    std::cout << "  forward reachable<=" << depth << " fires: standalone=" << A.size()
+              << " in-BAE2=" << Cf.size() << (okF ? "  MATCH" : "  ** MISMATCH **") << std::endl;
+    std::cout << "  reversed reachable<=" << depth << " fires: standalone=" << B.size()
+              << " in-BAE2=" << Cb.size() << (okB ? "  MATCH" : "  ** MISMATCH **") << std::endl;
+    if (!okF || !okB) {
+        std::set<std::string> d1, d2;
+        std::set_difference(A.begin(),A.end(),Cf.begin(),Cf.end(),std::inserter(d1,d1.begin()));
+        std::set_difference(Cf.begin(),Cf.end(),A.begin(),A.end(),std::inserter(d2,d2.begin()));
+        std::cout << "  forward: only-standalone=" << d1.size() << " only-BAE2=" << d2.size() << std::endl;
+        d1.clear(); d2.clear();
+        std::set_difference(B.begin(),B.end(),Cb.begin(),Cb.end(),std::inserter(d1,d1.begin()));
+        std::set_difference(Cb.begin(),Cb.end(),B.begin(),B.end(),std::inserter(d2,d2.begin()));
+        std::cout << "  reversed: only-standalone=" << d1.size() << " only-BAE2=" << d2.size() << std::endl;
+    }
+    std::cout << "BICHECK " << group << ":" << exam
+              << (okF && okB && hF0==hF1 && hB0==hB1 ? " ALL-MATCH" : " ** MISMATCH **") << std::endl;
+    g_tt2_dr5=s5; g_tt2_dr4=s4; g_tt2_batch=sb;
+    return (okF && okB) ? 0 : 1;
+}
+
+// ── Is the TT2 heuristic CONSISTENT? (mode tt2consist) ───────────────────────
+// Unidirectional A* only needs ADMISSIBILITY. BAE*'s lower bound
+// (min b_F + min b_B)/2 needs CONSISTENCY of BOTH heuristics: the proof requires
+// h(u) - h(v) <= c(u,v) on every edge. So a heuristic that is fine for the forward
+// search can still make the bidirectional bound overshoot and terminate early with a
+// SUB-OPTIMAL answer (j30 13:1 returned 59/60/62 against a true optimum of 58).
+// This walks real edges of both nets and counts violations of h(u) <= c(u,v) + h(v).
+// It also checks h_opp, which we already know jumps across zero-cost (e==0) edges.
+int solveRCPSP_TT2_Consist(int group, int exam, const std::string& ptype = "j30") {
+    std::cout << "=== CONSISTENCY CHECK " << group << ":" << exam << " ===" << std::endl;
+    long cap = 20000; if (const char* c = std::getenv("RCPSP_CONSIST_CAP")) cap = std::atol(c);
+    for (int side = 0; side < 2; ++side) {
+        getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+        int NT = (int)petri.Transitions.size();
+        { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs=RSL[((group-1)%4+4)%4]; }
+        if (side == 1) reverseLoadedInstance();
+        std::vector<int> est = computeESTforCurrentNet();
+        bool s5=g_tt2_dr5, s4=g_tt2_dr4, sb=g_tt2_batch;
+        g_tt2_dr5=false; g_tt2_dr4=false; g_tt2_batch=false;   // raw edges
+        RCPSP_TT2 env;
+        long edges=0, viol=0, violZero=0, oViol=0, oViolZero=0;
+        double worst=0, oWorst=0;
+        std::vector<RCPSPState_TT2> frontier; { RCPSPState_TT2 r; frontier.push_back(r); }
+        std::set<std::string> seen;
+        while (!frontier.empty() && edges < cap) {
+            std::vector<RCPSPState_TT2> next;
+            for (auto& u : frontier) {
+                if (edges >= cap) break;
+                RCPSPState_TT2 uu = u; uu.transitionsCached=false;
+                uu.AvailableTransitionIndices_TT2.clear(); uu.hKnown=false;
+                RCPSPState_TT2 d0 = uu;
+                double hu = env.HCost(uu, d0);
+                double ou = (double)hOppOf(uu, est, NT);
+                std::vector<RCPSPState_TT2> nb; env.GetSuccessors(uu, nb);
+                for (auto& v : nb) {
+                    RCPSPState_TT2 vv = v; RCPSPState_TT2 d1 = vv;
+                    double c  = (double)vv.g - (double)uu.g;
+                    double hv = env.HCost(vv, d1);
+                    double ov = (double)hOppOf(vv, est, NT);
+                    ++edges;
+                    if (hu > c + hv + 1e-9) { ++viol; if (c == 0) ++violZero;
+                        if (hu - (c + hv) > worst) worst = hu - (c + hv); }
+                    if (ov > ou + c + 1e-9) { ++oViol; if (c == 0) ++oViolZero;
+                        if (ov - (ou + c) > oWorst) oWorst = ov - (ou + c); }
+                    std::string k = meetKeyForward(v, NT);
+                    if (seen.insert(k).second && (long)next.size() < 4000) next.push_back(v);
+                }
+            }
+            frontier.swap(next);
+        }
+        std::cout << "  " << (side ? "REVERSED" : "FORWARD ") << " net: edges=" << edges
+                  << "  h inconsistent=" << viol << " (of which zero-cost edges=" << violZero
+                  << ", worst excess=" << worst << ")"
+                  << "  h_opp inconsistent=" << oViol << " (zero-cost=" << oViolZero
+                  << ", worst=" << oWorst << ")" << std::endl;
+        g_tt2_dr5=s5; g_tt2_dr4=s4; g_tt2_batch=sb;
+    }
+    return 0;
+}
+
 int solveRCPSP_TT2_MM(int group, int exam, const std::string& ptype="j30") {
     std::cout << "=== MM bidirectional " << group << ":" << exam << " ===" << std::endl;
     getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
@@ -3711,7 +5239,7 @@ int solveRCPSP_TT2_MM(int group, int exam, const std::string& ptype="j30") {
     { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs=RSL[((group-1)%4+4)%4]; }
     g_instance_deadline = std::chrono::steady_clock::now()+std::chrono::seconds(astar_timeout_seconds); g_instance_deadline_set=true;
     bool sDR5=g_tt2_dr5,sDR4=g_tt2_dr4,sB=g_tt2_batch;
-    g_tt2_dr5=true; g_tt2_dr4=(std::getenv("RCPSP_BI_DR4")!=nullptr); g_tt2_batch=false;   // see BAE*: DR4 disjoints the cut sets
+    g_tt2_dr5=true; g_tt2_dr4=[]{const char*b=std::getenv("RCPSP_BI_DR4");return b&&std::atoi(b)!=0;}(); g_tt2_batch=false;   // see BAE*: DR4 disjoints the cut sets
     g_tt2_dom_side=0; get_tt2_dominance_table().clear();
     g_tt2_dom_side=1; get_tt2_dominance_table().clear();
     P_RCPSP::PetriExample petriStash; RCPSP_example rcpspStash;
@@ -3826,8 +5354,18 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_SKYLINE"))   g_dom_skyline   = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_LAZY"))      g_use_lazy      = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_DR5"))   g_tt2_dr5       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_PROF"))  g_tt2_prof      = std::atoi(e) != 0;   // phase timers (Globals.h)
+    if (const char* e = std::getenv("RCPSP_TT2_PROF_TRACE")) {   // progress snapshot every 5 s, appended
+        g_prof_trace = std::fopen(e, "a");
+        if (g_prof_trace) { std::fseek(g_prof_trace, 0, SEEK_END);
+            if (std::ftell(g_prof_trace) == 0)
+                std::fprintf(g_prof_trace, "size,group,exam,elapsedSec,expansions,maxF,childrenRaw,childrenKept,succSec,heurSec,dr5Sec\n"); }
+    }
     if (const char* e = std::getenv("RCPSP_TT2_BATCH")) g_tt2_batch     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_DR4"))   g_tt2_dr4       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_WAIT"))  g_tt2_wait      = std::atoi(e) != 0;   // explicit-wait model (Globals.h)
+    if (const char* e = std::getenv("RCPSP_TT2_WAITJUMP")) g_tt2_waitjump = std::atoi(e) != 0; // pass-through wait jumps (Globals.h)
+    if (const char* e = std::getenv("RCPSP_TT2_HFRESH")) g_tt2_hfresh = std::atoi(e) != 0;   // fresh h on zero-delay children (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_IMMSEL")) g_tt2_immsel   = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_FREEFIRE")) g_tt2_freefire = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_BATCH_CAP")) g_tt2_batch_cap = std::atol(e);
@@ -3963,7 +5501,7 @@ int main(int argc, char* argv[]) {
             std::string f = getNextFilename("new_results", "output_dumpdom_", ".csv");
             { std::ofstream h(f); h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
                  << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits\n"; }
+                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
             solveRCPSP_CBS(std::atoi(argv[3]), std::atoi(argv[4]), f, argv[2]);
             std::cout << "prune pairs -> " << g_dom_dump_path << std::endl;
         } else if (arg1 == "verifydom") {
@@ -3994,7 +5532,7 @@ int main(int argc, char* argv[]) {
             if (argc < 5) { std::cerr << "Usage: tt2one <type> <group> <exam>\n"; return 1; }
             std::string ptype = argv[2];
             std::string f = getNextFilename("new_results", "output_tt2one_" + ptype + "_", ".csv");
-            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits\n"; }
+            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits,direction,useTT2Prof,profAstarSec,profSuccSec,profSuccCalls,profAvailSec,profGenSec,profDR5Sec,profHashSec,profHashCalls,profHeurCPSec,profHeurResSec,hCallsAll,hKnownHits,hDeltaZeroHits,childrenRaw,childrenKept,domBuckets,domComparisons,openAtEnd,itemsAtEnd,uniqueExpanded,maxFExpanded,fAt1s,fAt10s,fAt60s,fAt120s,fAt240s,timedOut,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,waitModel,waitEdges,waitCut,dr5WaitExempt,waitPass,waitJump,waitJumped\n"; }
             solveRCPSP_TT2(std::atoi(argv[3]), std::atoi(argv[4]), f, ptype);
         } else if (arg1 == "tt2oldbwd") {
             // tt2oldbwd <type> <group> <exam> — the pre-existing backward (mirror-frame), for baseline timing
@@ -4011,6 +5549,29 @@ int main(int argc, char* argv[]) {
             // tt2mm <type> <group> <exam> — Meet-in-the-Middle bidirectional (pr=max(f,2g))
             if (argc < 5) { std::cerr << "Usage: tt2mm <type> <group> <exam>\n"; return 1; }
             solveRCPSP_TT2_MM(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
+        } else if (arg1 == "tt2bicheck") {
+            if (argc < 5) { std::cerr << "Usage: tt2bicheck <type> <group> <exam>" << std::endl; return 1; }
+            solveRCPSP_TT2_BiCheck(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
+        } else if (arg1 == "rootbounds") {
+            // rootbounds <size> [g1 g2]: RootBounds.h values per instance, no search (set RCPSP_ROOT_DLB / RCPSP_ROOT_SEED)
+            const std::string sz = argc > 2 ? argv[2] : "j30";
+            const int g1 = argc > 3 ? std::atoi(argv[3]) : 1, g2 = argc > 4 ? std::atoi(argv[4]) : 48;
+            const int e1 = argc > 5 ? std::atoi(argv[5]) : 1, e2 = argc > 5 ? e1 : 10;   // optional single exam
+            for (int g = g1; g <= g2; ++g) for (int e = e1; e <= e2; ++e) {
+                getPetri(petri, g, e, sz); getRCPSP(RCPSPex, g, e, sz);
+                rootb::computeRootBounds();
+                const auto& ri = rootb::info();
+                std::cout << "ROOTB," << sz << "," << g << "," << e << "," << ri.lbPlain << "," << ri.lb << "," << ri.seed << ","
+                          << ri.lbSec << "," << ri.seedSec << "," << (ri.budgetHit ? 1 : 0) << "," << (ri.closed ? 1 : 0) << ","
+                          << ri.probeSeedIn << "," << ri.probeBest << "," << ri.probeNodes << "," << ri.probeExhausted << "," << ri.probeSec
+                          << "," << ri.lnsSeedIn << "," << ri.lnsBest << "," << ri.lnsIters << "," << ri.lnsImpCp << "," << ri.lnsImpSgs << "," << ri.lnsSec << std::endl;
+            }
+        } else if (arg1 == "tt2consist") {
+            if (argc < 5) { std::cerr << "Usage: tt2consist <type> <group> <exam>" << std::endl; return 1; }
+            solveRCPSP_TT2_Consist(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
+        } else if (arg1 == "tt2hbae") {
+            if (argc < 5) { std::cerr << "Usage: tt2hbae <type> <group> <exam>" << std::endl; return 1; }
+            solveRCPSP_TT2_HBAE(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
         } else if (arg1 == "tt2bae") {
             // tt2bae <type> <group> <exam> — bidirectional meet-in-the-middle (BAE*-style)
             if (argc < 5) { std::cerr << "Usage: tt2bae <type> <group> <exam>\n"; return 1; }
@@ -4023,6 +5584,13 @@ int main(int argc, char* argv[]) {
             // tt2meetuf <type> <group> <exam> — interior-meet test for the UN-FIRE backward (#1)
             if (argc < 5) { std::cerr << "Usage: tt2meetuf <type> <group> <exam>\n"; return 1; }
             solveRCPSP_TT2_MeetUnfire(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
+        } else if (arg1 == "tt2trace") {
+            if (argc < 5) { std::cerr << "Usage: tt2trace <type> <group> <exam>" << std::endl; return 1; }
+            solveRCPSP_TT2_Trace(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
+        } else if (arg1 == "tt2admis") {
+            // tt2admis <type> <group> <exam> — is h admissible along each side's optimal path?
+            if (argc < 5) { std::cerr << "Usage: tt2admis <type> <group> <exam>\n"; return 1; }
+            solveRCPSP_TT2_Admis(std::atoi(argv[3]), std::atoi(argv[4]), argv[2]);
         } else if (arg1 == "tt2meet") {
             // tt2meet <type> <group> <exam> — validate that forward & reversed backward meet
             if (argc < 5) { std::cerr << "Usage: tt2meet <type> <group> <exam>\n"; return 1; }
@@ -4032,7 +5600,7 @@ int main(int argc, char* argv[]) {
             if (argc < 5) { std::cerr << "Usage: tt2rev <type> <group> <exam>\n"; return 1; }
             std::string ptype = argv[2];
             std::string f = getNextFilename("new_results", "output_tt2rev_" + ptype + "_", ".csv");
-            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits\n"; }
+            { std::ofstream h(f); h << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits,direction,useTT2Prof,profAstarSec,profSuccSec,profSuccCalls,profAvailSec,profGenSec,profDR5Sec,profHashSec,profHashCalls,profHeurCPSec,profHeurResSec,hCallsAll,hKnownHits,hDeltaZeroHits,childrenRaw,childrenKept,domBuckets,domComparisons,openAtEnd,itemsAtEnd,uniqueExpanded,maxFExpanded,fAt1s,fAt10s,fAt60s,fAt120s,fAt240s,timedOut,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,waitModel,waitEdges,waitCut,dr5WaitExempt,waitPass,waitJump,waitJumped\n"; }
             g_tt2_reverse = true;
             solveRCPSP_TT2(std::atoi(argv[3]), std::atoi(argv[4]), f, ptype);
             g_tt2_reverse = false;
@@ -4053,6 +5621,9 @@ int main(int argc, char* argv[]) {
             // every instance, NO search.
             if (argc < 3) { std::cerr << "Usage: tt2initf <type>\n"; return 1; }
             runTt2InitF(argv[2]);
+        } else if (arg1.rfind("tt2hbae_", 0) == 0) {
+            // HOG2 BAE* full benchmark for one size: "tt2hbae_j30" etc.
+            runBenchmarkTT2HBAE(arg1.substr(8));
         } else if (arg1.rfind("tt2bae_", 0) == 0) {
             // BAE* bidirectional, full benchmark for one size: "tt2bae_j30" etc.
             std::string problemType = arg1.substr(7);
@@ -4165,10 +5736,31 @@ void runTt2InitF(const std::string& ptype) {
     std::cout << "TT2 initF -> " << f << std::endl;
 }
 
+// RCPSP_ONLY=<file>: the batch loops (CBS config runs, tt2_<size>, tt2hbae_<size>) run only the instances listed in
+// the file, one "size,group,exam" per line (e.g. j60,5,9); every other instance is skipped and gets no row. Used to
+// re-test only the instances no model has solved yet. A set but empty/missing file stops the run.
+static bool onlyInstance(const std::string& size, int g, int e) {
+    static const std::set<std::string> keep = [] {
+        std::set<std::string> s;
+        const char* f = std::getenv("RCPSP_ONLY");
+        if (!f || !*f) return s;
+        std::ifstream in(f); std::string line;
+        while (std::getline(in, line)) {
+            std::string t; for (char c : line) if (c != '\r' && c != ' ' && c != '\t') t += c;
+            if (!t.empty()) s.insert(t);
+        }
+        if (s.empty()) { std::cerr << "RCPSP_ONLY: no instances in " << f << std::endl; std::exit(1); }
+        std::cout << "RCPSP_ONLY: " << s.size() << " instances from " << f << std::endl;
+        return s;
+    }();
+    return keep.empty() || keep.count(size + "," + std::to_string(g) + "," + std::to_string(e)) > 0;
+}
+
 void runConfig(const std::string& filename, const std::string& problemType) {
     allcorrect = true;
     for (int i = 1; i <= 48; i++) {
         for (int j = 1; j <= 10; j++) {
+            if (!onlyInstance(problemType, i, j)) continue;
             solveRCPSP_CBS(i, j, filename, problemType);
         }
     }
@@ -4223,7 +5815,7 @@ void runSingleConfig(const std::string& problemType, int configNum) {
     if (!file.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
          << std::endl;
     file.close();
 
@@ -4270,7 +5862,7 @@ void runSingleConfigResume(const std::string& problemType, int configNum,
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
 
     std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType
               << " | resume from (" << startGroup << "," << startExam << ") ===" << std::endl;
@@ -4294,7 +5886,7 @@ void runBenchmark(const std::string& problemType) {
     }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
          << std::endl;
     file.close();
 
@@ -4344,6 +5936,7 @@ void runBenchmark(const std::string& problemType) {
 void runConfigTT2(const std::string& filename, const std::string& problemType) {
     for (int i = 1; i <= 48; i++) {
         for (int j = 1; j <= 10; j++) {
+            if (!onlyInstance(problemType, i, j)) continue;
             solveRCPSP_TT2(i, j, filename, problemType);
         }
     }
@@ -4359,7 +5952,7 @@ void runBenchmarkTT2(const std::string& problemType) {
         return;
     }
     // Header matches what solveRCPSP_TT2 writes per row
-    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits"
+    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits,direction,useTT2Prof,profAstarSec,profSuccSec,profSuccCalls,profAvailSec,profGenSec,profDR5Sec,profHashSec,profHashCalls,profHeurCPSec,profHeurResSec,hCallsAll,hKnownHits,hDeltaZeroHits,childrenRaw,childrenKept,domBuckets,domComparisons,openAtEnd,itemsAtEnd,uniqueExpanded,maxFExpanded,fAt1s,fAt10s,fAt60s,fAt120s,fAt240s,timedOut,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,waitModel,waitEdges,waitCut,dr5WaitExempt,waitPass,waitJump,waitJumped,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
          << std::endl;
     file.close();
 
@@ -4379,7 +5972,7 @@ void runBenchmarkTT2BAE(const std::string& problemType) {
     { std::ofstream f(filename);
       if (!f.is_open()) { std::cerr << "Error opening file: " << filename << std::endl; return; }
       f << "group,exam,time,solved,makespan,expandNumber,expandedF,expandedB,model,problemType,"
-           "timeoutS,instanceRS,useTT2DR5,biDR4,meetNorm,meets,firstMeetAtExp,uFromMeet,ubFound"
+           "timeoutS,instanceRS,useTT2DR5,biDR4,dr4mask,meetNorm,meets,firstMeetAtExp,uFromMeet,ubFound"
         << std::endl; }
     std::cout << std::endl << "=== TT2 BAE* | " << problemType << " ===" << std::endl;
     for (int i = 1; i <= 48; i++) {
@@ -4391,12 +5984,251 @@ void runBenchmarkTT2BAE(const std::string& problemType) {
               << (g_bae_proven ? mk : -1) << ","
               << (g_bae_expF + g_bae_expB) << "," << g_bae_expF << "," << g_bae_expB << ","
               << "TT2BAE," << problemType << "," << astar_timeout_seconds << ","
-              << g_instance_rs << ",1," << g_bae_biDR4 << "," << (g_meet_norm ? 1 : 0) << ","
+              << g_instance_rs << ",1," << g_bae_biDR4 << "," << g_bae_dr4mask << "," << (g_meet_norm ? 1 : 0) << ","
               << g_bae_meets << "," << g_bae_firstMeet << "," << g_bae_uMeet << "," << mk
               << std::endl;
         }
     }
     std::cout << std::endl << "BAE* benchmark done (" << problemType << ") -> " << filename << std::endl;
+}
+
+// ── BAE2 full benchmark for one size (modes "tt2bae2_j30" / "_j60" / "_j90") ──
+// One row per instance, 48 groups x 10 exams, with the diagnostics that decide whether
+// bidirectional is worth it on this domain:
+//   expandedF / expandedB and expRatioBF  — the DIRECTION ASYMMETRY. BAE* pays for the
+//     harder direction while unidirectional gets to pick the cheaper one, so this ratio
+//     is the single best predictor of whether BAE* can win on an instance.
+//   meets, firstMeetAtExp / firstMeetFrac — did the middle meet fire, and how early.
+//   bestMeetDepth                          — WHERE the meet that set the incumbent sits,
+//     as #started/NT (0 = source, 1 = goal, 0.5 = true middle). Depth, not g/opt: one long
+//     activity can eat most of the makespan while the search barely advances.
+//   meetDepthMin/Mean/Max                  — the spread of all meeting points.
+//   bestMeetGF / bestMeetGB                — the g split at that meet (time, both sides).
+//   ubSource                               — "meet" (genuinely bidirectional), "goal" (a
+//     side completed, i.e. it degenerated to unidirectional), "trivial", or "none".
+// solved is True ONLY when optimality was PROVEN; a deadline exit still reports its
+// incumbent in ub, so unsolved rows carry a valid upper bound.
+// ── HBAE full benchmark for one size (modes "tt2hbae_j30" / "_j60" / "_j90") ──
+// HOG2's own BAE* over the forward net N and the reversed net N^R, meeting on the normalised
+// cut key. One row per instance, 48 groups x 10 exams.
+// READ `solved` CAREFULLY: it is True only when optimality was PROVEN. A `queue-empty` stop
+// under DOMINANCE cannot certify — dominance discards states the opposite side needed to meet
+// on, so the frontier can drain without ever meeting the optimal cut, and the incumbent held
+// at that moment is only an UPPER BOUND. Those rows get makespan=-1 with the bound in `ub`.
+// `stopReason` (bound / queue-empty / trivial) says which happened.
+// `meetDepth` is #started/NT of the node the incumbent was found at: 0 = source, 1 = goal,
+// 0.5 = true middle. Depth, not g/opt, because one long activity can eat most of the makespan
+// while the search barely advances.
+// Known optimum for an instance, or -1 if none is on file. j30 has a full optima table;
+// j60/j90 only where the bounds file marks the LB as proven optimal. Same sources
+// getDatasheetUB uses -- this is validation only, never fed to the search.
+// ── tt2trace <type> <group> <exam> ───────────────────────────────────────────
+// Collect each side's KNOWN optimal path, then run HBAE with the tracer live and
+// report what the bidirectional search did with every state on those paths.
+static void ppCollect(int side, bool reversed, int group, int exam, const std::string& ptype) {
+    getPetri(petri, group, exam, ptype); getRCPSP(RCPSPex, group, exam, ptype);
+    if (reversed) reverseLoadedInstance();
+    { static const double RSL[4]={0.2,0.5,0.7,1.0}; g_instance_rs = RSL[((group-1)%4+4)%4]; }
+    const int NT = (int)petri.Transitions.size();
+    deriveEndpointNames(initialstatename, finalstatename);
+    get_tt2_dominance_table().clear();
+    RCPSP_TT2 env; RCPSPState_TT2 first; RCPSPState_TT2 last = first;
+    last.g = HCost_TT2(last, first);
+    TemplateAStar<RCPSPState_TT2, int, RCPSP_TT2> astar;
+    std::vector<RCPSPState_TT2> path;
+    astar.GetPath(&env, first, last, path);
+    PathProbe& P = g_pp[side];
+    P.keys.clear(); P.g.clear(); P.idx.clear();
+    for (auto& st : path) { P.keys.push_back(ppIdKey(st, NT)); P.g.push_back((int)st.g); }
+    for (size_t i = 0; i < P.keys.size(); ++i) P.idx[P.keys[i]] = (int)i;
+    P.reset(P.keys.size());
+    std::cout << "  " << (reversed ? "REVERSED" : "FORWARD ") << " optimal path: "
+              << path.size() << " states, C*="
+              << (path.empty() ? -1 : (int)path.back().g) << std::endl;
+}
+static void ppReport(const char* label, int side) {
+    PathProbe& P = g_pp[side];
+    std::cout << "  --- " << label << " (" << P.keys.size() << " states on the optimal path) ---"
+              << std::endl;
+    if (P.keys.empty()) { std::cout << "    no path collected" << std::endl; return; }
+    std::cout << "    idx    g   gen   add   exp   rej   nip   verdict" << std::endl;
+    int never = 0, firstLost = -1, rejected = 0, nipped = 0, expanded = 0;
+    for (size_t i = 0; i < P.keys.size(); ++i) {
+        const auto& e = P.ev[i];
+        const bool seen = e[PP_GEN] || e[PP_ADD] || e[PP_EXPAND];
+        const char* v = e[PP_EXPAND] ? "expanded"
+                      : e[PP_ADD]    ? "opened, never expanded"
+                      : e[PP_REJECT] ? "REJECTED by f>=U"
+                      : e[PP_NIPPED] ? "NIPPED (closed unexpanded)"
+                      : e[PP_GEN]    ? "generated, never opened"
+                                     : "NEVER SEEN";
+        if (!seen) { ++never; if (firstLost < 0) firstLost = (int)i; }
+        if (e[PP_EXPAND]) ++expanded;
+        if (e[PP_REJECT]) ++rejected;
+        if (e[PP_NIPPED]) ++nipped;
+        std::cout << "    " << std::setw(3) << i << std::setw(5) << P.g[i]
+                  << std::setw(6) << e[PP_GEN] << std::setw(6) << e[PP_ADD]
+                  << std::setw(6) << e[PP_EXPAND] << std::setw(6) << e[PP_REJECT]
+                  << std::setw(6) << e[PP_NIPPED] << "   " << v;
+        if (e[PP_REJECT] && P.rejU[i] >= 0)
+            std::cout << "  [g=" << P.rejG[i] << " h=" << P.rejH[i]
+                      << " f=" << (P.rejG[i] + P.rejH[i]) << " U=" << P.rejU[i] << "]";
+        std::cout << std::endl;
+    }
+    std::cout << "    probe calls on this side: " << g_pp_calls[side] << std::endl;
+    if (never == (int)P.keys.size()) {
+        std::cout << "    KEY MISMATCH -- nothing matched. Comparing:" << std::endl;
+        std::cout << "      collected[0] = " << P.keys[0].substr(0, 220) << std::endl;
+        std::cout << "      searched [0] = " << g_pp_sample[side].substr(0, 220) << std::endl;
+    }
+    std::cout << "    SUMMARY: expanded=" << expanded << "  rejected=" << rejected
+              << "  nipped=" << nipped << "  never-seen=" << never;
+    if (firstLost >= 0) std::cout << "   FIRST LOST AT idx " << firstLost;
+    std::cout << std::endl;
+}
+int solveRCPSP_TT2_Trace(int group, int exam, const std::string& ptype) {
+    std::cout << "=== OPTIMAL-PATH TRACE " << group << ":" << exam << " ===" << std::endl;
+    bool s5 = g_tt2_dr5, s4 = g_tt2_dr4, sb = g_tt2_batch;
+    // Collect with DR5 on purely for speed -- any optimal path serves as the witness,
+    // and HBAE itself runs dominance-free, so nothing on it is legitimately prunable.
+    g_instance_deadline = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(astar_timeout_seconds);
+    g_instance_deadline_set = true;
+    g_tt2_dr5 = true; g_tt2_dr4 = false; g_tt2_batch = false;
+    ppCollect(0, false, group, exam, ptype);
+    ppCollect(1, true,  group, exam, ptype);
+    g_tt2_dr5 = s5; g_tt2_dr4 = s4; g_tt2_batch = sb;
+    g_instance_deadline = std::chrono::steady_clock::now()
+                        + std::chrono::seconds(astar_timeout_seconds);
+    g_pp_on = true;
+    solveRCPSP_TT2_HBAE(group, exam, ptype);
+    g_pp_on = false;
+    ppReport("FORWARD side", 0);
+    ppReport("BACKWARD side (reversed net)", 1);
+    return 0;
+}
+
+static int hbaeReferenceOptimum(int group, int exam, const std::string& ptype) {
+    if (ptype == "j30") { int o = getOptimalMakespan(group, exam, ptype); return o > 0 ? o : -1; }
+    Bounds b = getBounds(group, exam, ptype);
+    return (b.optimal_known && b.lb > 0) ? b.lb : -1;
+}
+
+void runBenchmarkTT2HBAE(const std::string& problemType) {
+    std::string filename = outName("new_results", "output_tt2hbae_" + problemType + "_", ".csv");
+    { std::ofstream f(filename);
+      if (!f.is_open()) { std::cerr << "Error opening file: " << filename << std::endl; return; }
+      f << "group,exam,time,solved,makespan,ub,proven,stopReason,expandNumber,uniqueExpanded,"
+           "touched,necessary,reopened,solUpdates,meetDepth,meetAt,pathLen,trivialAtRoot,"
+           "model,problemType,timeoutS,instanceRS,useTT2DR5,dr4,batch,prio,alt,tiebreak,meetNorm,nip,noub,fbound,drainCert,expandedF,expandedB,timeFSec,timeBSec,openFEnd,openBEnd,itemsFEnd,itemsBEnd,meetIdxF,meetIdxB,minFFEnd,minFBEnd,minFF60s,minFB60s,minFF120s,minFB120s,minFF240s,minFB240s,expAtMaxBound,uAtMaxBound,peakRSSMB,dr5PrunedF,dr5PrunedB,dr5InsertsF,dr5InsertsB,dr4Pruned,useTT2Prof,heurTimeSec,heurCalls,profSuccSec,profAvailSec,profGenSec,profDR5Sec,profHeurCPSec,profHeurResSec,hDeltaZeroHits,childrenRaw,childrenKept,biHashSec,biHashCalls,meetHashSec,meetHashCalls,meetSide,meetGF,meetGB,meetTimeFrac,meetExp,firstMeetExp,firstU,meetHits,maxDepthF,maxDepthB,maxGF,maxGB,fBoundCalls,fBoundSec,minfHeap,bwdModel,bwdFullVerify,hfuse,strHash,bxPopSec,bxSuccSec,bxChildSec,bxHeurSec,bxAddSec,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,domMeet,meetGhost,dmUpdates,dmInserts,dmSkipped,dmThinned,dmJoinCmp,dmEntriesF,dmEntriesB,shiftMeet,dmShiftBest,stopRule,maxStop,waitModel,dr4Side,waitEdges,waitCut,waitPass,waitJump,waitJumped,waitMeetOnly,meetOnlySide,dr5WaitExemptF,dr5WaitExemptB,audit,auditStatus,auditHorizon,auditFwdExact,auditBwdExact,auditBothExact,auditCrossExp,auditMeetExp,auditMissed,auditBothDom,auditFwdMaxT,auditBwdMinT,auditFwdHoles,auditBwdHoles,activeTB,hFresh,fDropF,fDropB,fDropMax,dzFirst,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+        << std::endl; }
+    std::cout << std::endl << "=== TT2 HBAE | " << problemType << " ===" << std::endl;
+    auto envi = [](const char* k, int dflt){ const char* e=std::getenv(k); return e?std::atoi(e):dflt; };
+    // RCPSP_BI_ASSERT: 0 = record only, 1 = (default) stop on a FALSE RESULT --
+    // a certified makespan that is not the known optimum, or an incumbent BELOW it
+    // (impossible: every incumbent is a real g_f+g_b concatenation, so it can only be
+    // >= optimal). 2 = also stop on any instance that fails to prove optimality.
+    const int assertLvl = envi("RCPSP_BI_ASSERT", 1);
+    // actual stop/certification switches, recorded on every row (same parsing as BAE_RCPSP.h)
+    { const char* e;
+      e = std::getenv("RCPSP_BI_NIP");       g_hb_nip       = (e && std::atoi(e) == 0) ? 0 : 1;
+      e = std::getenv("RCPSP_BI_NOUB");      g_hb_noub      = e ? (std::atoi(e) != 0) : 1;
+      e = std::getenv("RCPSP_BI_FBOUND");    g_hb_fbound    = e ? (std::atoi(e) != 0) : 1;
+      e = std::getenv("RCPSP_BI_DRAINCERT"); g_hb_draincert = (e && std::atoi(e) != 0) ? 1 : 0; }
+    int checked = 0, unproven = 0;
+    for (int i = 1; i <= 48; i++) {
+        for (int j = 1; j <= 10; j++) {
+            if (!onlyInstance(problemType, i, j)) continue;
+            solveRCPSP_TT2_HBAE(i, j, problemType);
+            std::ofstream f(filename, std::ios::app);
+            f << i << "," << j << "," << g_hb_time << ","
+              << (g_hb_proven ? "True" : "False") << ","
+              << g_hb_mk << "," << g_hb_ub << "," << (g_hb_proven ? 1 : 0) << ","
+              << g_hb_stop << "," << g_hb_exp << "," << g_hb_unique << ","
+              << g_hb_touched << "," << g_hb_necessary << "," << g_hb_reopened << ","
+              << g_hb_solUpd << "," << g_hb_meetDepth << "," << g_hb_meetAt << ","
+              << g_hb_pathLen << "," << (g_hb_trivial ? 1 : 0) << (g_bi_unfire ? ",TT2bi-unfire," : g_tt2_wait ? ",TT2Wbi," : ",TT2bi,") << problemType << ","
+              << astar_timeout_seconds << "," << g_instance_rs << ","
+              << g_hb_dr5mask << "," << g_hb_dr4f << ","
+              << g_hb_batchf << "," << envi("RCPSP_BI_PRIO", 0) << ","
+              << envi("RCPSP_BI_ALT", 0) << "," << envi("RCPSP_BI_TIEBREAK", 0) << ","
+              << (g_meet_norm ? 1 : 0) << "," << g_hb_nip << "," << g_hb_noub << ","
+              << g_hb_fbound << "," << g_hb_draincert << ","
+              << g_hb_expF << "," << g_hb_expB << "," << g_hb_timeF << "," << g_hb_timeB << ","
+              << g_hb_openF << "," << g_hb_openB << "," << g_hb_itemsF << "," << g_hb_itemsB << ","
+              << g_hb_meetIdxF << "," << g_hb_meetIdxB << "," << g_hb_minFF << "," << g_hb_minFB << ","
+              << g_hb_minFAt[0][0] << "," << g_hb_minFAt[0][1] << "," << g_hb_minFAt[1][0] << "," << g_hb_minFAt[1][1] << ","
+              << g_hb_minFAt[2][0] << "," << g_hb_minFAt[2][1] << "," << g_hb_expAtMax << "," << g_hb_uAtMax << ","
+              << g_hb_rssMB << "," << g_hb_domPrunedF << "," << g_hb_domPrunedB << "," << g_hb_domInsertsF << "," << g_hb_domInsertsB << ","
+              << g_tt2_dr4_pruned << "," << (g_tt2_prof ? 1 : 0) << "," << g_heur_time_sec << "," << g_heur_calls << ","
+              << g_prof_succ_sec << "," << g_prof_avail_sec << "," << g_prof_gen_sec << "," << g_prof_dr5_sec << ","
+              << g_prof_hcp_sec << "," << g_prof_hres_sec << "," << g_prof_h_deltazero << ","
+              << g_prof_children_raw << "," << g_prof_children_kept << ","
+              << g_hb_bihash_sec << "," << g_hb_bihash_calls << "," << g_hb_meethash_sec << "," << g_hb_meethash_calls << ","
+              << g_hb_meetSide << "," << g_hb_meetGF << "," << g_hb_meetGB << "," << g_hb_meetTimeFrac << ","
+              << g_hb_meetExp << "," << g_hb_firstMeetExp << "," << g_hb_firstU << "," << g_hb_meetHits << ","
+              << g_hb_maxDepthF << "," << g_hb_maxDepthB << "," << g_hb_maxGF << "," << g_hb_maxGB << ","
+              << g_hb_fBoundCalls << "," << g_hb_fBoundSec << "," << g_hb_minfHeap << ","
+              << (g_bi_unfire ? "unfire" : "reversed") << "," << (g_bi_unfire ? (BWMEET::g_bwd_fullverify ? 1 : 0) : -1) << ","
+              << g_hb_hfuse << "," << g_hb_strhash << "," << g_hb_bx[0] << "," << g_hb_bx[1] << ","
+              << g_hb_bx[2] << "," << g_hb_bx[3] << "," << g_hb_bx[4] << "," << (cpFastOn() ? 1 : 0) << "," << (resFastOn() ? 1 : 0) << "," << (TT2DominanceTable::FastOn() ? 1 : 0) << "," << (TT2DominanceTable::SortedOn() ? 1 : 0) << "," << (genFastOn() ? 1 : 0) << "," << (TT2DominanceTable::MtfOn() ? 1 : 0) << ","
+              << g_hb_domMeet << "," << g_hb_meetGhost << "," << g_hb_dmUpdates << "," << g_hb_dmInserts << ","
+              << g_hb_dmSkipped << "," << g_hb_dmThinned << "," << g_hb_dmJoinCmp << "," << g_hb_dmEntF << "," << g_hb_dmEntB << "," << g_hb_shiftMeet << "," << g_hb_dmShiftBest << "," << (g_hb_stopMax ? "max" : "avg") << "," << g_hb_maxStop << ","
+              << (g_tt2_wait ? 1 : 0) << "," << g_hb_dr4side << "," << g_tt2_wait_edges << "," << g_tt2_wait_cut << "," << g_tt2_wait_pass << ","
+              << (g_tt2_waitjump ? 1 : 0) << "," << g_tt2_wait_jumped << "," << g_tt2_wait_meetonly << "," << biMeetOnlyMask() << ","
+              << g_hb_waitExemptF << "," << g_hb_waitExemptB << "," << (BAE_RCPSP<RCPSPState_BI, int, RCPSP_BiEnv>::AuditOn() ? 1 : 0) << ","
+              << g_hb_auditStatus << "," << g_hb_auditHorizon << "," << g_hb_auditFwd << "," << g_hb_auditBwd << "," << g_hb_auditBoth << ","
+              << g_hb_auditCrossExp << "," << g_hb_auditMeetExp << "," << g_hb_auditMissed << "," << g_hb_auditBothDom << ","
+              << g_hb_auditFwdMaxT << "," << g_hb_auditBwdMinT << "," << g_hb_auditFwdHoles << "," << g_hb_auditBwdHoles << ","
+              << envi("RCPSP_BI_ACTIVETB", 0) << "," << g_hb_hfresh << "," << g_hb_fDropF << "," << g_hb_fDropB << "," << g_hb_fDropMax << "," << envi("RCPSP_BI_DZFIRST", 1)
+              << "," << (rootb::DlbOn() ? 1 : 0) << "," << (rootb::SeedOn() ? 1 : 0) << "," << rootb::info().lbPlain << "," << rootb::info().lb
+      << "," << rootb::info().lbSec << "," << (rootb::info().budgetHit ? 1 : 0) << "," << rootb::info().seed << "," << rootb::info().seedSec
+      << "," << (rootb::info().closed ? 1 : 0)
+      << "," << (rootb::ProbeOn() ? 1 : 0) << "," << rootb::info().probeSeedIn << "," << rootb::info().probeBest << "," << rootb::info().probeNodes
+      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << std::endl;
+            f.flush();
+
+            const int refOpt = hbaeReferenceOptimum(i, j, problemType);
+            const char* why = nullptr;
+            if (refOpt > 0) {
+                ++checked;
+                if (g_hb_proven && g_hb_mk != refOpt)
+                    why = (g_hb_mk > refOpt) ? "CERTIFIED A MAKESPAN WORSE THAN THE OPTIMUM"
+                                             : "CERTIFIED A MAKESPAN BELOW THE OPTIMUM";
+                else if (g_hb_ub >= 0 && g_hb_ub < refOpt)
+                    why = "INCUMBENT BELOW THE KNOWN OPTIMUM (impossible - the meet is wrong)";
+            }
+            if (!g_hb_proven) ++unproven;
+            if (!why && assertLvl >= 2 && !g_hb_proven)
+                why = "SEARCH DID NOT FINISH (no proof of optimality)";
+            if (!why && (std::string(g_hb_auditStatus) == "INFEASIBLE" || std::string(g_hb_auditStatus) == "INCONSISTENT"))
+                why = "MEETING AUDIT: the schedule rebuilt from the meet is not a feasible schedule of that makespan";
+
+            if (why) {
+                const char* BAR = "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!";
+                std::cout << BAR
+                          << "\nFALSE RESULT  " << problemType << " " << i << ":" << j
+                          << "  -- " << why
+                          << "\n  reported makespan = " << g_hb_mk << "   ub = " << g_hb_ub
+                          << "   known optimum = " << refOpt
+                          << "\n  proven = " << (g_hb_proven ? "1" : "0")
+                          << "   stopReason = " << g_hb_stop
+                          << "   meetAt = " << g_hb_meetAt
+                          << "\n  flags: dr5mask=" << g_hb_dr5mask << " dr4=" << g_hb_dr4f
+                          << " batch=" << g_hb_batchf << " prio=" << envi("RCPSP_BI_PRIO", 0)
+                          << " wait=" << (g_tt2_wait ? 1 : 0) << " dr4side=" << g_hb_dr4side << " audit=" << g_hb_auditStatus
+                          << "\n  expanded = " << g_hb_exp << "   time = " << g_hb_time << "s"
+                          << "\n  rows so far: " << checked << " checked, " << unproven << " unproven."
+                          << "\n  partial CSV -> " << filename
+                          << "\n  set RCPSP_BI_ASSERT=0 to record instead of stopping."
+                          << "\n" << BAR << std::endl << std::flush;
+                if (assertLvl >= 1) { f.flush(); f.close(); std::exit(3); }
+            }
+        }
+    }
+    std::cout << std::endl << "HBAE benchmark done (" << problemType << ") -> " << filename
+              << "   [" << checked << " instances checked against known optima, "
+              << unproven << " unproven]" << std::endl;
 }
 
 struct ResultRow {

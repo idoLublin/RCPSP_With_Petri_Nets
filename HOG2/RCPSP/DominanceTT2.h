@@ -34,6 +34,8 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <memory>
+#include <cstdlib>
 #include "RCPSPState.h"
 
 
@@ -64,15 +66,95 @@ public:
     struct Entry {
         std::vector<std::pair<short, short>> active;   // (id, remaining), sorted by id
         short g;
+        short side = 0;   // which search inserted it (cross-side guard)
     };
 
+    // ── FAST STORAGE (RCPSP_DR5_FAST, default 1) ─────────────────────────────
+    // Same rule, same decisions, same bucket order as the vector version below (so even the
+    // comparison counter matches). Differences are representation only:
+    //  * each entry keeps its active ids and RELEASES r(i) = g + rem(i) INLINE (no heap block per
+    //    entry, which cost a cache miss per comparison); more than K actives spill to one array;
+    //  * two necessary conditions reject most pairs before the merge scan:
+    //      A dominates B  =>  g_A <= g_B  and  Rmax_A <= Rmax_B,
+    //    where Rmax_X = max over the scheduled set of r_X(i) (= g_X if nothing is active): every
+    //    active i of A needs r_A(i) <= r_B(i) <= Rmax_B.
+    static constexpr int K = 12;
+    struct FEntry {
+        short g = 0, side = 0, n = 0, R = 0;
+        short id[K]; short rel[K];
+        std::unique_ptr<short[]> big;             // n > K: ids in [0,n), releases in [n,2n)
+        const short* ids()  const { return n <= K ? id  : big.get(); }
+        const short* rels() const { return n <= K ? rel : big.get() + n; }
+    };
+    // RCPSP_DR5_SORTED (default 0, fast storage only): each bucket is kept ordered by g. Measured 2026-09-10:
+    // 24-30% fewer comparisons, identical decisions, but NO faster (keeping the order costs what the skipped
+    // comparisons save once the quick reject makes a comparison cheap), so it is off.
+    // Mechanism: Only entries with
+    // g <= g_s can dominate s and only entries with g >= g_s can be dominated by s, so each scan touches just
+    // its side of the order. The SET of entries is exactly what the unsorted table holds, so every prune /
+    // thin / insert decision is identical; only the comparison counter (and which dominator is met first) changes.
+    static bool SortedOn() {
+        static const bool on = [](){ const char* e = std::getenv("RCPSP_DR5_SORTED"); return e ? (std::atoi(e) != 0) : false; }();
+        return on;
+    }
+    // RCPSP_DR5_MTF (default 1, fast unsorted storage): an entry that prunes a state is swapped to the front
+    // of its bucket, so repeat dominators are met first. Prune / thin / insert decisions depend only on the SET
+    // of entries, so they are identical; only the comparison counter (and bucket order) changes.
+    static bool MtfOn() {
+        static const bool on = [](){ const char* e = std::getenv("RCPSP_DR5_MTF"); return e ? (std::atoi(e) != 0) : true; }();
+        return on;
+    }
+    static bool FastOn() {
+        static const bool on = [](){ const char* e = std::getenv("RCPSP_DR5_FAST"); return e ? (std::atoi(e) != 0) : true; }();
+        return on;
+    }
+    // does A (gA, releases relA over ids idA) dominate B? Same scheduled set assumed.
+    static bool domFast(int gA, int nA, int RA, const short* idA, const short* relA,
+                        int gB, int nB, int RB, const short* idB, const short* relB) {
+        if (gA > gB || RA > RB) return false;
+        int ib = 0;
+        for (int ia = 0; ia < nA; ++ia) {
+            while (ib < nB && idB[ib] < idA[ia]) ++ib;
+            const int bound = (ib < nB && idB[ib] == idA[ia]) ? (int)relB[ib] : gB;   // active in both : finished in B
+            if (relA[ia] > bound) return false;
+        }
+        return true;
+    }
+
+    // ── EXPLICIT-WAIT MODEL (RCPSP_TT2_WAIT=1) ───────────────────────────────
+    // A wait edge keeps the scheduled set and every release r(i) = g + rem(i) and raises g by one, so a state is
+    // dominated by its own parent, and by every earlier state of its wait chain. Pruning there would cut every
+    // wait. Exception: an entry E with g_E < g_s whose releases equal those of s on every activity still running
+    // in s (the other E-actives end by g_s, which domFast already checked) IS s after waiting g_s - g_E units:
+    // the parent, the grandparent, ... of the chain, or a state with exactly that future. s is kept and not
+    // inserted, since E prunes whatever s would. Strict dominators still prune; equal states at equal g still merge.
+    static bool waitTwin(int nA, const short* idA, const short* relA, int nB, const short* idB, const short* relB) {
+        int ia = 0;
+        for (int ib = 0; ib < nB; ++ib) {
+            while (ia < nA && idA[ia] < idB[ib]) ++ia;
+            if (ia == nA || idA[ia] != idB[ib] || relA[ia] != relB[ib]) return false;
+        }
+        return true;
+    }
+    static bool waitTwinVec(const std::vector<std::pair<short, short>>& a, short gA,
+                            const std::vector<std::pair<short, short>>& b, short gB) {
+        size_t ia = 0;
+        for (const auto& pb : b) {
+            while (ia < a.size() && a[ia].first < pb.first) ++ia;
+            if (ia == a.size() || a[ia].first != pb.first || gA + a[ia].second != gB + pb.second) return false;
+        }
+        return true;
+    }
+
     // Per-instance counters (reported by the driver).
+    uint64_t crossSide = 0;   // prunes where the entry came from the OTHER search
     uint64_t checks = 0, comparisons = 0, pruned = 0, inserts = 0, thinned = 0;
+    uint64_t waitExempt = 0;  // explicit-wait model: states kept because their only dominators were themselves before waiting
     size_t   maxBucket = 0;
 
     void clear() {
-        buckets.clear();
-        checks = comparisons = pruned = inserts = thinned = 0;
+        buckets.clear(); fbuckets.clear();
+        checks = comparisons = pruned = inserts = thinned = waitExempt = 0;
         maxBucket = 0;
     }
 
@@ -105,14 +187,124 @@ public:
     // True if `s` is dominated by a stored entry (=> prune). Otherwise Pareto-thins
     // the bucket by `s` and inserts `s`. One call per generated child, in GetSuccessors.
     bool check_and_insert(const RCPSPState_TT2& s) {
+        if (!FastOn()) return check_and_insert_vec(s);
         ++checks;
-        auto& bucket = buckets[MakeKey(s)];
-        for (const Entry& e : bucket) {
+        const int n = (int)std::min<size_t>(s.activeTransitionIndices.size(), 128);
+        short sid[128], srel[128];
+        int R = s.g;
+        for (int j = 0; j < n; ++j) {
+            sid[j]  = s.activeTransitionIndices[j].first;
+            srel[j] = (short)(s.g + s.activeTransitionIndices[j].second);
+            if (srel[j] > R) R = srel[j];
+        }
+        auto& bucket = fbuckets[MakeKey(s)];
+        if (SortedOn()) return checkSorted(s, bucket, n, R, sid, srel);
+        bool twin = false;
+        for (size_t i = 0; i < bucket.size(); ++i) {
+            const FEntry& e = bucket[i];
             ++comparisons;
-            if (dominates(e.active, e.g, s.activeTransitionIndices, s.g)) { ++pruned;
+            if (domFast(e.g, e.n, e.R, e.ids(), e.rels(), s.g, n, R, sid, srel)) {
+                if (g_tt2_wait && e.g < s.g && waitTwin(e.n, e.ids(), e.rels(), n, sid, srel)) { twin = true; continue; }
+                ++pruned;
+                if (e.side != (short)g_tt2_dom_side) {
+                    ++crossSide;
+                    if (crossSide == 1)
+                        std::cerr << "[DR5 CROSS-SIDE PRUNE] entry.side=" << e.side
+                                  << " current side=" << g_tt2_dom_side << std::endl;
+                }
+                if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
+                if (i > 0 && MtfOn()) std::swap(bucket[0], bucket[i]);
+                return true; }
+        }
+        if (twin) { ++waitExempt; return false; }
+        for (size_t i = 0; i < bucket.size();) {                 // skyline, same order as the vector version
+            ++comparisons;
+            const FEntry& e = bucket[i];
+            if (domFast(s.g, n, R, sid, srel, e.g, e.n, e.R, e.ids(), e.rels())) {
+                if (i + 1 != bucket.size()) bucket[i] = std::move(bucket.back());
+                bucket.pop_back();
+                ++thinned;
+            } else ++i;
+        }
+        bucket.emplace_back();
+        FEntry& ne = bucket.back();
+        ne.g = s.g; ne.side = (short)g_tt2_dom_side; ne.n = (short)n; ne.R = (short)R;
+        if (n <= K) { for (int j = 0; j < n; ++j) { ne.id[j] = sid[j]; ne.rel[j] = srel[j]; } }
+        else { ne.big.reset(new short[2 * n]); for (int j = 0; j < n; ++j) { ne.big[j] = sid[j]; ne.big[n + j] = srel[j]; } }
+        ++inserts;
+        if (bucket.size() > maxBucket) maxBucket = bucket.size();
+        return false;
+    }
+
+    bool checkSorted(const RCPSPState_TT2& s, std::vector<FEntry>& bucket, int n, int R,
+                     const short* sid, const short* srel) {
+        const short gs = s.g;
+        bool twin = false;
+        for (const FEntry& e : bucket) {                        // candidates that may dominate s: g <= g_s
+            if (e.g > gs) break;
+            ++comparisons;
+            if (domFast(e.g, e.n, e.R, e.ids(), e.rels(), gs, n, R, sid, srel)) {
+                if (g_tt2_wait && e.g < gs && waitTwin(e.n, e.ids(), e.rels(), n, sid, srel)) { twin = true; continue; }
+                ++pruned;
+                if (e.side != (short)g_tt2_dom_side) {
+                    ++crossSide;
+                    if (crossSide == 1)
+                        std::cerr << "[DR5 CROSS-SIDE PRUNE] entry.side=" << e.side
+                                  << " current side=" << g_tt2_dom_side << std::endl;
+                }
                 if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
                 return true; }
         }
+        if (twin) { ++waitExempt; return false; }
+        // skyline on the g >= g_s part, order-preserving compaction
+        size_t lo = std::lower_bound(bucket.begin(), bucket.end(), gs,
+                                     [](const FEntry& e, short g) { return e.g < g; }) - bucket.begin();
+        size_t w = lo;
+        for (size_t i = lo; i < bucket.size(); ++i) {
+            ++comparisons;
+            if (domFast(gs, n, R, sid, srel, bucket[i].g, bucket[i].n, bucket[i].R, bucket[i].ids(), bucket[i].rels())) {
+                ++thinned; continue;
+            }
+            if (w != i) bucket[w] = std::move(bucket[i]);
+            ++w;
+        }
+        bucket.resize(w);
+        size_t pos = std::upper_bound(bucket.begin(), bucket.end(), gs,
+                                      [](short g, const FEntry& e) { return g < e.g; }) - bucket.begin();
+        bucket.emplace(bucket.begin() + pos);
+        FEntry& ne = bucket[pos];
+        ne.g = gs; ne.side = (short)g_tt2_dom_side; ne.n = (short)n; ne.R = (short)R;
+        if (n <= K) { for (int j = 0; j < n; ++j) { ne.id[j] = sid[j]; ne.rel[j] = srel[j]; } }
+        else { ne.big.reset(new short[2 * n]); for (int j = 0; j < n; ++j) { ne.big[j] = sid[j]; ne.big[n + j] = srel[j]; } }
+        ++inserts;
+        if (bucket.size() > maxBucket) maxBucket = bucket.size();
+        return false;
+    }
+
+    // The original vector-based version (RCPSP_DR5_FAST=0).
+    bool check_and_insert_vec(const RCPSPState_TT2& s) {
+        ++checks;
+        auto& bucket = buckets[MakeKey(s)];
+        bool twin = false;
+        for (const Entry& e : bucket) {
+            ++comparisons;
+            if (dominates(e.active, e.g, s.activeTransitionIndices, s.g)) {
+                if (g_tt2_wait && e.g < s.g && waitTwinVec(e.active, e.g, s.activeTransitionIndices, s.g)) { twin = true; continue; }
+                ++pruned;
+                // CROSS-SIDE GUARD (bidirectional). Forward and reversed states live on
+                // DIFFERENT nets; an entry inserted by one search says nothing about the
+                // other, so pruning across sides is unsound. Tables are meant to be split by
+                // g_tt2_dom_side -- this catches it if they are not.
+                if (e.side != (short)g_tt2_dom_side) {
+                    ++crossSide;
+                    if (crossSide == 1)
+                        std::cerr << "[DR5 CROSS-SIDE PRUNE] entry.side=" << e.side
+                                  << " current side=" << g_tt2_dom_side << std::endl;
+                }
+                if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
+                return true; }
+        }
+        if (twin) { ++waitExempt; return false; }
         // skyline: drop stored entries dominated by s (table-only; transitivity-safe)
         for (size_t i = 0; i < bucket.size();) {
             ++comparisons;
@@ -122,16 +314,18 @@ public:
                 ++thinned;
             } else ++i;
         }
-        bucket.push_back(Entry{s.activeTransitionIndices, s.g});
+        { Entry ne{s.activeTransitionIndices, s.g}; ne.side = (short)g_tt2_dom_side;
+          bucket.push_back(std::move(ne)); }
         ++inserts;
         if (bucket.size() > maxBucket) maxBucket = bucket.size();
         return false;
     }
 
-    size_t bucketCount() const { return buckets.size(); }
+    size_t bucketCount() const { return FastOn() ? fbuckets.size() : buckets.size(); }
 
 private:
     std::unordered_map<Key, std::vector<Entry>, KeyHash> buckets;
+    std::unordered_map<Key, std::vector<FEntry>, KeyHash> fbuckets;
 };
 
 // One table, cleared per instance by the driver. For bidirectional search the active

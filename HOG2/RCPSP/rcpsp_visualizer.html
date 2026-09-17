@@ -1,0 +1,592 @@
+<title>RCPSP Schedule Board</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#eaeef3; --panel:#ffffff; --panel-2:#f4f7fa; --ink:#17202b; --muted:#65717f;
+    --line:#d7dee7; --line-strong:#c2ccd7; --accent:#2b6f8f; --accent-soft:#e2eef3;
+    --danger:#cf3f56; --danger-soft:#fbe6ea; --cap:#d9821b;
+    --grid:#e6ebf1;
+  }
+  :root:not([data-theme="light"]){}
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f151c; --panel:#161f28; --panel-2:#1a242f; --ink:#e7edf3; --muted:#8c98a5;
+      --line:#28323e; --line-strong:#36434f; --accent:#54a8cc; --accent-soft:#183039;
+      --danger:#e46a7e; --danger-soft:#3a1f26; --cap:#e79a3c;
+      --grid:#1e2833;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f151c; --panel:#161f28; --panel-2:#1a242f; --ink:#e7edf3; --muted:#8c98a5;
+    --line:#28323e; --line-strong:#36434f; --accent:#54a8cc; --accent-soft:#183039;
+    --danger:#e46a7e; --danger-soft:#3a1f26; --cap:#e79a3c;
+    --grid:#1e2833;
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,sans-serif;
+    -webkit-font-smoothing:antialiased; line-height:1.4;
+  }
+  .wrap{max-width:1180px; margin:0 auto; padding:26px 22px 60px}
+
+  header.top{display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:18px}
+  .title-block h1{
+    font-size:22px; font-weight:700; letter-spacing:-.01em; margin:0 0 3px;
+  }
+  .title-block .eyebrow{
+    font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin:0 0 6px;
+  }
+  .title-block p{margin:0; color:var(--muted); font-size:13.5px; max-width:56ch}
+
+  .metrics{display:flex; gap:10px; flex-wrap:wrap}
+  .metric{
+    background:var(--panel); border:1px solid var(--line); border-radius:9px;
+    padding:9px 14px; min-width:96px;
+  }
+  .metric .k{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted)}
+  .metric .v{font-family:"IBM Plex Mono",monospace; font-size:22px; font-weight:600; line-height:1.15; font-variant-numeric:tabular-nums}
+  .metric.bad .v{color:var(--danger)}
+  .metric.good .v{color:var(--accent)}
+
+  .toolbar{display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:0 0 14px}
+  button.btn{
+    font-family:"IBM Plex Sans",sans-serif; font-size:13px; font-weight:500; color:var(--ink);
+    background:var(--panel); border:1px solid var(--line-strong); border-radius:8px;
+    padding:8px 14px; cursor:pointer; transition:background .12s,border-color .12s;
+  }
+  button.btn:hover{background:var(--panel-2); border-color:var(--accent)}
+  button.btn:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  button.btn.primary{background:var(--accent); border-color:var(--accent); color:#fff}
+  button.btn.primary:hover{filter:brightness(1.06)}
+  .seg-group{display:inline-flex}
+  button.btn.seg{border-radius:0; border-right-width:0}
+  button.btn.seg:first-child{border-top-left-radius:8px; border-bottom-left-radius:8px}
+  button.btn.seg:last-child{border-top-right-radius:8px; border-bottom-right-radius:8px; border-right-width:1px}
+  button.btn.seg.active{background:var(--accent); border-color:var(--accent); color:#fff}
+  button.btn.seg.active:hover{background:var(--accent)}
+  .divider{width:1px; height:22px; background:var(--line); margin:0 2px}
+  .tpl-desc{font-size:13px; color:var(--muted); line-height:1.55; margin:0 0 14px; max-width:88ch;
+    background:var(--panel-2); border:1px solid var(--line); border-left:3px solid var(--accent);
+    border-radius:8px; padding:11px 15px}
+  .tpl-desc strong{color:var(--ink); font-weight:600}
+  label.toggle{display:inline-flex; align-items:center; gap:7px; font-size:13px; color:var(--muted); cursor:pointer; user-select:none}
+  label.toggle input{accent-color:var(--accent); width:15px; height:15px}
+  .hint{margin-left:auto; font-size:12.5px; color:var(--muted); font-family:"IBM Plex Mono",monospace}
+
+  .capbar{display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:0 0 14px}
+  .cap-lead{font-family:"IBM Plex Mono",monospace; font-size:11px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted)}
+  .cap-controls{display:inline-flex; gap:10px; flex-wrap:wrap}
+  .cap-item{display:inline-flex; align-items:center; gap:2px; background:var(--panel); border:1px solid var(--line-strong); border-radius:8px; padding:3px 4px}
+  .cap-name{font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:12.5px; padding:0 8px 0 4px}
+  .cap-step{width:24px; height:24px; border:none; background:var(--panel-2); border-radius:6px; color:var(--ink); font-size:16px; line-height:1; cursor:pointer; display:inline-flex; align-items:center; justify-content:center}
+  .cap-step:hover{background:var(--accent-soft); color:var(--accent)}
+  .cap-step:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  .cap-val{font-family:"IBM Plex Mono",monospace; font-weight:600; font-size:14px; min-width:22px; text-align:center; font-variant-numeric:tabular-nums}
+
+  .board{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:8px 8px 4px; overflow-x:auto}
+  svg#chart{display:block; width:100%; height:auto; touch-action:none}
+
+  /* svg element styling via tokens */
+  .grid{stroke:var(--grid); stroke-width:1}
+  .grid.major{stroke:var(--line)}
+  .axis-text{fill:var(--muted); font-family:"IBM Plex Mono",monospace; font-size:11px}
+  .now0{stroke:var(--line-strong); stroke-width:1}
+  .row-sep{stroke:var(--grid); stroke-width:1}
+  .act-label{fill:var(--ink); font-family:"IBM Plex Mono",monospace; font-size:12.5px; font-weight:600}
+  .act-sub{fill:var(--muted); font-family:"IBM Plex Mono",monospace; font-size:10.5px}
+  .sec-title{fill:var(--ink); font-family:"IBM Plex Sans",sans-serif; font-size:12px; font-weight:600; letter-spacing:.02em}
+  .res-name{fill:var(--ink); font-family:"IBM Plex Mono",monospace; font-size:12px; font-weight:600}
+  .cap-line{stroke:var(--cap); stroke-width:1.5; stroke-dasharray:5 3; fill:none}
+  .cap-label{fill:var(--cap); font-family:"IBM Plex Mono",monospace; font-size:10.5px; font-weight:600}
+  .res-axis{fill:var(--muted); font-family:"IBM Plex Mono",monospace; font-size:10px}
+  .bar-rect{stroke:rgba(0,0,0,.28); stroke-width:1; cursor:grab; transition:filter .1s}
+  .bar-rect:hover{filter:brightness(1.05)}
+  .bar-rect.dragging{cursor:grabbing; filter:brightness(1.08)}
+  .bar-rect.viol{stroke:var(--danger); stroke-width:2.2}
+  .sel-outline{fill:none; stroke:var(--accent); stroke-width:2; stroke-dasharray:4 3; pointer-events:none}
+  .bar-label{fill:#fff; font-family:"IBM Plex Mono",monospace; font-size:11px; font-weight:600; pointer-events:none; paint-order:stroke; stroke:rgba(0,0,0,.35); stroke-width:2.4px}
+  .arrow{stroke:var(--line-strong); stroke-width:1.5; fill:none; opacity:.8}
+  .arrow.viol{stroke:var(--danger); stroke-width:2; opacity:1}
+  .overflow{fill:var(--danger); opacity:.34}
+  .overflow-hatch{stroke:var(--danger); stroke-width:1; opacity:.55}
+
+  .legend{display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; align-items:center}
+  .legend .item{display:inline-flex; align-items:center; gap:7px; font-size:12.5px; color:var(--muted)}
+  .legend .sw{width:22px; height:12px; border-radius:3px; border:1px solid rgba(0,0,0,.2)}
+  .legend .sw.cap{background:transparent; border:none; border-top:2px dashed var(--cap); border-radius:0; height:0; width:22px}
+  .legend .sw.viol{background:var(--danger-soft); border:2px solid var(--danger)}
+
+  footer.note{margin-top:20px; font-size:12px; color:var(--muted); line-height:1.6}
+  footer.note code{font-family:"IBM Plex Mono",monospace; background:var(--panel-2); border:1px solid var(--line); padding:1px 5px; border-radius:4px; font-size:11.5px}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="title-block">
+      <p class="eyebrow">RCPSP · resource-constrained schedule</p>
+      <h1>Schedule Board</h1>
+      <p>Drag any activity bar sideways to reschedule it. Shift-click bars to select several and drag them together. The resource-demand profiles below and every precedence link update live — broken precedences and capacity overloads flag in red.</p>
+    </div>
+    <div class="metrics">
+      <div class="metric good"><div class="k">Makespan</div><div class="v" id="m-makespan">–</div></div>
+      <div class="metric" id="m-viol-box"><div class="k">Violations</div><div class="v" id="m-viol">–</div></div>
+    </div>
+  </header>
+
+  <div class="toolbar">
+    <span class="seg-group">
+      <button class="btn seg" data-tpl="t1">Template 1</button>
+      <button class="btn seg" data-tpl="t2">Template 2</button>
+    </span>
+    <span class="divider"></span>
+    <button class="btn primary" id="btn-sgs">Reset to SGS schedule</button>
+    <button class="btn" id="btn-cpm">CPM earliest start</button>
+    <label class="toggle"><input type="checkbox" id="tog-prec" checked> precedence links</label>
+    <label class="toggle"><input type="checkbox" id="tog-cascade"> cascade downstream on conflict</label>
+    <span class="hint" id="hint">drag a bar · shift-click to multi-select →</span>
+  </div>
+
+  <div class="capbar"><span class="cap-lead">resource capacity</span><span id="cap-controls" class="cap-controls"></span></div>
+
+  <p id="tpl-desc" class="tpl-desc"></p>
+
+  <div class="board">
+    <svg id="chart" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+
+  <div class="legend">
+    <span class="item"><span class="sw cap"></span> resource capacity</span>
+    <span class="item"><span class="sw viol"></span> constraint violation</span>
+    <span class="item" id="leg-acts"></span>
+  </div>
+
+  <footer class="note">
+    A synthetic 8-activity instance (2 renewable resources) chosen to make the mechanics legible. Each bar is one activity; width = duration. The initial layout is a serial <strong>SGS</strong> (schedule generation scheme) — the earliest resource-feasible left-shifted schedule. Switch to <code>CPM earliest start</code> to see the raw resource conflicts precedence alone allows, then drag to resolve them.
+  </footer>
+</div>
+
+<script>
+/* ---------------- instance (synthetic, illustrative) ---------------- */
+const PALETTE = ['#3d6b9e','#4f9d8c','#6f8f3d','#b0863a','#a8546a','#7268a6','#3f95b3','#9a7346'];
+
+const TEMPLATES = {
+  t1: {
+    name: 'Template 1 · basic board',
+    blurb: 'A feasible 8-activity, 2-resource project. Opens as a serial-SGS schedule (the earliest resource-feasible left-shift). Drag to explore; switch to CPM earliest-start to reveal the raw resource conflicts precedence alone allows.',
+    defaultMode: 'sgs',
+    resources: [ {id:'R1', cap:4}, {id:'R2', cap:3} ],
+    // id, duration, demand per resource, predecessor ids
+    acts: [
+      {id:'A', dur:3, dem:{R1:2, R2:1}, preds:[]},
+      {id:'B', dur:2, dem:{R1:2, R2:2}, preds:[]},
+      {id:'C', dur:4, dem:{R1:1, R2:2}, preds:['A']},
+      {id:'D', dur:2, dem:{R1:3, R2:1}, preds:['A']},
+      {id:'E', dur:3, dem:{R1:2, R2:0}, preds:['B']},
+      {id:'F', dur:2, dem:{R1:1, R2:2}, preds:['C','D']},
+      {id:'G', dur:3, dem:{R1:3, R2:2}, preds:['E']},
+      {id:'H', dur:2, dem:{R1:2, R2:3}, preds:['F','G']},
+    ],
+  },
+  t2: {
+    name: 'Template 2 · why set-delay helps',
+    blurb: 'On R1 (capacity 4) the backbone Z needs 2 and stays busy through t = 5. A, B and C are all available at time 0 needing 1, 2 and 2. Pairs are fine — Z + A = 3 does not conflict — but the set {Z, B, C} needs 6 > 4. No single delay fixes it: removing any one activity still leaves ≥ 5 > 4. You have to delay a whole set (e.g. B and C together) to restore feasibility. That is why these conflicts are resolved by delaying a set of activities rather than one at a time. Opens in CPM earliest-start to show the overload; drag, raise the R1 capacity, or switch to SGS to resolve it.',
+    defaultMode: 'cpm',
+    resources: [ {id:'R1', cap:4}, {id:'R2', cap:4} ],
+    acts: [
+      {id:'Z', dur:5, dem:{R1:2, R2:0}, preds:[]},          // backbone: holds 2 of R1 for a long span
+      {id:'A', dur:2, dem:{R1:1, R2:2}, preds:[]},          // small on R1 — Z+A fits under cap 4
+      {id:'B', dur:2, dem:{R1:2, R2:1}, preds:[]},
+      {id:'C', dur:2, dem:{R1:2, R2:1}, preds:[]},
+      {id:'D', dur:3, dem:{R1:0, R2:3}, preds:['A']},
+      {id:'E', dur:3, dem:{R1:1, R2:2}, preds:['B']},
+      {id:'F', dur:2, dem:{R1:2, R2:2}, preds:['C','Z']},
+      {id:'G', dur:2, dem:{R1:1, R2:3}, preds:['D','E','F']},
+    ],
+  },
+};
+
+let RESOURCES, ACTS, byId, EDGES;
+let currentTpl = 't1';
+
+function loadTemplate(key){
+  currentTpl = key;
+  const t = TEMPLATES[key];
+  RESOURCES = t.resources.map(r=>({...r}));
+  ACTS = t.acts.map((a,i)=>({...a, dem:{...a.dem}, preds:[...a.preds], color:PALETTE[i%PALETTE.length]}));
+  byId = Object.fromEntries(ACTS.map(a=>[a.id,a]));
+  EDGES = [];
+  ACTS.forEach(a=>a.preds.forEach(p=>EDGES.push([p,a.id])));
+  selected = new Set();
+  starts = t.defaultMode === 'cpm' ? cpmStarts() : sgsStarts();
+  const d = document.getElementById('tpl-desc');
+  if(d) d.innerHTML = `<strong>${t.name}.</strong> ${t.blurb}`;
+  document.querySelectorAll('.seg').forEach(b=>b.classList.toggle('active', b.dataset.tpl===key));
+  renderActLegend();
+  renderCapControls();
+  render();
+}
+
+// per-resource capacity steppers (rebuilt per template)
+function renderCapControls(){
+  const c = document.getElementById('cap-controls');
+  c.innerHTML = RESOURCES.map((r,i)=>
+    `<span class="cap-item">`+
+    `<span class="cap-name">${esc(r.id)}</span>`+
+    `<button class="cap-step" data-ri="${i}" data-dir="-1" aria-label="decrease ${esc(r.id)} capacity">−</button>`+
+    `<span class="cap-val" id="cap-val-${i}">${r.cap}</span>`+
+    `<button class="cap-step" data-ri="${i}" data-dir="1" aria-label="increase ${esc(r.id)} capacity">+</button>`+
+    `</span>`
+  ).join('');
+  c.querySelectorAll('.cap-step').forEach(b=>b.addEventListener('click', ()=>{
+    const i = +b.dataset.ri, dir = +b.dataset.dir;
+    RESOURCES[i].cap = Math.max(1, Math.min(20, RESOURCES[i].cap + dir));
+    document.getElementById('cap-val-'+i).textContent = RESOURCES[i].cap;
+    render();
+  }));
+}
+
+const TIME_MAX = 26;               // fixed horizon so dragging never rescales the axis
+let starts = {};                   // id -> start time (integer)
+let selected = new Set();          // ids currently multi-selected
+let cascade = false;               // push downstream successors forward to keep precedence
+
+/* ---------------- schedule generation ---------------- */
+function topoOrder(){
+  const indeg = Object.fromEntries(ACTS.map(a=>[a.id,a.preds.length]));
+  const q = ACTS.filter(a=>indeg[a.id]===0).map(a=>a.id);
+  const out = [];
+  const succ = {}; ACTS.forEach(a=>succ[a.id]=[]);
+  EDGES.forEach(([p,s])=>succ[p].push(s));
+  while(q.length){
+    const n = q.shift(); out.push(n);
+    succ[n].forEach(s=>{ if(--indeg[s]===0) q.push(s); });
+  }
+  return out;
+}
+
+function cpmStarts(){ // precedence-only earliest start (ignores resources)
+  const order = topoOrder(); const st = {};
+  order.forEach(id=>{
+    const a = byId[id];
+    st[id] = a.preds.reduce((m,p)=>Math.max(m, st[p]+byId[p].dur), 0);
+  });
+  return st;
+}
+
+function sgsStarts(){ // serial SGS: earliest resource-feasible left-shifted schedule
+  const order = topoOrder();
+  const st = {};
+  // usage[resource][t] = load
+  const usage = {}; RESOURCES.forEach(r=>usage[r.id]=new Array(TIME_MAX+40).fill(0));
+  order.forEach(id=>{
+    const a = byId[id];
+    let t = a.preds.reduce((m,p)=>Math.max(m, st[p]+byId[p].dur), 0);
+    // advance t until the whole [t, t+dur) window fits every resource
+    for(;;){
+      let ok = true;
+      for(const r of RESOURCES){
+        const d = a.dem[r.id]||0; if(!d) continue;
+        for(let x=t; x<t+a.dur; x++){ if(usage[r.id][x]+d > r.cap){ ok=false; break; } }
+        if(!ok) break;
+      }
+      if(ok) break;
+      t++;
+    }
+    st[id] = t;
+    for(const r of RESOURCES){
+      const d = a.dem[r.id]||0; if(!d) continue;
+      for(let x=t; x<t+a.dur; x++) usage[r.id][x]+=d;
+    }
+  });
+  return st;
+}
+
+// push every successor forward (in topo order) until precedence holds; never pulls backward
+function cascadeForward(){
+  topoOrder().forEach(id=>{
+    const a = byId[id];
+    const minStart = a.preds.reduce((m,p)=>Math.max(m, starts[p]+byId[p].dur), 0);
+    if(starts[id] < minStart) starts[id] = Math.min(minStart, TIME_MAX - a.dur);
+  });
+}
+
+/* ---------------- analysis of current schedule ---------------- */
+function finish(id){ return starts[id]+byId[id].dur; }
+function makespan(){ return Math.max(...ACTS.map(a=>finish(a.id))); }
+
+function analyze(){
+  const violActs = new Set();
+  const violEdges = new Set();
+  // precedence
+  EDGES.forEach(([p,s])=>{
+    if(starts[s] < finish(p)){ violEdges.add(p+'>'+s); violActs.add(p); violActs.add(s); }
+  });
+  // resource profiles + overload
+  const profiles = {}; // r -> array of {t, segs:[{id,color,d}], total}
+  const overloadUnits = {}; // r -> Set of t
+  RESOURCES.forEach(r=>{
+    profiles[r.id] = [];
+    overloadUnits[r.id] = new Set();
+    for(let t=0;t<TIME_MAX;t++){
+      const segs=[]; let total=0;
+      ACTS.forEach(a=>{
+        const d=a.dem[r.id]||0;
+        if(d && starts[a.id]<=t && t<finish(a.id)){ segs.push({id:a.id,color:a.color,d}); total+=d; }
+      });
+      profiles[r.id].push({t,segs,total});
+      if(total>r.cap){
+        overloadUnits[r.id].add(t);
+        segs.forEach(s=>violActs.add(s.id));
+      }
+    }
+  });
+  return {violActs, violEdges, profiles, overloadUnits};
+}
+
+/* ---------------- geometry ---------------- */
+const LEFT=158, RIGHT=58, TOP=40, ROWH=34;
+const RES_PLOT=78, RES_TITLE=22, RES_GAP=16;
+
+function layout(W){
+  const plotW = W - LEFT - RIGHT;
+  const ppu = plotW / TIME_MAX;
+  const ganttH = ACTS.length*ROWH;
+  const ganttBottom = TOP + ganttH;
+  const resTop = ganttBottom + 30;
+  const panelH = RES_TITLE + RES_PLOT + RES_GAP;
+  const totalH = resTop + RESOURCES.length*panelH + 12;
+  return {plotW, ppu, ganttH, ganttBottom, resTop, panelH, totalH};
+}
+const xOf = (t,L)=> LEFT + t*L.ppu;
+
+/* ---------------- render ---------------- */
+const svg = document.getElementById('chart');
+let curW = 0, L = null;
+let showPrec = true;
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+function render(){
+  let W = svg.clientWidth || svg.parentElement.clientWidth || 0;
+  if(W < 480) W = 1040;            // fallback when the pane isn't laid out yet
+  curW = W;
+  L = layout(W);
+  const A = analyze();
+  const parts = [];
+
+  parts.push(`<defs>
+    <marker id="ah" markerWidth="8" markerHeight="8" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--line-strong)"/></marker>
+    <marker id="ahv" markerWidth="8" markerHeight="8" refX="6.5" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M0,0 L7,3 L0,6 Z" fill="var(--danger)"/></marker>
+    <pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="6" class="overflow-hatch"/></pattern>
+  </defs>`);
+
+  const bottomOfAll = L.resTop + RESOURCES.length*L.panelH - RES_GAP;
+
+  // vertical time grid (full height) + top axis labels
+  for(let t=0;t<=TIME_MAX;t++){
+    const x = xOf(t,L);
+    const major = t%2===0;
+    parts.push(`<line x1="${x}" y1="${TOP-6}" x2="${x}" y2="${bottomOfAll}" class="grid${major?' major':''}"/>`);
+    if(major) parts.push(`<text x="${x}" y="${TOP-12}" text-anchor="middle" class="axis-text">${t}</text>`);
+  }
+  parts.push(`<text x="${LEFT-10}" y="${TOP-12}" text-anchor="end" class="axis-text">t</text>`);
+
+  // ---- Gantt ----
+  ACTS.forEach((a,i)=>{
+    const y = TOP + i*ROWH;
+    const midY = y + ROWH/2;
+    parts.push(`<line x1="${LEFT}" y1="${y+ROWH}" x2="${W-RIGHT}" y2="${y+ROWH}" class="row-sep"/>`);
+    // label: id + duration + per-resource demand
+    const demTxt = RESOURCES.map(r=>`${r.id}·${a.dem[r.id]||0}`).join('  ');
+    parts.push(`<text x="${LEFT-12}" y="${midY-2}" text-anchor="end" class="act-label">${esc(a.id)}</text>`);
+    parts.push(`<text x="${LEFT-12}" y="${midY+11}" text-anchor="end" class="act-sub">d${a.dur}  ${demTxt}</text>`);
+  });
+
+  // precedence arrows (drawn above row separators, below bars is fine; put below bars)
+  const barTop = i=> TOP + i*ROWH + 6;
+  const barH = ROWH - 12;
+  const idxOf = Object.fromEntries(ACTS.map((a,i)=>[a.id,i]));
+
+  // ---- resource panels (build first so bars draw over grid; order doesn't matter visually) ----
+  RESOURCES.forEach((r,ri)=>{
+    const top = L.resTop + ri*L.panelH;
+    const plotTop = top + RES_TITLE;
+    const plotBottom = plotTop + RES_PLOT;
+    const peak = Math.max(r.cap, ...A.profiles[r.id].map(p=>p.total));
+    const axisMax = Math.max(r.cap+1, peak);
+    const pxRes = RES_PLOT / axisMax;
+    const yOf = v => plotBottom - v*pxRes;
+
+    parts.push(`<text x="${LEFT-12}" y="${plotTop+13}" text-anchor="end" class="res-name">${esc(r.id)}</text>`);
+    parts.push(`<text x="${LEFT}" y="${top+13}" class="sec-title">resource demand</text>`);
+    // baseline
+    parts.push(`<line x1="${LEFT}" y1="${plotBottom}" x2="${W-RIGHT}" y2="${plotBottom}" class="grid major"/>`);
+
+    // stacked columns
+    A.profiles[r.id].forEach(col=>{
+      const x = xOf(col.t,L);
+      let cum=0;
+      const cw = Math.max(L.ppu-1.2, 0.5);
+      col.segs.forEach(s=>{
+        const h = s.d*pxRes;
+        parts.push(`<rect x="${x+0.6}" y="${yOf(cum+s.d)}" width="${cw}" height="${h}" fill="${s.color}" opacity="0.9"/>`);
+        cum+=s.d;
+      });
+      if(col.total>r.cap){
+        const yTop = yOf(col.total);
+        const yCap = yOf(r.cap);
+        parts.push(`<rect x="${x+0.6}" y="${yTop}" width="${cw}" height="${yCap-yTop}" fill="url(#hatch)"/>`);
+        parts.push(`<rect x="${x+0.6}" y="${yTop}" width="${cw}" height="${yCap-yTop}" class="overflow"/>`);
+      }
+    });
+    // capacity line
+    const yc = yOf(r.cap);
+    parts.push(`<line x1="${LEFT}" y1="${yc}" x2="${W-RIGHT}" y2="${yc}" class="cap-line"/>`);
+    parts.push(`<text x="${W-RIGHT+6}" y="${yc+3.5}" class="cap-label">cap ${r.cap}</text>`);
+    // y ticks (0 and axisMax)
+    parts.push(`<text x="${LEFT-6}" y="${plotBottom+3}" text-anchor="end" class="res-axis">0</text>`);
+  });
+
+  // ---- bars (on top) ----
+  ACTS.forEach((a,i)=>{
+    const x = xOf(starts[a.id],L);
+    const w = Math.max(a.dur*L.ppu, 2);
+    const y = barTop(i);
+    const viol = A.violActs.has(a.id) ? ' viol' : '';
+    const demTip = RESOURCES.map(r=>`${r.id} ${a.dem[r.id]||0}`).join(', ');
+    parts.push(`<rect class="bar-rect${viol}" data-id="${a.id}" x="${x}" y="${y}" width="${w}" height="${barH}" rx="4" fill="${a.color}"><title>${esc(a.id)} — dur ${a.dur}, demand ${demTip}; start ${starts[a.id]} → finish ${finish(a.id)}</title></rect>`);
+    parts.push(`<text class="bar-label" x="${x+w/2}" y="${y+barH/2+4}" text-anchor="middle">${esc(a.id)}</text>`);
+  });
+
+  // ---- selection outlines ----
+  ACTS.forEach((a,i)=>{
+    if(!selected.has(a.id)) return;
+    const x = xOf(starts[a.id],L);
+    const w = Math.max(a.dur*L.ppu, 2);
+    const y = barTop(i);
+    parts.push(`<rect class="sel-outline" x="${x-3}" y="${y-3}" width="${w+6}" height="${barH+6}" rx="6"/>`);
+  });
+
+  // ---- precedence arrows on top of everything ----
+  if(showPrec){
+    EDGES.forEach(([p,s])=>{
+      const pi=idxOf[p], si=idxOf[s];
+      const x1 = xOf(finish(p),L);
+      const y1 = barTop(pi)+barH/2;
+      const x2 = xOf(starts[s],L);
+      const y2 = barTop(si)+barH/2;
+      const viol = A.violEdges.has(p+'>'+s);
+      const dx = Math.max(14, Math.abs(x2-x1)*0.4);
+      const path = `M ${x1} ${y1} C ${x1+dx} ${y1}, ${x2-dx} ${y2}, ${x2-2} ${y2}`;
+      parts.push(`<path d="${path}" class="arrow${viol?' viol':''}" marker-end="url(#${viol?'ahv':'ah'})"/>`);
+    });
+  }
+
+  svg.setAttribute('viewBox', `0 0 ${W} ${L.totalH}`);
+  svg.setAttribute('height', L.totalH);
+  svg.style.height = L.totalH + 'px';
+  svg.innerHTML = parts.join('');
+
+  attachDrag();
+  updateMetrics(A);
+}
+
+function updateMetrics(A){
+  document.getElementById('m-makespan').textContent = makespan();
+  const n = A.violActs.size;
+  document.getElementById('m-viol').textContent = n;
+  const box = document.getElementById('m-viol-box');
+  box.classList.toggle('bad', n>0);
+  box.classList.toggle('good', n===0);
+}
+
+/* ---------------- dragging & selection ---------------- */
+let drag = null; // {ids:[...], orig:{id->start}, startX}
+
+function attachDrag(){
+  svg.querySelectorAll('.bar-rect').forEach(rect=>{
+    rect.addEventListener('pointerdown', e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      const id = rect.dataset.id;
+      if(e.shiftKey){                                   // shift-click toggles membership, no drag
+        if(selected.has(id)) selected.delete(id); else selected.add(id);
+        render();
+        return;
+      }
+      // plain click: drag the selection if this bar is in it, else select-and-drag just this one
+      let ids;
+      if(selected.has(id) && selected.size > 0){ ids = [...selected]; }
+      else { selected = new Set([id]); ids = [id]; }
+      const orig = {}; ids.forEach(k=>orig[k]=starts[k]);
+      drag = {ids, orig, startX:e.clientX};
+      document.body.style.cursor = 'grabbing';
+      document.getElementById('hint').textContent =
+        ids.length>1 ? `dragging ${ids.length} activities` : 'dragging '+id;
+      render();
+    });
+  });
+}
+
+window.addEventListener('pointermove', e=>{
+  if(!drag || !L) return;
+  let d = Math.round((e.clientX - drag.startX)/L.ppu);
+  // clamp the shared delta so no member of the group leaves the horizon (keeps the group rigid)
+  let lo = -Infinity, hi = Infinity;
+  drag.ids.forEach(id=>{
+    const o = drag.orig[id], dur = byId[id].dur;
+    lo = Math.max(lo, -o);
+    hi = Math.min(hi, TIME_MAX - dur - o);
+  });
+  d = Math.max(lo, Math.min(hi, d));
+  let changed = false;
+  drag.ids.forEach(id=>{ const ns = drag.orig[id] + d; if(starts[id] !== ns){ starts[id] = ns; changed = true; } });
+  if(changed){ if(cascade) cascadeForward(); render(); }
+});
+
+window.addEventListener('pointerup', ()=>{
+  if(drag){
+    drag = null;
+    document.body.style.cursor = '';
+    document.getElementById('hint').textContent = 'drag a bar · shift-click to multi-select →';
+  }
+});
+
+// click empty canvas clears the selection
+svg.addEventListener('pointerdown', e=>{
+  if(e.target.classList && e.target.classList.contains('bar-rect')) return;
+  if(!e.shiftKey && selected.size){ selected.clear(); render(); }
+});
+window.addEventListener('keydown', e=>{
+  if(e.key === 'Escape' && selected.size){ selected.clear(); render(); }
+});
+
+/* ---------------- controls ---------------- */
+document.getElementById('btn-sgs').addEventListener('click', ()=>{ starts = sgsStarts(); render(); });
+document.getElementById('btn-cpm').addEventListener('click', ()=>{ starts = cpmStarts(); render(); });
+document.getElementById('tog-prec').addEventListener('change', e=>{ showPrec = e.target.checked; render(); });
+document.getElementById('tog-cascade').addEventListener('change', e=>{ cascade = e.target.checked; if(cascade) cascadeForward(); render(); });
+
+// activity legend swatches (rebuilt per template)
+function renderActLegend(){
+  document.getElementById('leg-acts').innerHTML =
+    'activities: ' + ACTS.map(a=>`<span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px"><span class="sw" style="background:${a.color}"></span>${a.id}</span>`).join('');
+}
+
+// template switching
+document.querySelectorAll('.seg').forEach(b=>b.addEventListener('click', ()=>loadTemplate(b.dataset.tpl)));
+
+let rt=null;
+window.addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(render, 120); });
+
+// init
+loadTemplate('t1');
+</script>

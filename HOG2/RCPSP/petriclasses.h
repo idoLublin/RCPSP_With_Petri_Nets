@@ -52,6 +52,13 @@ class RCPSP_example{
     ~RCPSP_example() = default;
     RCPSP_example(): activity_len(0) {
     };
+    // The user-declared destructor above suppresses the implicit MOVE operations, so std::swap(RCPSPex, stash)
+    // (the bidirectional search swaps the forward and reversed instance on every side change) deep-copied the
+    // whole instance. Defaulting them restores O(1) swaps; contents after a swap are unchanged.
+    RCPSP_example(const RCPSP_example&) = default;
+    RCPSP_example& operator=(const RCPSP_example&) = default;
+    RCPSP_example(RCPSP_example&&) noexcept = default;
+    RCPSP_example& operator=(RCPSP_example&&) noexcept = default;
     void reset() {
         activities.clear();
         dependencies.clear();
@@ -204,6 +211,12 @@ public:
   ~PetriExample() = default;
   PetriExample(): place_len(0) {
   };
+  // Same as RCPSP_example: without these, std::swap(petri, stash) copies every place (maps, strings) and
+  // transition on each bidirectional side change. Defaulted moves make the swap O(1).
+  PetriExample(const PetriExample&) = default;
+  PetriExample& operator=(const PetriExample&) = default;
+  PetriExample(PetriExample&&) noexcept = default;
+  PetriExample& operator=(PetriExample&&) noexcept = default;
 
     std::vector<Place> places;  // Vector of Place objects
    // std::vector<Transition_dict> Transitions_dict;  // Vector of Place objects

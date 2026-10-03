@@ -58,6 +58,24 @@ inline long LnsMode()  { static const long v = envNum("RCPSP_ROOT_LNS", 0); retu
 inline bool LnsOn()    { return LnsMode() > 0; }
 inline long LnsMs()    { static const long v = envNum("RCPSP_ROOT_LNS_MS", 2000); return v; }
 inline long LnsNodes() { static const long v = envNum("RCPSP_ROOT_LNS_NODES", 300); return v; }
+// RCPSP_ROOT_WIN=1: after the seed, propagate ONCE at D = seed and keep the windows. Every schedule at least
+// as short as the seed has start_i in [winEs, winLs]. The searches only use the LATE side: starts never
+// decrease down the tree, so a start past winLs is inherited by every descendant and that subtree is dead.
+// (The early side would have to be carried in the state as release times - not worth it, measured 0.)
+inline bool WinOn()    { static const bool v = envOn("RCPSP_ROOT_WIN", false); return v; }
+
+// fingerprint of the instance currently in RCPSPex (see TT2NodeBound: the same hash, one definition).
+inline unsigned long long instFp() {
+    unsigned long long h = 1469598103934665603ULL;
+    auto mix = [&h](unsigned long long v) { h = (h ^ v) * 1099511628211ULL; };
+    mix(RCPSPex.activities.size()); mix(RCPSPex.resources.size());
+    for (size_t i = 0; i < RCPSPex.activities.size(); ++i) {
+        mix((unsigned long long)RCPSPex.activities[i].duration);
+        mix((unsigned long long)RCPSPex.backword_dependencies[i].size());
+    }
+    for (const auto& r : RCPSPex.resources) mix((unsigned long long)r.second);
+    return h;
+}
 
 struct Info {
     int lbPlain = -1;        // max(CPM, energy) — what the A* heuristic gives at the root
@@ -76,6 +94,9 @@ struct Info {
     long lnsIters = 0, lnsImpCp = 0, lnsImpSgs = 0;   // iterations; strict improvements by CP / SGS repair
     double lnsSec = 0.0;
     std::vector<int> seedStart;   // start time per activity (0-based index), for printing
+    int winD = -1;                // RCPSP_ROOT_WIN: the deadline the windows were propagated at (= seed)
+    unsigned long long winFp = 0; // fingerprint of the instance the windows belong to (0 = none)
+    std::vector<int> winEs, winLs;
 };
 inline Info& info() { static Info i; return i; }
 inline void reset() { info() = Info{}; }
@@ -158,6 +179,11 @@ inline Inst build() {
 }
 
 // precedence + time-table propagation on [es, ls] for deadline D; false = some window emptied (D refuted)
+// RCPSP_PROP_ITERS: cap on fixpoint rounds (default 60 = the original). A lower cap stops early with windows
+// that are still valid, only looser, so every caller stays sound. Counters are per thread, never reset here.
+inline long PropIters() { static const long v = envNum("RCPSP_PROP_ITERS", 60); return v; }
+inline long& propCalls()  { static thread_local long v = 0; return v; }
+inline long& propRounds() { static thread_local long v = 0; return v; }
 inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls) {
     static thread_local std::vector<std::vector<int>> prof;
     static thread_local std::vector<char> bad;
@@ -165,7 +191,10 @@ inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<in
     if ((int)prof.size() < I.R) prof.resize(I.R);
     for (int k = 0; k < I.R; ++k) if ((int)prof[k].size() < H) prof[k].resize(H);
     if ((int)bad.size() < H) bad.resize(H);
-    for (int iter = 0; iter < 60; ++iter) {
+    ++propCalls();
+    const int maxIter = (int)PropIters();
+    for (int iter = 0; iter < maxIter; ++iter) {
+        ++propRounds();
         bool changed = false;
         for (int i : I.topo) {
             int v = es[i];
@@ -665,6 +694,23 @@ inline bool computeRootBounds() {
     }
     if (ProbeOn()) runProbe(I, in);
     if (LnsOn() && SeedOn()) runLns(I, in);
+    if (WinOn() && in.seed > 0) {                    // windows at D = seed: one propagation, reused all search
+        std::vector<int> es = I.es0, ls(I.n);
+        for (int i = 0; i < I.n; ++i) ls[i] = in.seed - I.tail[i];
+        if (propagate(I, in.seed, es, ls)) {
+            in.winD = in.seed; in.winEs = es; in.winLs = ls; in.winFp = instFp();
+            if (envOn("RCPSP_ROOT_WIN_DIAG", false)) {       // is the window tighter than plain precedence?
+                int nl = 0, sl = 0, ne = 0, se = 0;
+                for (int i = 0; i < I.n; ++i) {
+                    const int pl = in.seed - I.tail[i];
+                    if (ls[i] < pl)      { ++nl; sl += pl - ls[i]; }
+                    if (es[i] > I.es0[i]) { ++ne; se += es[i] - I.es0[i]; }
+                }
+                fprintf(stderr, "[win] D=%d lsTight=%d/%d sum=%d esTight=%d/%d sum=%d\n",
+                        in.seed, nl, I.n, sl, ne, I.n, se);
+            }
+        }
+    }
     in.closed = (in.seed > 0 && in.seed <= std::max(in.lb, in.lbPlain));
     return in.closed;
 }

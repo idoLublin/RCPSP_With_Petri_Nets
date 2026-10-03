@@ -5,3 +5,20 @@ HOG2/objs
 # CLion files
 cmake-build-debug
 CMakeLists.txt
+# Build products and run output (added 2026-10-03): binaries, result CSVs, logs
+HOG2/RCPSP/Driver_*
+!HOG2/RCPSP/Driver_*.cpp
+!HOG2/RCPSP/Driver_*.h
+*.exe
+__pycache__/
+/new_results/
+/results/
+HOG2/RCPSP/new_results/
+HOG2/RCPSP/results/
+HOG2/RCPSP/logs/
+/logs/
+HOG2/RCPSP/build_*.txt
+HOG2/build_*.txt
+HOG2/RCPSP/*.log
+/build/
+/initF_*.csv

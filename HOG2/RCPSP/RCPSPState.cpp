@@ -3941,15 +3941,32 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
     // Compute latest starts fresh each time — no copy bug
     std::array<short, N> latest_starts = {};
     computeLatestStarts(latest_starts);
+    // RCPSP_CBS_LSPROP: tighten them with the deadline propagation (D = incumbent-1). A latest start that
+    // propagation pulls in makes delays that looked free cost-increasing, so more conflicts score cardinal.
+    std::array<short, N> latest_cpm = latest_starts;
+    bool lsprop = false;
+    {
+        static thread_local std::vector<int> lsv;
+        if (cpcbs::propLatestStarts(start_times, lsv)) {
+            lsprop = true;
+            const int nAct = (int)RCPSPex.activities.size();
+            for (int i = 0; i < nAct && i < (int)N && i < (int)lsv.size(); ++i)
+                if (lsv[i] < (int)latest_starts[i]) { latest_starts[i] = (short)lsv[i]; ++cpcbs::st().lsTighter; }
+        }
+    }
     rvs_activities_pool.clear();
 
                  // best_score = -1.0f;
     float        best_score = -1.0f;
+    int          best_free = INT_MAX, best_nm = INT_MAX;   // RCPSP_CBS_SEL: free / total MDAs of the pick
     short        best_t        = -1;
     short        best_resource = -1;
     ConflictKey<N>        best_key;
     std::vector<short> best_jobs;
     bool         found_any     = false;
+    float        best_score_cpm = -1.0f;      // what the CPM latest starts would have picked (diagnostic)
+    int          tb_nconf_acc = 0, tb_over_acc = 0;   // RCPSP_CBS_TBSPEC keys C / O
+    short        best_t_cpm     = -1, best_resource_cpm = -1;
     // DR5: earliest conflict, tracked alongside the prioritized one. The scan below
     // is exhaustive (the score==1 early-exits are commented out), so the true
     // minimum over all conflicts is seen.
@@ -4015,6 +4032,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
             // DR5: a real conflict at time t — remember the earliest one seen,
             // independently of how it scores for prioritization.
             if (t < first_t) { first_t = t; first_jobs = current_jobs; }
+            ++tb_nconf_acc; tb_over_acc += total_demand - res.capacity;
             // std::cout << resIdx <<":"<<t<< std::endl;
             //
             // for (short job: current_jobs){
@@ -4061,6 +4079,26 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                     }
                 }
                 float score = mdas.empty() ? 0.0f : (float)cardinal_count / (float)mdas.size();
+                const int cand_nm = (int)mdas.size(), cand_free = cand_nm - cardinal_count;
+                if (lsprop) {                      // same score with the untightened latest starts
+                    int cc_cpm = 0;
+                    for (auto& mda : mdas)
+                        if (compute_mda_cost(mda.activities, current_jobs, latest_cpm, resIdx) > 0) ++cc_cpm;
+                    const float score_cpm = mdas.empty() ? 0.0f : (float)cc_cpm / (float)mdas.size();
+                    if (score_cpm != score) ++cpcbs::st().lsScoreDiff;
+                    bool better_cpm;
+                    if (best_t_cpm < 0) better_cpm = true;
+                    else if (g_use_hybrid && setting.use_conflict_prioritization) {   // mirror the real rule
+                        const float T = g_hybrid_threshold;
+                        const bool cs = (score_cpm >= T), bs = (best_score_cpm >= T);
+                        if (cs != bs) better_cpm = cs;
+                        else if (cs)  better_cpm = (score_cpm > best_score_cpm) || (score_cpm == best_score_cpm && t < best_t_cpm);
+                        else          better_cpm = (t < best_t_cpm);
+                    } else better_cpm = setting.use_conflict_prioritization
+                        ? (score_cpm > best_score_cpm || (score_cpm == best_score_cpm && t < best_t_cpm))
+                        : (t < best_t_cpm);
+                    if (better_cpm) { best_score_cpm = score_cpm; best_t_cpm = t; best_resource_cpm = (short)resIdx; }
+                }
 
                 bool is_better;
                 if (g_use_hybrid && setting.use_conflict_prioritization && found_any) {
@@ -4072,7 +4110,16 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                     const float T = g_hybrid_threshold;
                     const bool cand_strong = (score >= T), best_strong = (best_score >= T);
                     if (cand_strong != best_strong) is_better = cand_strong;   // strong beats weak
-                    else if (cand_strong) is_better = (score > best_score) || (score == best_score && t < best_t);
+                    else if (cand_strong) {
+                        if (g_cbs_sel == 1)
+                            is_better = (cand_free < best_free) || (cand_free == best_free &&
+                                        (cand_nm < best_nm || (cand_nm == best_nm && t < best_t)));
+                        else if (g_cbs_sel == 2)
+                            is_better = (score > best_score) || (score == best_score &&
+                                        (cand_nm < best_nm || (cand_nm == best_nm && t < best_t)));
+                        else
+                            is_better = (score > best_score) || (score == best_score && t < best_t);
+                    }
                     else                  is_better = (t < best_t);            // among weak: earliest
                 } else {
                     is_better = !found_any
@@ -4086,6 +4133,8 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                     best_t        = t;
                     best_resource = resIdx;
                     best_score    = score;
+                    best_free     = cand_free;
+                    best_nm       = cand_nm;
                     best_mdas =     std::move(mdas);
                     best_jobs     = current_jobs; // move last
                     best_key      = key;  // store key not solutions
@@ -4207,10 +4256,13 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
     }
 
 done:
+    if (lsprop && found_any && best_t_cpm >= 0
+        && (best_t != best_t_cpm || best_resource != best_resource_cpm)) ++cpcbs::st().lsPickDiff;
     // Write winning conflict
     t              = best_t;
     resourceType   = best_resource;
     found_conflict = found_any;
+    tb_nconf = (short)std::min(tb_nconf_acc, 32000); tb_over = tb_over_acc;
     // DR5: the earliest conflict, which may differ from the prioritized one above.
     t_first        = found_any ? first_t : (short)-1;
     first_conflict_pool = std::move(first_jobs);
@@ -4690,6 +4742,18 @@ RCPSPState_CBS<N>::RCPSPState_CBS() {
 }
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActivity, short conflict_t) {
+    // RCPSP_CBS_TB annotations: one resolution deeper; the parent was evaluated before it was expanded,
+    // so its t_first is exact and bounds ours from below.
+    tb_depth  = (short)(prev.tb_depth + 1);
+    tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
+    // integral, so ceil(f_parent) is still a lower bound.
+    f_floor = prev.f_floor;
+    if (prev.h_cached) {
+        const double fp = (double)prev.start_times[g_sink_id] + prev.h_cache;
+        if (fp < 30000.0) f_floor = std::max(f_floor, (short)std::ceil(fp - 1e-9));
+    }
     // 1. Copy parent
     start_times = prev.start_times;
     // depth=prev.depth+1;
@@ -4807,6 +4871,18 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
 
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<short>& mda_activities, short conflict_t) {
+    // RCPSP_CBS_TB annotations: one resolution deeper; the parent was evaluated before it was expanded,
+    // so its t_first is exact and bounds ours from below.
+    tb_depth  = (short)(prev.tb_depth + 1);
+    tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
+    // integral, so ceil(f_parent) is still a lower bound.
+    f_floor = prev.f_floor;
+    if (prev.h_cached) {
+        const double fp = (double)prev.start_times[g_sink_id] + prev.h_cache;
+        if (fp < 30000.0) f_floor = std::max(f_floor, (short)std::ceil(fp - 1e-9));
+    }
     // 1. Copy parent
     // start_times = prev.start_times;
 //     std::cout << "new state"<<std::endl;
@@ -5109,6 +5185,18 @@ void RCPSPState_CBS<N>::gen_internal_mda_split(
 
 template<short N>
 RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short to, short conflict_t) {
+    // RCPSP_CBS_TB annotations: one resolution deeper; the parent was evaluated before it was expanded,
+    // so its t_first is exact and bounds ours from below.
+    tb_depth  = (short)(prev.tb_depth + 1);
+    tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
+    // integral, so ceil(f_parent) is still a lower bound.
+    f_floor = prev.f_floor;
+    if (prev.h_cached) {
+        const double fp = (double)prev.start_times[g_sink_id] + prev.h_cache;
+        if (fp < 30000.0) f_floor = std::max(f_floor, (short)std::ceil(fp - 1e-9));
+    }
     // 1. Copy parent
     start_times = prev.start_times;
     is_size2_conflict = false;

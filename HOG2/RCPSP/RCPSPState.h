@@ -234,6 +234,42 @@ public:
     }
 };
 
+// RCPSP_TT2_TBSPEC=<keys>: explicit order among nodes of equal priority (f in TT2, b in HBAE), replacing the
+// built-in chains (TT2: higher g, more finished, more active; HBAE: zero-delay child, higher g, more finished,
+// active). One letter per key, most significant first; UPPER case = larger first, lower case = smaller first:
+//   G elapsed time g            F finished activities        A activities in progress
+//   P started = finished + in progress                        R total remaining time of the activities in progress
+//   M longest remaining time among them                       Z zero-delay child (reached by a start at delay 0)
+//   L id of the transition fired last
+// "GFA" is the TT2 default, "ZGFA" the HBAE default with RCPSP_BI_ACTIVETB=1. Any order among equal-priority
+// nodes keeps the search optimal. Read from the environment here so every search mode sees the same value.
+inline const std::string& tt2TbSpec() {
+    static const std::string v = [] { const char* e = std::getenv("RCPSP_TT2_TBSPEC"); return std::string(e ? e : ""); }();
+    return v;
+}
+// -1: a is expanded first, +1: b first, 0: tie under the spec
+inline int tt2TbCompare(const RCPSPState_TT2& a, double ga, const RCPSPState_TT2& b, double gb) {
+    for (const char c : tt2TbSpec()) {
+        long x = 0, y = 0;
+        switch (c | 0x20) {
+            case 'g': x = (long)ga; y = (long)gb; break;
+            case 'f': x = (long)a.finishedActivitiys.count(); y = (long)b.finishedActivitiys.count(); break;
+            case 'a': x = (long)a.activeTransitionIndices.size(); y = (long)b.activeTransitionIndices.size(); break;
+            case 'p': x = (long)(a.finishedActivitiys.count() + a.activeTransitionIndices.size());
+                      y = (long)(b.finishedActivitiys.count() + b.activeTransitionIndices.size()); break;
+            case 'r': for (const auto& p : a.activeTransitionIndices) x += p.second;
+                      for (const auto& p : b.activeTransitionIndices) y += p.second; break;
+            case 'm': for (const auto& p : a.activeTransitionIndices) if (p.second > x) x = p.second;
+                      for (const auto& p : b.activeTransitionIndices) if (p.second > y) y = p.second; break;
+            case 'z': x = a.isDeltaZero ? 1 : 0; y = b.isDeltaZero ? 1 : 0; break;
+            case 'l': x = a.lastTransitionId; y = b.lastTransitionId; break;
+            default:  continue;
+        }
+        if (x != y) return ((c >= 'A' && c <= 'Z') ? (x > y) : (x < y)) ? -1 : 1;
+    }
+    return 0;
+}
+
 
 class RCPSPState_BI_TT2 {
 public:
@@ -323,6 +359,22 @@ public:
      // to the inflated-schedule start time of the activity this child delays;
      // GetSuccessors stable-sorts siblings by it. 0 when warm start is off.
      short warmstart_key = 0;
+
+     // RCPSP_CBS_TB tie-break annotations. Inherited, never part of the identity (== / hash).
+     short tb_depth  = 0;     // resolutions applied since the root
+     short tb_tfirst = -1;    // lower bound on this node's earliest conflict time, from its ancestors
+     // RCPSP_CBS_TBSPEC keys C / O / N. C and O are the PARENT's values until this node is evaluated.
+     mutable short tb_nconf = 0;   // conflict events (time point x resource over capacity)
+     mutable int   tb_over  = 0;   // total overload over those events
+     unsigned      tb_seq   = 0;   // creation order within the instance
+     short f_floor   = 0;     // RCPSP_CBS_PATHMAX: the parent's final f (integral makespan lower bound)
+     // "feasible until": exact once evaluated (conflict-free => +inf), else the inherited lower bound
+     short tb_key() const {
+         if (h_cached) return found_conflict ? std::max(tb_tfirst, t_first) : (short)32000;
+         return tb_tfirst;
+     }
+     // RCPSP_CBS_TB >= 4: total delay of the schedule (sum of start times; the CPM schedule has the minimum)
+     int tb_sum() const { int s = 0; for (short i = 0; i <= g_sink_id; ++i) s += start_times[i]; return s; }
 
     short compute_h_and_RVS() const;
 

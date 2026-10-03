@@ -1,0 +1,6 @@
+# Server scripts and instance lists are copied to Linux as they are: keep LF whatever core.autocrlf says.
+HOG2/RCPSP/*.sh text eol=lf
+HOG2/RCPSP/*_j60_j90.txt text eol=lf
+baselines/*/run_server_*.sh text eol=lf
+baselines/cpsat/cp_focus.txt text eol=lf
+lp_root_bound/run_server.sh text eol=lf

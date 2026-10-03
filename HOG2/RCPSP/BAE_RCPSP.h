@@ -111,6 +111,8 @@ struct BAECompare_RCPSP {
     bool operator()(const AStarOpenClosedData<state> &i1, const AStarOpenClosedData<state> &i2) const {
         if (!fequal(i1.h, i2.h))
             return fgreater(i1.h, i2.h);   // smaller b first
+        // RCPSP_TT2_TBSPEC (RCPSPState.h): explicit key order among equal-priority nodes, replacing the chain below
+        if (!tt2TbSpec().empty()) return tt2TbCompare(i1.data.s, i1.g, i2.data.s, i2.g) > 0;
         if (BAE_RCPSP_DZ_FIRST && i1.data.s.isDeltaZero != i2.data.s.isDeltaZero)
             return !i1.data.s.isDeltaZero;  // zero-delay child first (see RCPSP_BI_DZFIRST)
         if (!fequal(i1.g, i2.g))

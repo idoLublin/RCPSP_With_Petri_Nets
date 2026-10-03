@@ -1844,7 +1844,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     size_t w = 0;
     for (size_t i = 0; i < neighbors.size(); i++) {
       const double f = (double)neighbors[i].g + HCost(neighbors[i], neighbors[i]);
-      if (f > (double)g_incumbent) { ++g_ub_pruned; continue; }
+      if (f > (double)g_incumbent - (g_tt2_ub_ge ? 1.0 : 0.0)) { ++g_ub_pruned; continue; }
       if (w != i) neighbors[w] = std::move(neighbors[i]);
       w++;
     }
@@ -2065,6 +2065,8 @@ inline double singleResViaTT2(const RCPSPState_TT2& node) {
   return best;
 }
 
+#include "TT2NodeBound.h"   // RCPSP_TT2_TT: per-node deadline reasoning (included here so RCPSPex is declared)
+
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
   ++g_prof_h_calls_all;
   if (state1.hKnown) { ++g_prof_h_known; return state1.h; }   // fused successor cache supplied h at reconstruction => no lookup, no recompute
@@ -2143,6 +2145,14 @@ inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT
     g_hierrs_time_sec += secs_since(_hrt0);
     const double hrRem = hrLB - (double)state1.g;
     if (hrRem > base) { base = hrRem; ++g_tt2_hierrs_better; }
+  }
+
+  // Per-node deadline reasoning (RCPSP_TT2_TT=1): try to REFUTE the remaining makespan `base` on the residual
+  // problem (in-progress activities with their remaining time, the rest with earliest starts from now). A
+  // refutation proves no completion that short exists, so h rises to base+1 and stays admissible.
+  if (tt2nb::On() || tt2nb::WinOn()) {
+    const int _rb = tt2nb::raise(tempUnfinished, state1.activeTransitionIndices, (int)std::ceil(base), (int)state1.g);
+    if ((double)_rb > base) base = (double)_rb;
   }
 
   g_heur_time_sec += secs_since(_hct0);
@@ -2805,8 +2815,18 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
         }
         else {
           const auto& sets = get_mda_cache<N>().at(par.conflict_key);
-          for (const auto& set : sets)
-            emit_set(par, set, out);
+          // RCPSP_CBS_ADAPT_BRANCH (Globals.h): too many MDAs => one child per conflict member instead.
+          if (g_cbs_adapt_branch > 0 && !par.rvs_activities_pool.empty()
+              && (long)sets.size() > (long)g_cbs_adapt_branch * (long)par.rvs_activities_pool.size()) {
+            ++g_cbs_adapt_singular;
+            const bool nmd = setting.use_non_minimal_delay;
+            setting.use_non_minimal_delay = false;          // singular coverage is proven for minimal delay
+            for (short a : par.rvs_activities_pool) out.emplace_back(par, a, par.t);
+            setting.use_non_minimal_delay = nmd;
+          } else {
+            for (const auto& set : sets)
+              emit_set(par, set, out);
+          }
         }
       }
       else {
@@ -3428,6 +3448,11 @@ inline double hierRSBound_CBS(const RCPSPState_CBS<N>& s) {
   return lb;
 }
 
+// depth measure for the expensive-bound gates (see g_cbs_gate_depth in Globals.h)
+template<short N>
+inline int cbsGateDepth(const RCPSPState_CBS<N>& s) {
+  return g_cbs_gate_depth ? (int)s.tb_depth : (int)s.added_precedences.size();
+}
 template<short N>
 inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPState_CBS<N> &state2) const {
   // std::cout << "H: ";
@@ -3464,7 +3489,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (g_cbs_subset && cbs_rs_allows_expensive()) {
     const int g_now = state1.start_times[g_sink_id];
     const int f_cur = g_now + (int)h;                         // current best f (post warmstart/Θ)
-    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_subset_maxdepth;
+    const bool shallow = cbsGateDepth(state1) <= g_cbs_subset_maxdepth;
     const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
                          && f_cur < g_incumbent
                          && (g_incumbent - f_cur) <= g_cbs_subset_gap;
@@ -3479,7 +3504,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (g_cbs_mincut && cbs_rs_allows_expensive()) {
     const int g_now = state1.start_times[g_sink_id];
     const int f_cur = g_now + (int)h;
-    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_mincut_maxdepth;
+    const bool shallow = cbsGateDepth(state1) <= g_cbs_mincut_maxdepth;
     const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
                          && f_cur < g_incumbent
                          && (g_incumbent - f_cur) <= g_cbs_mincut_gap;
@@ -3497,7 +3522,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (g_cbs_singleres && cbs_rs_allows_expensive()) {
     const int g_now = state1.start_times[g_sink_id];
     const int f_cur = g_now + (int)h;
-    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_singleres_maxdepth;
+    const bool shallow = cbsGateDepth(state1) <= g_cbs_singleres_maxdepth;
     const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
                          && f_cur < g_incumbent
                          && (g_incumbent - f_cur) <= g_cbs_singleres_gap;
@@ -3517,7 +3542,7 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (g_cbs_hierrs && g_cbs_hierrs_target >= 0.0 && cbs_rs_allows_expensive()) {
     const int g_now = state1.start_times[g_sink_id];
     const int f_cur = g_now + (int)h;
-    const bool shallow = (int)state1.added_precedences.size() <= g_cbs_hierrs_maxdepth;
+    const bool shallow = cbsGateDepth(state1) <= g_cbs_hierrs_maxdepth;
     const bool nearUB  = g_use_ub && g_incumbent < std::numeric_limits<short>::max()
                          && f_cur < g_incumbent
                          && (g_incumbent - f_cur) <= g_cbs_hierrs_gap;
@@ -3529,11 +3554,23 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
       if (hr_rem > h) { h = hr_rem; ++g_cbs_hierrs_better; }
     }
   }
+  // RCPSP_CBS_PATHMAX (Globals.h): never below the parent's f. Applied before the deadline propagation so that
+  // the refutation loop starts where the parent stopped instead of re-proving the same deadlines.
+  if ((g_cbs_pathmax || g_cbs_pathmax_insert) && state1.found_conflict) {
+    const double floor_rem = (double)state1.f_floor - (double)state1.start_times[g_sink_id];
+    if (floor_rem > h) { h = floor_rem; ++g_cbs_pathmax_raised; }
+  }
   // CpCBS.h: root LB floor, deadline time-table propagation (RCPSP_CBS_TT), nogoods (RCPSP_CBS_NG). Admissible
   // absolute makespan bound from start_times only; skipped for goals, dominated nodes and inside sub-solves.
-  if (cpcbs::Active() && state1.found_conflict && h < 1e6 && (cpcbs::TTOn() || cpcbs::ctx().rootLB > 0)) {
+  if (cpcbs::Active() && state1.found_conflict && h < 1e6 && (cpcbs::TTOn() || cpcbs::WinOn() || cpcbs::ctx().rootLB > 0)) {
     const int g_now = state1.start_times[g_sink_id];
-    const int nb = cpcbs::nodeBound(state1.start_times, g_now + (int)h);
+    // RCPSP_CBS_MDAREF needs the branching conflict; only the plain MDA child set qualifies (SetDelay and the
+    // recursive MDA split build different children, so the coverage argument would not apply).
+    const bool mdaOk = setting.use_MDA_sets && !g_use_setdelay && !setting.use_mda_recursive_delay
+                       && !state1.conflict_solutions.empty() && !state1.rvs_activities_pool.empty();
+    const int nb = mdaOk ? cpcbs::nodeBound(state1.start_times, g_now + (int)h,
+                                            &state1.rvs_activities_pool, &state1.conflict_solutions)
+                         : cpcbs::nodeBound(state1.start_times, g_now + (int)h);
     if ((double)(nb - g_now) > h) h = (double)(nb - g_now);
   }
   g_heur_time_sec += secs_since(_hct0);

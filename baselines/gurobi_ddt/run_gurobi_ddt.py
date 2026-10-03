@@ -8,9 +8,22 @@ DDT precedence for (i -> j) with duration p_i:
 
 This is tighter than the aggregated constraint (s_i + p_i <= s_j).
 
-Output CSV columns: instance, solved, optimal, makespan, time_s
+Env flags (parsed by value, all default off; every flag is written to the CSV header and each row):
+  RCPSP_GRB_NOPRESOLVE=1       Presolve=0 (the MIP counterpart of the root stage CBS runs without)
+  RCPSP_GRB_NOCUTS=1           Cuts=0
+  RCPSP_GRB_NOHEUR=1           Heuristics=0, RINS=0, PumpPasses=0, MinRelNodes=0, ZeroObjNodes=0
+  RCPSP_GRB_NOSYMMETRY=1       Symmetry=0
+  RCPSP_GRB_BUILD_IN_BUDGET=1  model build time counts inside the budget (TimeLimit = budget - build)
+  RCPSP_GRB_SOFTMEM=<GB>       SoftMemLimit (0 = none); an instance over it ends with status MEM_LIMIT
+  RCPSP_GRB_TIMEOUT=<s>        per-instance budget (default 300)
+  RCPSP_ONLY=<file>            only the instances listed as size,group,exam (one per line)
+  RCPSP_RESULTS_DIR=<dir>      output directory (default <repo>/new_results)
+
+Output: <results dir>/gurobi_<size>_ddt[-<flags>]_vNN.csv (or --out), one row per instance: solver status,
+makespan, proven lower bound, gap, nodes, build/solve time, peak memory, and an independent check of the
+returned schedule (verified). Prints 'Done -> <csv>' at the end.
 """
-import time, re, csv, sys, os, glob, argparse
+import time, re, csv, sys, os, glob, argparse, math
 from collections import defaultdict
 
 try:
@@ -20,14 +33,59 @@ except ImportError:
     print("gurobipy not found. Install with: pip install gurobipy")
     sys.exit(1)
 
-TIMEOUT_S = 300
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_DIR = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 DATA_DIRS = {
     "j30": r"C:\Users\idolu\CLionProjects\RCPSP_With_Petri_nets\extract_problems\data\j30.sm.tgz",
     "j60": r"C:\Users\idolu\Downloads\j60.sm.tgz",
     "j90": r"C:\Users\idolu\Downloads",
 }
+
+
+def env_num(name, default, kind=int):
+    """Parse an env flag by value (RCPSP_X=0 is off); unset or empty means the default."""
+    v = os.environ.get(name, "").strip()
+    if v == "":
+        return default
+    try:
+        return kind(v)
+    except ValueError:
+        sys.exit(f"{name}={v!r}: expected a number")
+
+
+NOPRESOLVE = env_num("RCPSP_GRB_NOPRESOLVE", 0) != 0
+NOCUTS = env_num("RCPSP_GRB_NOCUTS", 0) != 0
+NOHEUR = env_num("RCPSP_GRB_NOHEUR", 0) != 0
+NOSYMMETRY = env_num("RCPSP_GRB_NOSYMMETRY", 0) != 0
+BUILD_IN_BUDGET = env_num("RCPSP_GRB_BUILD_IN_BUDGET", 0) != 0
+SOFTMEM_GB = env_num("RCPSP_GRB_SOFTMEM", 0.0, float)
+TIMEOUT_S = env_num("RCPSP_GRB_TIMEOUT", 300.0, float)
+ONLY_FILE = os.environ.get("RCPSP_ONLY", "").strip()
+THREADS = 1
+
+FLAGS = {
+    "grbNoPresolve": int(NOPRESOLVE),
+    "grbNoCuts": int(NOCUTS),
+    "grbNoHeur": int(NOHEUR),
+    "grbNoSymmetry": int(NOSYMMETRY),
+    "grbBuildInBudget": int(BUILD_IN_BUDGET),
+    "grbSoftMemGB": SOFTMEM_GB,
+    "timeoutS": TIMEOUT_S,
+    "threads": THREADS,
+    "onlyFile": os.path.basename(ONLY_FILE),
+}
+RESULT_COLS = ["instance", "size", "group", "exam", "status", "solved", "optimal", "makespan", "provenLB", "gap",
+               "time_s", "build_s", "total_s", "nodes", "simplexIters", "horizon", "sgsUB", "nVars", "nConstrs",
+               "maxMemGB", "verified"]
+# parameter values read back from the model after they are set (what Gurobi actually used)
+PARAM_COLS = ["pPresolve", "pCuts", "pHeuristics", "pRINS", "pPumpPasses", "pSymmetry", "pThreads",
+              "pTimeLimit", "pMIPGap", "pSoftMemLimit", "gurobiVersion"]
+FIELDNAMES = RESULT_COLS + list(FLAGS) + PARAM_COLS
+
+STATUS_NAMES = {GRB.OPTIMAL: "OPTIMAL", GRB.TIME_LIMIT: "TIME_LIMIT", GRB.MEM_LIMIT: "MEM_LIMIT",
+                GRB.INFEASIBLE: "INFEASIBLE", GRB.INF_OR_UNBD: "INF_OR_UNBD", GRB.INTERRUPTED: "INTERRUPTED",
+                GRB.SUBOPTIMAL: "SUBOPTIMAL", GRB.NUMERIC: "NUMERIC"}
 
 
 def parse_sm(path):
@@ -140,20 +198,59 @@ def compute_time_windows(n, durations, succs, rreq, rc):
     return est[1:], lst[1:], ub  # 0-indexed: est[k] = EST for activity k+1
 
 
-def solve_instance(sm_path, inst_name):
+def verify_schedule(n, durations, rreq, rc, succs, start):
+    """Independent check of a returned schedule: every activity started once, precedences, capacities."""
+    if sorted(start) != list(range(1, n + 1)):
+        return False
+    for i, j in succs:
+        if start[i] + durations[i - 1] > start[j]:
+            return False
+    usage = defaultdict(lambda: [0] * len(rc))
+    for j in range(1, n + 1):
+        for t in range(start[j], start[j] + durations[j - 1]):
+            u = usage[t]
+            for k in range(len(rc)):
+                u[k] += rreq[j - 1][k]
+                if u[k] > rc[k]:
+                    return False
+    return start[n] >= max(start[j] + durations[j - 1] for j in range(1, n + 1))
+
+
+def set_params(model, limit):
+    model.Params.TimeLimit = limit
+    model.Params.Threads = THREADS
+    model.Params.MIPGap = 0.0
+    if SOFTMEM_GB > 0:
+        model.Params.SoftMemLimit = SOFTMEM_GB
+    if NOPRESOLVE:
+        model.Params.Presolve = 0
+    if NOCUTS:
+        model.Params.Cuts = 0
+    if NOHEUR:
+        model.Params.Heuristics = 0.0
+        model.Params.RINS = 0
+        model.Params.PumpPasses = 0
+        model.Params.MinRelNodes = 0
+        model.Params.ZeroObjNodes = 0
+    if NOSYMMETRY:
+        model.Params.Symmetry = 0
+
+
+def param_readback(model):
+    p = model.Params
+    return {"pPresolve": p.Presolve, "pCuts": p.Cuts, "pHeuristics": p.Heuristics, "pRINS": p.RINS,
+            "pPumpPasses": p.PumpPasses, "pSymmetry": p.Symmetry, "pThreads": p.Threads,
+            "pTimeLimit": round(p.TimeLimit, 3), "pMIPGap": p.MIPGap, "pSoftMemLimit": p.SoftMemLimit,
+            "gurobiVersion": ".".join(map(str, gp.gurobi.version()))}
+
+
+def solve_instance(env, sm_path, inst_name, size, group, exam):
+    t0 = time.perf_counter()
     n, durations, rreq, rc, succs = parse_sm(sm_path)
     n_res = len(rc)
     est, lst, H = compute_time_windows(n, durations, succs, rreq, rc)
 
-    env = gp.Env(empty=True)
-    env.setParam("OutputFlag", 0)
-    env.start()
-
     with gp.Model(env=env) as model:
-        model.Params.TimeLimit = TIMEOUT_S
-        model.Params.Threads = 1
-        model.Params.MIPGap = 0.0
-
         # x[i][t] = 1 if activity i (1-indexed) starts at time t
         x = {}
         for i in range(1, n + 1):
@@ -211,25 +308,57 @@ def solve_instance(sm_path, inst_name):
             gp.quicksum(t * x[n, t] for t in range(est[n - 1], lst[n - 1] + 1)),
             GRB.MINIMIZE,
         )
+        model.update()
+        build_s = time.perf_counter() - t0
 
-        t0 = time.time()
+        limit = TIMEOUT_S - build_s if BUILD_IN_BUDGET else TIMEOUT_S
+        row = {"instance": inst_name, "size": size, "group": group, "exam": exam, "horizon": H, "sgsUB": H,
+               "nVars": model.NumVars, "nConstrs": model.NumConstrs, "build_s": round(build_s, 3)}
+        row.update(FLAGS)
+        if limit <= 0:
+            row.update({"status": "BUILD_TIMEOUT", "solved": False, "optimal": False, "makespan": -1,
+                        "provenLB": -1, "gap": "", "time_s": 0.0, "total_s": round(build_s, 3), "nodes": 0,
+                        "simplexIters": 0, "maxMemGB": -1, "verified": ""})
+            return row
+
+        set_params(model, limit)
+        row.update(param_readback(model))
+
+        t1 = time.perf_counter()
         model.optimize()
-        elapsed = time.time() - t0
+        solve_s = time.perf_counter() - t1
 
-        if model.SolCount > 0:
-            makespan = int(round(model.ObjVal))
-            optimal = model.Status == GRB.OPTIMAL
-        else:
-            makespan = -1
-            optimal = False
+        status = STATUS_NAMES.get(model.Status, str(model.Status))
+        solved = model.SolCount > 0
+        makespan = int(round(model.ObjVal)) if solved else -1
+        try:
+            proven_lb = math.ceil(model.ObjBound - 1e-6)
+        except (gp.GurobiError, AttributeError):
+            proven_lb = -1
+        try:
+            max_mem = round(model.MaxMemUsed, 3)
+        except (gp.GurobiError, AttributeError):
+            max_mem = -1
 
-        return {
-            "instance": inst_name,
-            "solved": model.SolCount > 0,
-            "optimal": optimal,
-            "makespan": makespan,
-            "time_s": round(elapsed, 3),
-        }
+        verified = ""
+        if solved:
+            start = {}
+            for (i, t), var in x.items():
+                if var.X > 0.5:
+                    if i in start:
+                        start = None
+                        break
+                    start[i] = t
+            verified = bool(start) and verify_schedule(n, durations, rreq, rc, succs, start) \
+                and start[n] == makespan
+
+        row.update({"status": status, "solved": solved, "optimal": model.Status == GRB.OPTIMAL,
+                    "makespan": makespan, "provenLB": proven_lb,
+                    "gap": round(model.MIPGap, 6) if solved else "",
+                    "time_s": round(solve_s, 3), "total_s": round(build_s + solve_s, 3),
+                    "nodes": int(model.NodeCount), "simplexIters": int(model.IterCount),
+                    "maxMemGB": max_mem, "verified": verified})
+        return row
 
 
 def _natural_key(path, prefix):
@@ -252,39 +381,99 @@ def collect_instances(size, data_dir=None):
     return [(f, os.path.basename(f).replace(".sm", "")) for f in files]
 
 
+def load_only(path):
+    keep = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#")[0].strip()
+            if line:
+                s, g, e = (x.strip() for x in line.split(","))
+                keep.add((s, int(g), int(e)))
+    return keep
+
+
+def open_next_csv(out_dir, size, info):
+    """<solver>_<size>_<info>_vNN.csv, first free NN; opened exclusively so parallel runs never share a file."""
+    os.makedirs(out_dir, exist_ok=True)
+    for v in range(1, 1000):
+        path = os.path.join(out_dir, f"gurobi_{size}_{info}_v{v:02d}.csv")
+        try:
+            return path, open(path, "x", newline="", encoding="utf-8")
+        except FileExistsError:
+            continue
+    sys.exit(f"no free file name for gurobi_{size}_{info} in {out_dir}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Gurobi DDT RCPSP baseline")
     parser.add_argument("size", choices=["j30", "j60", "j90"])
-    parser.add_argument("--out", default=None)
+    parser.add_argument("--out", default=None, help="explicit output CSV (default: results dir, versioned name)")
     parser.add_argument("--data-dir", default=None,
                         help="Directory containing the .sm files (overrides built-in default)")
     args = parser.parse_args()
 
-    out_csv = args.out or os.path.join(SCRIPT_DIR, f"results_gurobi_ddt_{args.size}.csv")
     instances = collect_instances(args.size, args.data_dir)
-
     if not instances:
         data_dir = args.data_dir or DATA_DIRS[args.size]
         print(f"No .sm files found in {data_dir}")
         sys.exit(1)
+    if ONLY_FILE:
+        keep = load_only(ONLY_FILE)
+        instances = [(p, nm) for p, nm in instances
+                     if (args.size, *map(int, nm[len(args.size):].split("_"))) in keep]
+        if not instances:
+            print(f"RCPSP_ONLY={ONLY_FILE} selects no {args.size} instance")
+            sys.exit(1)
 
-    print(f"Running Gurobi DDT on {len(instances)} {args.size} instances (timeout={TIMEOUT_S}s)")
+    info = "ddt" + "".join(f"-{tag}" for tag, on in (("nopresolve", NOPRESOLVE), ("nocuts", NOCUTS),
+                                                    ("noheur", NOHEUR), ("nosym", NOSYMMETRY),
+                                                    ("budget", BUILD_IN_BUDGET), ("only", bool(ONLY_FILE))) if on)
+    if args.out:
+        out_csv, fh = args.out, open(args.out, "w", newline="", encoding="utf-8")
+    else:
+        out_dir = os.environ.get("RCPSP_RESULTS_DIR", "").strip() or os.path.join(REPO_DIR, "new_results")
+        out_csv, fh = open_next_csv(out_dir, args.size, info)
 
-    with open(out_csv, "w", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(
-            csvfile, fieldnames=["instance", "solved", "optimal", "makespan", "time_s"]
-        )
+    try:
+        env = gp.Env(empty=True)
+        env.setParam("OutputFlag", 0)
+        env.start()
+    except gp.GurobiError as e:
+        print(f"Gurobi environment failed to start (license / token server?): {e}")
+        fh.close()
+        os.remove(out_csv)
+        sys.exit(2)
+
+    print(f"Gurobi {'.'.join(map(str, gp.gurobi.version()))} DDT on {len(instances)} {args.size} instances")
+    print("effective flags: " + " ".join(f"{k}={v}" for k, v in FLAGS.items()))
+    print(f"output: {out_csv}")
+
+    n_opt = n_err = 0
+    with fh:
+        writer = csv.DictWriter(fh, fieldnames=FIELDNAMES, lineterminator="\n")
         writer.writeheader()
-
         for i, (sm_path, inst_name) in enumerate(instances, 1):
-            row = solve_instance(sm_path, inst_name)
+            group, exam = map(int, inst_name[len(args.size):].split("_"))
+            try:
+                row = solve_instance(env, sm_path, inst_name, args.size, group, exam)
+            except gp.GurobiError as e:
+                n_err += 1
+                row = {"instance": inst_name, "size": args.size, "group": group, "exam": exam,
+                       "status": f"ERROR {e.errno}", "solved": False, "optimal": False, "makespan": -1}
+                row.update(FLAGS)
             writer.writerow(row)
-            csvfile.flush()
-            status = "OPT" if row["optimal"] else ("SAT" if row["solved"] else "---")
-            mk = row["makespan"] if row["solved"] else "n/a"
-            print(f"  [{i:3d}/{len(instances)}] {inst_name:15s}  {status}  makespan={mk}  {row['time_s']:.1f}s")
+            fh.flush()
+            n_opt += bool(row.get("optimal"))
+            mk = row["makespan"] if row.get("solved") else "n/a"
+            print(f"  [{i:3d}/{len(instances)}] {inst_name:15s}  {row['status']:12s} makespan={mk} "
+                  f"lb={row.get('provenLB', '')} {row.get('total_s', 0.0)}s verified={row.get('verified', '')}",
+                  flush=True)
+            if row.get("solved") and row.get("verified") is not True:
+                print(f"  !! {inst_name}: returned schedule FAILED verification", flush=True)
 
-    print(f"\nDone. Results saved to {out_csv}")
+    env.dispose()
+    print(f"\nproven optimal {n_opt}/{len(instances)}, errors {n_err}")
+    print(f"Done -> {out_csv}")
 
 
 if __name__ == "__main__":

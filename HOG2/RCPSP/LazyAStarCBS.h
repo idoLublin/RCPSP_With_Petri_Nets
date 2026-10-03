@@ -97,6 +97,7 @@ bool LazyAStarCBS<state, action, environment, openList>::InitializeSearch(
     path.clear();
     openClosedList.Reset(env->GetMaxHash());
     nodesExpanded = nodesTouched = 0;
+    g_lb_raise_exp = 0;
     start = from; goal = to;
 
     // Shared timeout budget (same mechanism as TemplateAStar's authorized change).
@@ -109,6 +110,16 @@ bool LazyAStarCBS<state, action, environment, openList>::InitializeSearch(
     // kTAStarNoNode parent makes AStarOpenClosed set the root's parentID to itself.
     openClosedList.AddOpenNode(start, env->GetStateHash(start), 0.0, 0.0, 0.0, kTAStarNoNode);
     return true;
+}
+
+// Admissible h to queue a freshly generated child with (RCPSP_CBS_PATHMAX_INSERT); 0 = the plain lazy insert.
+template <class S> inline double lazyInsertH(const S&, double) { return 0.0; }
+// h is measured from the node's MAKESPAN (start_times[sink]), which is what the CBS comparator adds it to. The
+// lazy search's own g is offset by the root's critical-path length (the root is inserted with g = 0), so using
+// it here overshot every floor by CPM - that was the 17-wrong-answers bug in the first version.
+template <short N> inline double lazyInsertH(const RCPSPState_CBS<N>& s, double /*lazy g, offset by CPM*/) {
+    const double mk = (double)s.start_times[g_sink_id];
+    return (g_cbs_pathmax_insert && (double)s.f_floor > mk) ? (double)s.f_floor - mk : 0.0;
 }
 
 template <class state, class action, class environment, class openList>
@@ -146,7 +157,10 @@ bool LazyAStarCBS<state, action, environment, openList>::DoSingleSearchStep(std:
 
     // ── This node is the true minimum: expand it. ────────────────────────────
     nodesExpanded++;
-    LB = std::max(LB, (short)openClosedList.Lookup(nodeid).f);   // proven lower bound
+    {   // proven lower bound; remember when it last rose (plateau diagnostic, see Globals.h)
+        const short fNow = (short)openClosedList.Lookup(nodeid).f;
+        if (fNow > LB) { LB = fNow; g_lb_raise_exp = (long)nodesExpanded; }
+    }
 
     if (stopAfterGoal && env->GoalTest(openClosedList.Lookup(nodeid).data, goal)) {
         ExtractPathToStartFromID(nodeid, path);
@@ -187,11 +201,13 @@ bool LazyAStarCBS<state, action, environment, openList>::DoSingleSearchStep(std:
                     openClosedList.KeyChanged(theID);
                 }
                 break;
-            case kNotFound:
-                // LAZY INSERT: queue with h=0; the real scan is deferred to pop.
+            case kNotFound: {
+                // LAZY INSERT: queue with h=0 (or the parent's f, RCPSP_CBS_PATHMAX_INSERT); the scan is deferred.
+                const double h0 = lazyInsertH(neighbors[x], childG);
                 openClosedList.AddOpenNode(neighbors[x], env->GetStateHash(neighbors[x]),
-                                           phi(0, childG), childG, 0, nodeid);
+                                           phi(h0, childG), childG, h0, nodeid);
                 break;
+            }
         }
     }
     return false;

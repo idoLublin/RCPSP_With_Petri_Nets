@@ -198,6 +198,61 @@ inline long  g_leftshift_pruned = 0;   // children dropped by left_shift_prunabl
 
 // ── Experiment flags (each off by default; env-driven) ───────────
 inline bool  g_use_leftshift = false;  // RCPSP_LEFTSHIFT=1: drop left-shiftable children
+// RCPSP_CBS_TB: plateau tie-break for the CBS open list, applied only between nodes with equal f AND equal g.
+//   0 = off (f, then larger g; the old conflict_number key is always 0 under MDA branching, so it is inert)
+//   1 = then larger "feasible-until" time: the node's earliest conflict time t_first once it has been
+//       evaluated (conflict-free => +inf), and before that the value inherited from its parent, which is a
+//       sound lower bound (no descendant can conflict before the parent's t_first)
+//   2 = then deeper (more resolutions applied)
+//   3 = feasible-until, then deeper
+//   4 = deeper, then least total delay (sum of start times)     5 = mode 3, then least total delay
+//   6 = deeper, then most total delay                            7 = mode 3, then most total delay
+// Any order among equal-f nodes keeps A* optimal, so every mode is sound. It only decides WHICH f = C*
+// node is expanded first - the whole game on instances whose lower bound already equals the optimum.
+inline int   g_cbs_tb        = 0;
+// RCPSP_CBS_TBSPEC=<keys>: an explicit order among equal-f nodes, replacing the g / RCPSP_CBS_TB chain above.
+// One letter per key, most significant first; UPPER case = larger first, lower case = smaller first:
+//   G makespan          D depth (resolutions)      T feasible-until (earliest conflict time)
+//   S total delay (sum of start times)             C conflict events       O total overload over those events
+//   N creation order (N = newest first: depth-first / LIFO among ties, n = oldest first)
+// "GTD" is RCPSP_CBS_TB=3. Any order among equal-f nodes keeps A* optimal, so every spec is sound.
+inline std::string g_cbs_tb_spec;
+inline unsigned long g_cbs_tb_seq = 0;      // per-instance creation counter behind the N key
+// RCPSP_CBS_RESTART="<sec>/<TBSPEC>/<T>,<sec>/<TBSPEC>/<T>,...": restart sequence for the lazy CBS search.
+// Stage i runs a complete A* from the root with plateau order TBSPEC and hybrid threshold T for <sec> seconds;
+// if it does not finish, the search state is thrown away and the next stage starts. The LAST stage's <sec> is
+// ignored: it gets whatever is left of the per-instance budget. Every stage is a full, admissible A*, so a
+// path returned by any stage is optimal, and an abandoned stage still leaves a valid lower bound (LB keeps
+// the maximum). Motivation: on the f = C* plateau a dive either succeeds within seconds or not at all, and
+// different orders succeed on different instances. Empty = off.
+struct CbsRestartStage { long sec; std::string spec; float T; };
+inline std::string g_cbs_restart;                       // the raw spec, as given
+inline std::vector<CbsRestartStage> g_cbs_restart_stages;
+inline int g_cbs_restart_stage = 0;                     // per instance: the stage in which the search ended (1-based)
+// Diagnostic (always on, CSV lbRaiseExp): the expansion count at which the proven lower bound last rose.
+// expandNumber - lbRaiseExp = expansions spent on the FINAL f-layer (the f = C* plateau when solved).
+inline long  g_lb_raise_exp  = 0;
+// RCPSP_CBS_PATHMAX=1: a child starts from its parent's final f. Branching only ADDS delays, so every schedule
+// reachable below a child is reachable below its parent (CV(child) is a subset of CV(parent)); the parent's
+// f - HCBS plus everything RCPSP_CBS_TT refuted - is therefore a lower bound for the child too. Without it a
+// child re-refutes, one full propagation per deadline, what its parent already proved.
+inline bool  g_cbs_pathmax   = false;
+// RCPSP_CBS_PATHMAX_INSERT=1: also QUEUE a child at its parent's f (lazy insertion), not only floor it when it is
+// evaluated. Implies the evaluation-time floor.
+inline bool  g_cbs_pathmax_insert = false;
+// RCPSP_CBS_GATE_DEPTH=1: the expensive-bound gates (subset / min-cut / single-res / hierRS) measure depth as
+// the node's CT depth instead of added_precedences.size(), which is ALWAYS 0 under MDA branching (a resolution is
+// a start time, not an arc) - so without this those bounds run at every node regardless of *_MAXDEPTH.
+inline bool  g_cbs_gate_depth = false;
+// RCPSP_CBS_SEL: ordering among STRONG conflicts under the hybrid rule (see RCPSPState.cpp compute_h_and_RVS).
+//   0 = highest cardinal score, then earliest   1 = fewest free MDAs, then fewest MDAs, then earliest
+//   2 = highest score, then fewest MDAs, then earliest
+inline int   g_cbs_sel = 0;
+// RCPSP_CBS_ADAPT_BRANCH=k: singular branching (one minimal-delay child per conflict member) whenever the branching
+// conflict has more than k*|G| MDAs; 0 = always MDA branching. Caps the branching factor on dense J90 conflicts.
+inline int   g_cbs_adapt_branch = 0;
+inline long  g_cbs_adapt_singular = 0;   // nodes branched singularly (per instance; CSV adaptSingular)
+inline long  g_cbs_pathmax_raised = 0;   // nodes whose h the parent floor raised (per instance; CSV pathmaxRaised)
 inline bool  g_use_dr4       = false;  // RCPSP_DR4=1: DR4 (Liu non-delaying rule) reduced to the CBS partial schedule == the active-schedule / left-shift dominance (drives the same verified-sound left_shift_prunable() prune). Recorded as useDR4; prunes counted in leftshiftPruned.
 inline bool  g_use_bidir     = false;  // RCPSP_BIDIR=1: new states also kill dominated stored states
 inline bool  g_use_hybrid    = false;  // RCPSP_HYBRID=1: prio falls back to earliest conflict when best score < 1
@@ -515,6 +570,13 @@ inline int  g_tt2_singleres_maxsize = 45;    // RCPSP_TT2_SINGLERES_MAXSIZE: ski
 // peak memory (and skip expanding provably-suboptimal nodes). Reuses g_incumbent /
 // g_ub_pruned (CBS and TT2 never run in the same process).
 inline bool g_tt2_ub = false;                // RCPSP_TT2_UB=1: enable SGS-seeded incumbent pruning on TT2
+// RCPSP_TT2_UB_GE=1: prune f >= incumbent instead of f > incumbent. The incumbent is a REAL schedule, so a
+// node with f = U can only lead to a solution of length U, which we already hold - dropping it loses nothing.
+// What it buys is the STOP: OPEN now empties exactly when no schedule shorter than U exists, which PROVES U
+// optimal. With f > U the f = C* plateau still has to be expanded to reach a goal, which is where A* dies on
+// instances whose bound already sits at the optimum. Needs RCPSP_TT2_UB=1 and an honest primal (SGS/root seed).
+inline bool g_tt2_ub_ge = false;             // RCPSP_TT2_UB_GE=1: >= pruning + "OPEN exhausted => incumbent optimal"
+inline bool g_tt2_ub_closed = false;         // set when the search ended by exhausting OPEN under >= pruning
 
 // ── TT2 port of the hierarchical RS-relaxation LB (RCPSP_TT2_HIERRS=1) ────────
 // Same bound as the CBS hierRSBound: residual = unfinished activities, releases from

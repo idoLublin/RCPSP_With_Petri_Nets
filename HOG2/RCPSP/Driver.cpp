@@ -685,7 +685,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
       << "," << rootb::info().lbSec << "," << (rootb::info().budgetHit ? 1 : 0) << "," << rootb::info().seed << "," << rootb::info().seedSec
       << "," << (rootb::info().closed ? 1 : 0)   // RootBounds.h
       << "," << (rootb::ProbeOn() ? 1 : 0) << "," << rootb::info().probeSeedIn << "," << rootb::info().probeBest << "," << rootb::info().probeNodes
-      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec;
+      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << (tt2nb::On() ? 1 : 0) << "," << tt2nb::st().calls << "," << tt2nb::st().raised << "," << tt2nb::st().raiseSum << "," << tt2nb::st().tt0Fail << "," << tt2nb::st().propFail << "," << tt2nb::st().sec << "," << tt2nb::st().winPruned << "," << (tt2nb::WinOn() ? 1 : 0) << "," << (tt2nb::WinLsOn() ? 1 : 0) << "," << (tt2nb::SerOn() ? 1 : 0) << "," << tt2nb::st().serFail << "," << (g_tt2_ub_ge ? 1 : 0) << "," << (g_tt2_ub_closed ? 1 : 0) << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << "," << (tt2TbSpec().empty() ? "-" : tt2TbSpec());
 }
  int solveRCPSP_TT2(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
     std::cout << "started solving TT2: " << group<<":"<<exam << std::endl;
@@ -731,7 +731,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
     g_prof_t0 = std::chrono::steady_clock::now();
     // TT2 UB (RCPSP_TT2_UB=1): seed the incumbent from a REAL feasible primal (serial
     // SGS, not the datasheet-optima cheat). Off => incumbent stays MAX => no pruning.
-    g_ub_pruned = 0; g_incumbent = std::numeric_limits<short>::max();
+    g_ub_pruned = 0; g_incumbent = std::numeric_limits<short>::max(); g_tt2_ub_closed = false;
     if (g_tt2_ub) {
         int sgs = serialSGS_makespan();
         if (sgs > 0 && sgs < (int)std::numeric_limits<short>::max()) g_incumbent = (short)sgs;
@@ -750,9 +750,13 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
         std::vector<int> trivEst;
         int trivMakespan = 0;
         rootb::reset();
+        tt2nb::reset();
         bool closedByRootBounds = false;
         bool trivOK = tryTrivialRootSchedule_TT2(trivEst, trivMakespan);
-        if (!trivOK && (rootb::DlbOn() || rootb::SeedOn() || rootb::ProbeOn()) && rootb::computeRootBounds()) {
+        const bool rootRan = !trivOK && (rootb::DlbOn() || rootb::SeedOn() || rootb::ProbeOn()) && rootb::computeRootBounds();
+        if (g_tt2_ub && rootRan && rootb::info().seed > 0 && rootb::info().seed < (int)g_incumbent)
+            g_incumbent = (short)rootb::info().seed;          // honest primal (SGS+probe+LNS), no datasheet
+        if (rootRan) {
             // RCPSP_ROOT_SEED schedule meets the root lower bound => optimal without A*
             closedByRootBounds = true; trivOK = true;
             trivMakespan = rootb::info().seed;
@@ -878,6 +882,17 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
     long peakMemKB = getPeakMemoryKB(); // ADD THIS
 
     int makespan = 0;
+    // RCPSP_TT2_UB_GE: an empty path can now mean SUCCESS - OPEN ran out with every f >= U pruned, which
+    // proves no schedule shorter than the incumbent exists. Tell it apart from a timeout by the same deadline
+    // TemplateAStar uses: a timed-out run is always past it, an exhausted one is not.
+    g_tt2_ub_closed = path.empty() && g_tt2_ub && g_tt2_ub_ge
+                      && g_incumbent < std::numeric_limits<short>::max()
+                      && std::chrono::steady_clock::now() <= timeout;
+    if (g_tt2_ub_closed) {
+        makespan = (int)g_incumbent;
+        std::cout << "TT2 UB-closed: OPEN exhausted with every f >= " << makespan
+                  << " pruned => the incumbent is optimal" << std::endl;
+    }
 
     if (!path.empty()) {
         std::cout << "Path found!" << std::endl;
@@ -960,7 +975,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
 
         std::cout << "\nFinal makespan: " << makespan << std::endl;
     }
-     else {
+     else if (!g_tt2_ub_closed) {
         std::cout << "Path not found or timeout occurred.\n";
     }
 
@@ -992,7 +1007,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
 
     std::ofstream file(filename, std::ios::app);
     file << group << "," << exam << "," << (elapsed.count() + rootb::seconds()) << ","   // + RootBounds.h time
-         << (!path.empty() ? "True" : "False") << ","
+         << ((!path.empty() || g_tt2_ub_closed) ? "True" : "False") << ","
          << makespan << ","
          << astar.GetNodesExpanded() << ","
          << astar.GetNodesTouched() << ","
@@ -1718,6 +1733,11 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     g_leftshift_pruned = 0;
     g_lazy_hcost_evals = 0;
     g_lazy_reinserts = 0;
+    g_cbs_pathmax_raised = 0;
+    g_cbs_tb_seq = 0;
+    g_cbs_restart_stage = 0;
+    rootb::propCalls() = 0; rootb::propRounds() = 0;
+    g_cbs_adapt_singular = 0;
     g_cbs_theta_better = 0;   // Θ-tree "floor beat HCBS" counter is per-instance
     g_cbs_subset_better = g_cbs_subset_solves = g_cbs_subset_expands_total = 0;   // subset LB telemetry, per-instance
     g_cbs_subset_capped = g_cbs_subset_maxexpands = g_cbs_subset_cache_hits = 0;
@@ -1756,6 +1776,18 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     RCPSPState_CBS<N> first;
     RCPSPState_CBS<N> last = first;
     last.start_times[g_sink_id]=0;
+    // RCPSP_CBS_ROOTES: tighten the root with the deadline propagation (see CpCBS.h)
+    {
+        const int rs = cpcbs::shiftRootToPropagatedEs(first.start_times);
+        if (rs < 0) {
+            cpcbs::st().closedAtRoot = true;          // no schedule beats the incumbent => it is optimal
+            std::cout << "CBS root refuted at incumbent-1 => incumbent " << (int)g_incumbent << " is optimal" << std::endl;
+        } else if (rs > 0) {
+            (void)first.compute_h_and_RVS();   // recompute conflicts + h for the shifted schedule
+            std::cout << "CBS root shifted to propagated earliest starts: " << cpcbs::st().rootEsMoved
+                      << " activities, root makespan " << (int)first.start_times[g_sink_id] << std::endl;
+        }
+    }
     last.resourceType = -1;
     last.rvs_activities_pool.clear();
 
@@ -1780,6 +1812,38 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
     if (rootb::seconds() > 0) astar_timeout_seconds = std::max<decltype(cbsSavedTO)>(1, cbsSavedTO - (decltype(cbsSavedTO))std::ceil(rootb::seconds()));
     if (cpcbs::st().closedAtRoot) {
         // seed <= root LB: optimal without search; the UB-exhaust block below reports the incumbent
+    } else if (g_use_lazy && !g_cbs_restart_stages.empty() && !first.rvs_activities_pool.empty()) {
+        // RCPSP_CBS_RESTART (Globals.h): complete A* runs in sequence, each with its own plateau order / threshold.
+        const std::string savedSpec = g_cbs_tb_spec; const float savedT = g_hybrid_threshold;
+        const long long budget = astar_timeout_seconds;
+        const auto t0 = std::chrono::steady_clock::now();
+        const size_t nStages = g_cbs_restart_stages.size();
+        for (size_t si = 0; si < nStages; ++si) {
+            const long long used = (long long)std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count();
+            const long long remaining = budget - used;
+            if (remaining <= 0) break;
+            if (si > 0) {                       // throw the previous stage's search state away
+                get_cbs_dominance_table<N>().clear();
+                reset_mda_cache<N>();
+                g_cbs_tb_seq = 0;
+            }
+            const CbsRestartStage& st = g_cbs_restart_stages[si];
+            g_cbs_tb_spec = st.spec; g_hybrid_threshold = st.T;
+            const long long stageBudget = (si + 1 < nStages) ? std::min<long long>(st.sec, remaining) : remaining;
+            astar_timeout_seconds = stageBudget;
+            g_cbs_restart_stage = (int)si + 1;
+            RCPSP_CBS<N> envS;
+            RCPSPState_CBS<N> rootS;            // a fresh root, evaluated under this stage's settings
+            const auto ts = std::chrono::steady_clock::now();
+            LazyAStarCBS<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> lazyAstar;
+            lazyAstar.GetPath(&envS, rootS, last, path);
+            nExpanded += (long)lazyAstar.GetNodesExpanded();
+            nTouched  += (long)lazyAstar.GetNodesTouched();
+            if (!path.empty()) break;           // solved: optimal
+            const double stageSec = std::chrono::duration<double>(std::chrono::steady_clock::now() - ts).count();
+            if (stageSec < (double)stageBudget - 0.5) break;   // OPEN exhausted, not a timeout: nothing to restart
+        }
+        g_cbs_tb_spec = savedSpec; g_hybrid_threshold = savedT; astar_timeout_seconds = budget;
     } else if (g_use_lazy) {
         LazyAStarCBS<RCPSPState_CBS<N>, int, RCPSP_CBS<N>> lazyAstar;
         lazyAstar.GetPath(&as1, first, last, path);
@@ -2142,7 +2206,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
          << "," << cpcbs::st().ubSource << "," << (rootb::DlbOn() ? 1 : 0) << "," << (rootb::SeedOn() ? 1 : 0) << "," << (rootb::ProbeOn() ? 1 : 0)
          << "," << std::max(rootb::info().lb, rootb::info().lbPlain) << "," << rootb::info().seed << "," << rootb::seconds() << "," << (cpcbs::st().closedAtRoot ? 1 : 0)
          << "," << (cpcbs::TTOn() ? 1 : 0) << "," << (cpcbs::NGOn() ? 1 : 0) << "," << cpcbs::TTSteps() << "," << cpcbs::st().ttCalls << "," << cpcbs::st().ttRaised
-         << "," << cpcbs::st().ttPrunedAtExpand << "," << cpcbs::st().ttSec << "," << cpcbs::st().ngLearned << "," << cpcbs::st().ngHits << "," << cpcbs::ctx().ng.size() << "," << (cpcbs::FloorOn() ? 1 : 0) << "," << (cpcbs::TTFull() ? 1 : 0) << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << "\n";   // CpCBS.h
+         << "," << cpcbs::st().ttPrunedAtExpand << "," << cpcbs::st().ttSec << "," << cpcbs::st().ngLearned << "," << cpcbs::st().ngHits << "," << cpcbs::ctx().ng.size() << "," << (cpcbs::FloorOn() ? 1 : 0) << "," << (cpcbs::TTFull() ? 1 : 0) << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << "," << (cpcbs::LsPropOn() ? 1 : 0) << "," << cpcbs::st().lsCalls << "," << cpcbs::st().lsFail << "," << cpcbs::st().lsTighter << "," << cpcbs::st().lsScoreDiff << "," << cpcbs::st().lsPickDiff << "," << cpcbs::st().lsSec << "," << (cpcbs::RootEsOn() ? 1 : 0) << "," << cpcbs::st().rootEsMoved << "," << (cpcbs::st().rootEsRefuted ? 1 : 0) << "," << (cpcbs::WinOn() ? 1 : 0) << "," << cpcbs::st().winChecks << "," << cpcbs::st().winPruned << "," << g_cbs_tb << "," << g_lb_raise_exp << "," << (g_cbs_pathmax ? 1 : 0) << "," << g_cbs_pathmax_raised << "," << (g_cbs_gate_depth ? 1 : 0) << "," << g_cbs_sel << "," << (cpcbs::MdaRefOn() ? 1 : 0) << "," << cpcbs::st().mdaRef << "," << cpcbs::st().mdaRefChecks << "," << rootb::PropIters() << "," << rootb::propCalls() << "," << rootb::propRounds() << "," << (cpcbs::ErOn() ? 1 : 0) << "," << cpcbs::ErMaxRS() << "," << cpcbs::st().erRefuted << "," << g_cbs_adapt_branch << "," << g_cbs_adapt_singular << "," << (g_cbs_pathmax_insert ? 1 : 0) << "," << (g_cbs_tb_spec.empty() ? "-" : g_cbs_tb_spec) << "," << (g_cbs_restart.empty() ? std::string("-") : [] { std::string r = g_cbs_restart; for (char& ch : r) if (ch == ',') ch = ';'; return r; }()) << "," << g_cbs_restart_stage << "\n";   // CpCBS.h
     if (!allcorrect) {
         std::cout <<"Error: incorrect results" <<std::endl;
         // exit(0); // disabled: log wrong answers and continue benchmark
@@ -2368,6 +2432,11 @@ static std::string cbsFeatureTag() {
     auto add = [&](const std::string& s){ if(!t.empty()) t += "-"; t += s; };
     if (setting.use_dr5) add(g_dom_rule==DOM_BP?"bp":g_dom_rule==DOM_DR5?"dr5":g_dom_rule==DOM_DR5S?"dr5s":"both");
     if (g_use_hybrid)    add("hyb");
+    if (g_use_hybrid && std::lround(g_hybrid_threshold * 10) != 5) {   // hybrid threshold, tenths: t03, t11
+        const long v = std::lround(g_hybrid_threshold * 10);
+        add(std::string("t") + (v < 10 ? "0" : "") + std::to_string(v));
+    }
+    if (g_use_dr4)       add("dr4");
     if (g_use_ub)        add("ub");
     if (g_use_lazy)      add("lazy");
     if (g_dom_skyline)   add("sky");
@@ -2376,13 +2445,31 @@ static std::string cbsFeatureTag() {
     if (g_use_lean)      add("lean");
     if (g_use_inline)    add("inl");
     if (g_use_setdelay)  add("setdelay");
+    if (g_cbs_tb)        add("tb" + std::to_string(g_cbs_tb));
+    if (!g_cbs_tb_spec.empty()) add("tbs" + g_cbs_tb_spec);
+    if (!g_cbs_restart_stages.empty()) add("rst" + std::to_string(g_cbs_restart_stages.size()));
+    if (g_cbs_pathmax)   add("pmax");
+    if (g_cbs_pathmax_insert) add("pmaxins");
+    if (g_cbs_gate_depth) add("gatedepth");
+    if (g_cbs_sel)       add("sel" + std::to_string(g_cbs_sel));
+    if (cpcbs::MdaRefOn()) add("mdaref");
+    if (cpcbs::ErOn())   add("er");
+    if (g_cbs_adapt_branch) add("adapt" + std::to_string(g_cbs_adapt_branch));
     if (g_use_warmstart) add("warmstart");
     if (g_use_nmd)       add("nmd");
     if (rootb::DlbOn())  add("rootdlb");
     if (rootb::SeedOn()) add("seedub");
     if (rootb::ProbeOn()) add("probe");
     if (rootb::PairOn()) add("pair");
+    if (tt2nb::On())     add("nodett");
+    if (tt2nb::WinOn())  add("win");
+    if (tt2nb::WinLsOn()) add("winls");
+    if (tt2nb::SerOn())  add("ser");
+    if (g_tt2_ub_ge)     add("ubge");
     if (rootb::LnsOn())  add(rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
+    if (cpcbs::LsPropOn()) add("lsprop");
+    if (cpcbs::RootEsOn()) add("rootes");
+    if (cpcbs::WinOn())    add("win");
     if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY")) add("only");
     if (cpcbs::TTOn())   add("tt");
     if (cpcbs::NGOn())   add("ng");
@@ -2398,6 +2485,7 @@ static std::string tt2FeatureTag() {
     if (g_tt2_dr4)       add("dr4");
     if (g_tt2_batch)     add("batch");
     if (g_tt2_sym)       add("sym");
+    if (!tt2TbSpec().empty()) add("tbs" + tt2TbSpec());
     if (g_tt2_gendesc)   add("gendesc");
     if (g_tt2_theta)     add("theta");
     if (g_tt2_prof)      add("prof");
@@ -2405,7 +2493,15 @@ static std::string tt2FeatureTag() {
     if (rootb::SeedOn()) add("seedub");
     if (rootb::ProbeOn()) add("probe");
     if (rootb::PairOn()) add("pair");
+    if (tt2nb::On())     add("nodett");
+    if (tt2nb::WinOn())  add("win");
+    if (tt2nb::WinLsOn()) add("winls");
+    if (tt2nb::SerOn())  add("ser");
+    if (g_tt2_ub_ge)     add("ubge");
     if (rootb::LnsOn())  add(rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
+    if (cpcbs::LsPropOn()) add("lsprop");
+    if (cpcbs::RootEsOn()) add("rootes");
+    if (cpcbs::WinOn())    add("win");
     if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY")) add("only");
     return t;
 }
@@ -2426,12 +2522,14 @@ static std::string biFeatureTag() {
     if (m == "0" && env("RCPSP_BI_DR4", "0") == "0") t += "-nodr";
     if (env("RCPSP_BI_ALT", "0") != "0")        t += "-alt";
     if (env("RCPSP_BI_ACTIVETB", "0") != "0")   t += "-activetb";
+    if (!tt2TbSpec().empty())                   t += "-tbs" + tt2TbSpec();
     if (env("RCPSP_BI_HFRESH", "1") != "0")     t += "-hfresh";
     if (env("RCPSP_BI_DZFIRST", "1") != "0")    t += "-dzfirst";
     if (rootb::DlbOn())                         t += "-rootdlb";
     if (rootb::SeedOn())                        t += "-seedub";
     if (rootb::ProbeOn())                       t += "-probe";
     if (rootb::PairOn())                        t += "-pair";
+    if (tt2nb::On())                            t += "-nodett";
     if (rootb::LnsOn())                         t += std::string("-") + (rootb::LnsMode() == 1 ? "lnscp" : rootb::LnsMode() == 2 ? "lnssgs" : "lns");
     if (std::getenv("RCPSP_ONLY") && *std::getenv("RCPSP_ONLY"))                        t += "-only";
     if (env("RCPSP_BI_MINF_HEAP", "1") == "0")  t += "-minfscan";
@@ -2570,7 +2668,7 @@ void runCrashDiagnostic() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage"
          << std::endl;
     file.close();
 
@@ -2629,7 +2727,7 @@ void runWrongAnswerDebug() {
     if (!file.is_open()) { std::cerr << "Error opening file!" << std::endl; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage"
          << std::endl;
     file.close();
 
@@ -2674,7 +2772,7 @@ void runNonMinimalDelayTest() {
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage\n"; }
 
     setting.use_non_minimal_delay = true;
 
@@ -2882,7 +2980,9 @@ void traceStarLoss_impl(int group, int exam, const std::string& ptype) {
         }
         for (int k : cons) dfs(children[k], depth+1);
     };
-    setting.use_non_minimal_delay = true;   // trace the non-minimal generator
+    // trace the non-minimal generator by default; RCPSP_NMD=0 traces the minimal-delay one (control)
+    { const char* e = std::getenv("RCPSP_NMD"); setting.use_non_minimal_delay = !(e && std::atoi(e) == 0); }
+    std::cout << "startrace generator: " << (setting.use_non_minimal_delay ? "NON-MINIMAL" : "MINIMAL") << " delay\n";
     dfs(root, 0);
     std::cout << "consistent nodes visited=" << g_nodes
               << "  consistent conflict-free leaves=" << g_leaves
@@ -2904,7 +3004,7 @@ void runSweep(const std::string& ptype, int cfg, int startG, int endG, int exam)
     { std::ofstream h(f);
       h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
         << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
+        << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage\n"; }
     for (int g = startG; g <= endG; g++) {
         std::cout << "\n=== sweep cfg" << cfg << " group " << g << " exam " << exam << " ===\n";
         solveRCPSP_CBS(g, exam, f, ptype);
@@ -4739,6 +4839,7 @@ int solveRCPSP_TT2_HBAE(int group, int exam, const std::string& ptype = "j30") {
           g_hb_mk=g_hb_ub=tm; g_hb_pathLen=0; g_hb_proven=true; g_hb_trivial=true;
           g_hb_time=0.0; g_hb_meetDepth=-1; g_hb_stop="trivial"; g_hb_meetAt="none";
           return tm; } }
+    tt2nb::reset();                 // per-instance counters + instance cache (HBAE alternates nets)
     // RCPSP_ROOT_DLB / RCPSP_ROOT_SEED (RootBounds.h), computed on the forward instance before the nets are swapped
     if (rootb::computeRootBounds()) {
         const int tm = rootb::info().seed;
@@ -5382,6 +5483,7 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_TT2_SINGLERES_VIACBS"))   { if (std::atoi(e)!=0) g_subsolver = 1; }  // legacy alias
     if (const char* e = std::getenv("RCPSP_TT2_SINGLERES_VIATT2"))   { if (std::atoi(e)!=0) g_subsolver = 2; }  // legacy alias
     if (const char* e = std::getenv("RCPSP_TT2_UB"))                g_tt2_ub                = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_UB_GE"))             g_tt2_ub_ge             = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_HIERRS"))            g_tt2_hierrs            = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_HIERRS_EXPAND"))     g_tt2_hierrs_expand     = std::atol(e);
     if (const char* e = std::getenv("RCPSP_HIERRS_TARGET"))         g_hierrs_target_override = std::atof(e);
@@ -5397,6 +5499,37 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_WARMSTART_REORDER"))  g_warmstart_reorder = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_WARMSTART_RS"))       g_warmstart_rs      = std::atof(e);
     if (const char* e = std::getenv("RCPSP_SETDELAY"))           g_use_setdelay      = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_TB"))             g_cbs_tb            = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_TBSPEC"))         g_cbs_tb_spec       = e;
+    if (const char* e = std::getenv("RCPSP_CBS_RESTART")) {      // "<sec>/<TBSPEC>/<T>,..." (see Globals.h)
+        g_cbs_restart = e; g_cbs_restart_stages.clear();
+        std::stringstream ss(g_cbs_restart); std::string tok;
+        while (std::getline(ss, tok, ',')) {
+            if (tok.empty()) continue;
+            const size_t a = tok.find('/'), b = (a == std::string::npos) ? a : tok.find('/', a + 1);
+            if (a == std::string::npos || b == std::string::npos) {
+                std::cerr << "RCPSP_CBS_RESTART: bad stage '" << tok << "' (want <sec>/<TBSPEC>/<T>)" << std::endl; std::exit(1);
+            }
+            CbsRestartStage st; st.sec = std::atol(tok.substr(0, a).c_str());
+            st.spec = tok.substr(a + 1, b - a - 1); if (st.spec == "-") st.spec.clear();
+            st.T = (float)std::atof(tok.substr(b + 1).c_str());
+            g_cbs_restart_stages.push_back(st);
+        }
+        for (size_t i = 0; i + 1 < g_cbs_restart_stages.size(); ++i)
+            if (g_cbs_restart_stages[i].sec < 1) { std::cerr << "RCPSP_CBS_RESTART: stage " << i + 1 << " needs >= 1 s" << std::endl; std::exit(1); }
+        if (!g_cbs_restart_stages.empty()) {
+            std::cout << "CBS restart sequence:";
+            for (size_t i = 0; i < g_cbs_restart_stages.size(); ++i)
+                std::cout << "  [" << i + 1 << "] " << (i + 1 < g_cbs_restart_stages.size() ? std::to_string(g_cbs_restart_stages[i].sec) + " s" : std::string("rest"))
+                          << " order=" << (g_cbs_restart_stages[i].spec.empty() ? "-" : g_cbs_restart_stages[i].spec) << " T=" << g_cbs_restart_stages[i].T;
+            std::cout << std::endl;
+        }
+    }
+    if (const char* e = std::getenv("RCPSP_CBS_PATHMAX"))        g_cbs_pathmax       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_PATHMAX_INSERT")) g_cbs_pathmax_insert = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_GATE_DEPTH"))     g_cbs_gate_depth    = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_CBS_SEL"))            g_cbs_sel           = std::atoi(e);
+    if (const char* e = std::getenv("RCPSP_CBS_ADAPT_BRANCH"))   g_cbs_adapt_branch  = std::atoi(e);
     if (const char* e = std::getenv("RCPSP_DR4"))                g_use_dr4           = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_NMD"))                g_use_nmd           = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_ORDERSWAP"))          g_orderswap         = std::atoi(e) != 0;
@@ -5501,7 +5634,7 @@ int main(int argc, char* argv[]) {
             std::string f = getNextFilename("new_results", "output_dumpdom_", ".csv");
             { std::ofstream h(f); h << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
                  << "finished,expandNumber,generatedNumber,depth,maxMem,useFirst,useConflictPrioritization,"
-                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
+                 << "useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage\n"; }
             solveRCPSP_CBS(std::atoi(argv[3]), std::atoi(argv[4]), f, argv[2]);
             std::cout << "prune pairs -> " << g_dom_dump_path << std::endl;
         } else if (arg1 == "verifydom") {
@@ -5563,7 +5696,7 @@ int main(int argc, char* argv[]) {
                 const auto& ri = rootb::info();
                 std::cout << "ROOTB," << sz << "," << g << "," << e << "," << ri.lbPlain << "," << ri.lb << "," << ri.seed << ","
                           << ri.lbSec << "," << ri.seedSec << "," << (ri.budgetHit ? 1 : 0) << "," << (ri.closed ? 1 : 0) << ","
-                          << ri.probeSeedIn << "," << ri.probeBest << "," << ri.probeNodes << "," << ri.probeExhausted << "," << ri.probeSec
+                          << ri.probeSeedIn << "," << ri.probeBest << "," << ri.probeNodes << "," << ri.probeExhausted << "," << ri.probeSec << "," << (tt2nb::On() ? 1 : 0) << "," << tt2nb::st().calls << "," << tt2nb::st().raised << "," << tt2nb::st().raiseSum << "," << tt2nb::st().tt0Fail << "," << tt2nb::st().propFail << "," << tt2nb::st().sec << "," << tt2nb::st().winPruned << "," << (tt2nb::WinOn() ? 1 : 0) << "," << (tt2nb::WinLsOn() ? 1 : 0) << "," << (tt2nb::SerOn() ? 1 : 0) << "," << tt2nb::st().serFail << "," << (g_tt2_ub_ge ? 1 : 0) << "," << (g_tt2_ub_closed ? 1 : 0)
                           << "," << ri.lnsSeedIn << "," << ri.lnsBest << "," << ri.lnsIters << "," << ri.lnsImpCp << "," << ri.lnsImpSgs << "," << ri.lnsSec << std::endl;
             }
         } else if (arg1 == "tt2consist") {
@@ -5815,7 +5948,7 @@ void runSingleConfig(const std::string& problemType, int configNum) {
     if (!file.is_open()) { std::cerr << "Cannot open " << filename << "\n"; return; }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage"
          << std::endl;
     file.close();
 
@@ -5862,7 +5995,7 @@ void runSingleConfigResume(const std::string& problemType, int configNum,
       hdr << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
           << "finished,expandNumber,generatedNumber,depth,maxMem,"
           << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,"
-          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec\n"; }
+          << "useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage\n"; }
 
     std::cout << "=== " << CFG_NAMES[configNum] << " | " << problemType
               << " | resume from (" << startGroup << "," << startExam << ") ===" << std::endl;
@@ -5886,7 +6019,7 @@ void runBenchmark(const std::string& problemType) {
     }
     file << "group,exam,time,makespan,correct,setType,model,optimalOrLB,UB,NC,RF,RS,"
          << "finished,expandNumber,generatedNumber,depth,maxMem,"
-         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+         << "useFirst,useConflictPrioritization,useHeuristic,useMDASets,useMDACache,useStrongConstraints,useMDABAB,cardinalityRatio,useDR5,domRule,useUB,useHybrid,hybridT,useLeftshift,useBidir,ubPruned,leftshiftPruned,domPruned,domChecks,domStored,useLazy,useSkyline,lazyEvals,lazyReinserts,useNonMinimalDelay,useAncestorBranching,useDominanceSib,usePairDecomp,useHGreed,useLean,useInline,domCap,timeoutS,useWarmStart,warmStartK,warmStartBudgetS,warmStartDir,useSetDelay,warmStartRS,warmstartEngaged,warmstartInflMk,rootF,provenLB,warmstartSec,useDR4,useThetaBound,thetaBoundBetter,useSubsetLB,subsetBetter,subsetSolves,subsetExpandsTotal,subsetCapped,subsetMaxExpands,subsetCacheHits,useMdaRecursive,imp2Fires,imp2MaxDepth,useNmdPrecedence,orderSwapCand,useCbsMinCut,minCutBetter,minCutCalls,useRSAdapt,rsThreshold,instanceRS,useSingleRes,singleResBetter,singleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,minCutTimeSec,useHierRS,hierRsBetter,hierRsCalls,hierRsTimeSec,hierRsCacheHits,subsolver,shadowProbes,shadowHits,cbsUbSource,rootDlbOn,rootSeedOn,rootProbeOn,rootLB,seedUB,rootSec,closedAtRoot,cbsTT,cbsNG,ttSteps,ttCalls,ttRaised,ttPrunedAtExpand,ttSec,ngLearned,ngHits,ngStored,cbsRootFloor,ttFull,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,lsPropOn,lsCalls,lsFail,lsTighter,lsScoreDiff,lsPickDiff,lsSec,cbsRootEs,rootEsMoved,rootEsRefuted,cbsWin,winChecks,winPruned,cbsTB,lbRaiseExp,cbsPathmax,pathmaxRaised,cbsGateDepth,cbsSel,cbsMdaRef,mdaRefRaised,mdaRefChecks,propIters,propCalls,propRounds,cbsTtEr,cbsTtErMaxRS,erRefuted,cbsAdaptBranch,adaptSingular,cbsPathmaxInsert,cbsTbSpec,cbsRestart,restartStage"
          << std::endl;
     file.close();
 
@@ -5952,7 +6085,7 @@ void runBenchmarkTT2(const std::string& problemType) {
         return;
     }
     // Header matches what solveRCPSP_TT2 writes per row
-    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits,direction,useTT2Prof,profAstarSec,profSuccSec,profSuccCalls,profAvailSec,profGenSec,profDR5Sec,profHashSec,profHashCalls,profHeurCPSec,profHeurResSec,hCallsAll,hKnownHits,hDeltaZeroHits,childrenRaw,childrenKept,domBuckets,domComparisons,openAtEnd,itemsAtEnd,uniqueExpanded,maxFExpanded,fAt1s,fAt10s,fAt60s,fAt120s,fAt240s,timedOut,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,waitModel,waitEdges,waitCut,dr5WaitExempt,waitPass,waitJump,waitJumped,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+    file << "group,exam,time,solved,makespan,expandNumber,generatedNumber,depth,model,problemType,maxMem,LB,useTT2DR5,useTT2Batch,tt2BatchCap,domPruned,domThinned,domChecks,domInserts,domMaxBucket,useTT2Sym,symPruned,useTT2Gendesc,useTT2SymTB,timeoutS,trivialAtRoot,useThetaBound,thetaBoundBetter,useTT2DR4,dr4Pruned,useTT2ImmSel,immSelFired,useTT2RSAdapt,tt2RsThreshold,instanceRS,useTT2SingleRes,tt2SingleResBetter,tt2SingleResCalls,heuristicLowRS,heuristicHighRS,rootH,heurTimeSec,heurCalls,singleResTimeSec,subsolver,shadowProbes,shadowHits,useTT2UB,ubPruned,useTT2HierRS,tt2HierRsBetter,tt2HierRsCalls,tt2HierRsTimeSec,tt2HierRsCacheHits,direction,useTT2Prof,profAstarSec,profSuccSec,profSuccCalls,profAvailSec,profGenSec,profDR5Sec,profHashSec,profHashCalls,profHeurCPSec,profHeurResSec,hCallsAll,hKnownHits,hDeltaZeroHits,childrenRaw,childrenKept,domBuckets,domComparisons,openAtEnd,itemsAtEnd,uniqueExpanded,maxFExpanded,fAt1s,fAt10s,fAt60s,fAt120s,fAt240s,timedOut,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,waitModel,waitEdges,waitCut,dr5WaitExempt,waitPass,waitJump,waitJumped,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,tt2NodeTT,nodeTtCalls,nodeTtRaised,nodeTtRaiseSum,nodeTtTt0Fail,nodeTtPropFail,nodeTtSec,nodeTtWinPruned,tt2Win,tt2WinLs,tt2Ser,nodeTtSerFail,tt2UbGe,tt2UbClosed,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,tt2TbSpec"
          << std::endl;
     file.close();
 
@@ -6120,7 +6253,7 @@ void runBenchmarkTT2HBAE(const std::string& problemType) {
       if (!f.is_open()) { std::cerr << "Error opening file: " << filename << std::endl; return; }
       f << "group,exam,time,solved,makespan,ub,proven,stopReason,expandNumber,uniqueExpanded,"
            "touched,necessary,reopened,solUpdates,meetDepth,meetAt,pathLen,trivialAtRoot,"
-           "model,problemType,timeoutS,instanceRS,useTT2DR5,dr4,batch,prio,alt,tiebreak,meetNorm,nip,noub,fbound,drainCert,expandedF,expandedB,timeFSec,timeBSec,openFEnd,openBEnd,itemsFEnd,itemsBEnd,meetIdxF,meetIdxB,minFFEnd,minFBEnd,minFF60s,minFB60s,minFF120s,minFB120s,minFF240s,minFB240s,expAtMaxBound,uAtMaxBound,peakRSSMB,dr5PrunedF,dr5PrunedB,dr5InsertsF,dr5InsertsB,dr4Pruned,useTT2Prof,heurTimeSec,heurCalls,profSuccSec,profAvailSec,profGenSec,profDR5Sec,profHeurCPSec,profHeurResSec,hDeltaZeroHits,childrenRaw,childrenKept,biHashSec,biHashCalls,meetHashSec,meetHashCalls,meetSide,meetGF,meetGB,meetTimeFrac,meetExp,firstMeetExp,firstU,meetHits,maxDepthF,maxDepthB,maxGF,maxGB,fBoundCalls,fBoundSec,minfHeap,bwdModel,bwdFullVerify,hfuse,strHash,bxPopSec,bxSuccSec,bxChildSec,bxHeurSec,bxAddSec,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,domMeet,meetGhost,dmUpdates,dmInserts,dmSkipped,dmThinned,dmJoinCmp,dmEntriesF,dmEntriesB,shiftMeet,dmShiftBest,stopRule,maxStop,waitModel,dr4Side,waitEdges,waitCut,waitPass,waitJump,waitJumped,waitMeetOnly,meetOnlySide,dr5WaitExemptF,dr5WaitExemptB,audit,auditStatus,auditHorizon,auditFwdExact,auditBwdExact,auditBothExact,auditCrossExp,auditMeetExp,auditMissed,auditBothDom,auditFwdMaxT,auditBwdMinT,auditFwdHoles,auditBwdHoles,activeTB,hFresh,fDropF,fDropB,fDropMax,dzFirst,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec"
+           "model,problemType,timeoutS,instanceRS,useTT2DR5,dr4,batch,prio,alt,tiebreak,meetNorm,nip,noub,fbound,drainCert,expandedF,expandedB,timeFSec,timeBSec,openFEnd,openBEnd,itemsFEnd,itemsBEnd,meetIdxF,meetIdxB,minFFEnd,minFBEnd,minFF60s,minFB60s,minFF120s,minFB120s,minFF240s,minFB240s,expAtMaxBound,uAtMaxBound,peakRSSMB,dr5PrunedF,dr5PrunedB,dr5InsertsF,dr5InsertsB,dr4Pruned,useTT2Prof,heurTimeSec,heurCalls,profSuccSec,profAvailSec,profGenSec,profDR5Sec,profHeurCPSec,profHeurResSec,hDeltaZeroHits,childrenRaw,childrenKept,biHashSec,biHashCalls,meetHashSec,meetHashCalls,meetSide,meetGF,meetGB,meetTimeFrac,meetExp,firstMeetExp,firstU,meetHits,maxDepthF,maxDepthB,maxGF,maxGB,fBoundCalls,fBoundSec,minfHeap,bwdModel,bwdFullVerify,hfuse,strHash,bxPopSec,bxSuccSec,bxChildSec,bxHeurSec,bxAddSec,cpFast,resFast,dr5Fast,dr5Sorted,genFast,dr5Mtf,domMeet,meetGhost,dmUpdates,dmInserts,dmSkipped,dmThinned,dmJoinCmp,dmEntriesF,dmEntriesB,shiftMeet,dmShiftBest,stopRule,maxStop,waitModel,dr4Side,waitEdges,waitCut,waitPass,waitJump,waitJumped,waitMeetOnly,meetOnlySide,dr5WaitExemptF,dr5WaitExemptB,audit,auditStatus,auditHorizon,auditFwdExact,auditBwdExact,auditBothExact,auditCrossExp,auditMeetExp,auditMissed,auditBothDom,auditFwdMaxT,auditBwdMinT,auditFwdHoles,auditBwdHoles,activeTB,hFresh,fDropF,fDropB,fDropMax,dzFirst,rootDlbOn,rootSeedOn,rootLBPlain,rootLB,rootLBSec,rootLBBudgetHit,seedUB,seedSec,closedAtRoot,rootProbeOn,probeSeedIn,probeBest,probeNodes,probeExhausted,probeSec,tt2NodeTT,nodeTtCalls,nodeTtRaised,nodeTtRaiseSum,nodeTtTt0Fail,nodeTtPropFail,nodeTtSec,nodeTtWinPruned,tt2Win,tt2WinLs,tt2Ser,nodeTtSerFail,tt2UbGe,tt2UbClosed,rootLnsOn,lnsSeedIn,lnsBest,lnsIters,lnsImpCp,lnsImpSgs,lnsSec,tt2TbSpec"
         << std::endl; }
     std::cout << std::endl << "=== TT2 HBAE | " << problemType << " ===" << std::endl;
     auto envi = [](const char* k, int dflt){ const char* e=std::getenv(k); return e?std::atoi(e):dflt; };
@@ -6185,7 +6318,7 @@ void runBenchmarkTT2HBAE(const std::string& problemType) {
       << "," << rootb::info().lbSec << "," << (rootb::info().budgetHit ? 1 : 0) << "," << rootb::info().seed << "," << rootb::info().seedSec
       << "," << (rootb::info().closed ? 1 : 0)
       << "," << (rootb::ProbeOn() ? 1 : 0) << "," << rootb::info().probeSeedIn << "," << rootb::info().probeBest << "," << rootb::info().probeNodes
-      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << std::endl;
+      << "," << rootb::info().probeExhausted << "," << rootb::info().probeSec << "," << (tt2nb::On() ? 1 : 0) << "," << tt2nb::st().calls << "," << tt2nb::st().raised << "," << tt2nb::st().raiseSum << "," << tt2nb::st().tt0Fail << "," << tt2nb::st().propFail << "," << tt2nb::st().sec << "," << tt2nb::st().winPruned << "," << (tt2nb::WinOn() ? 1 : 0) << "," << (tt2nb::WinLsOn() ? 1 : 0) << "," << (tt2nb::SerOn() ? 1 : 0) << "," << tt2nb::st().serFail << "," << (g_tt2_ub_ge ? 1 : 0) << "," << (g_tt2_ub_closed ? 1 : 0) << "," << rootb::LnsMode() << "," << rootb::info().lnsSeedIn << "," << rootb::info().lnsBest << "," << rootb::info().lnsIters << "," << rootb::info().lnsImpCp << "," << rootb::info().lnsImpSgs << "," << rootb::info().lnsSec << "," << (tt2TbSpec().empty() ? "-" : tt2TbSpec()) << std::endl;
             f.flush();
 
             const int refOpt = hbaeReferenceOptimum(i, j, problemType);

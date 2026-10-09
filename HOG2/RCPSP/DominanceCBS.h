@@ -142,6 +142,7 @@ public:
         std::vector<std::pair<short, short>> arcs_u;      // B&P condition (2); empty under weak
         short t_star = -1;                                // DR5
         std::vector<std::pair<short, short>> running;     // DR5: (activity, finish), sorted
+        std::vector<uint64_t> rel_u;                      // RCPSP_CBS_DELAY: open conditions over A_u (condition (2)), sorted
     };
 
     long checks = 0;      // states consulted
@@ -187,8 +188,9 @@ public:
         ++checks;
         if (state.t_first < 0) return false;   // no violation => nothing to compare
 
+        const bool relOn  = (g_cbs_delay >= 1 && g_cbs_delay <= 3);   // RCPSP_CBS_DELAY 1..3: only the B&P table compares conditions (4 "far" keeps no conditions)
         const bool useBP  = (g_dom_rule == DOM_BP  || g_dom_rule == DOM_BOTH);
-        const bool useDR5 = (g_dom_rule == DOM_DR5 || g_dom_rule == DOM_DR5S || g_dom_rule == DOM_BOTH);
+        const bool useDR5 = !relOn && (g_dom_rule == DOM_DR5 || g_dom_rule == DOM_DR5S || g_dom_rule == DOM_BOTH);
         const bool sound  = (g_dom_rule == DOM_DR5S || g_dom_rule == DOM_BOTH);  // DR5S vs plain DR5
         const short rvst  = state.t_first;
         const int n = (int)activities.size();
@@ -199,12 +201,16 @@ public:
         std::vector<std::pair<short, short>> arcs_u;
         std::vector<Entry>* bp_bucket = nullptr;
         bool bp_dup = false;
+        std::vector<uint64_t> rel_u;
         if (useBP) {
-            bp_build(state, activities, bp_key, Au, arcs_u);
+            bool irregular = false;
+            bp_build(state, activities, bp_key, Au, arcs_u, rel_u, irregular);
+            if (irregular) return false;   // RCPSP_CBS_DELAY: an open condition this rule cannot compare - neither pruned nor stored
             bp_bucket = &bp_buckets[bp_key];
             for (const Entry& e : *bp_bucket) {
                 if (e.start_times == state.start_times) { bp_dup = true; continue; }  // never self-dominate
                 if (e.arcs_u != arcs_u) continue;                   // (2)
+                if (e.rel_u != rel_u) continue;                     // (2) for remembered delays
                 bool all_no_later = true;                           // (3)
                 for (short a : Au)
                     if (e.start_times[a] > state.start_times[a]) { all_no_later = false; break; }
@@ -250,11 +256,11 @@ public:
         // records the retired state in `killed`, which stops its expansion and DOES
         // change the search.
         if (g_use_bidir || g_dom_skyline) {
-            const bool feed_kill = g_use_bidir;
+            const bool feed_kill = g_use_bidir && !relOn;   // the kill set marks schedules, not nodes
             if (bp_bucket) {
                 for (size_t k = 0; k < bp_bucket->size(); ) {
                     Entry& e = (*bp_bucket)[k];
-                    bool dominated = (e.start_times != state.start_times) && (e.arcs_u == arcs_u);
+                    bool dominated = (e.start_times != state.start_times) && (e.arcs_u == arcs_u) && (e.rel_u == rel_u);
                     if (dominated)
                         for (short a : Au)
                             if (state.start_times[a] > e.start_times[a]) { dominated = false; break; }
@@ -289,6 +295,7 @@ public:
         // ── Not dominated: store into each active table (dup-skip, capped) ──
         if (bp_bucket && !bp_dup && bp_count < g_dom_store_cap) {
             bp_bucket->push_back(Entry{state.start_times, std::move(arcs_u), -1, {}});
+            if (!rel_u.empty()) bp_bucket->back().rel_u = std::move(rel_u);
             ++bp_count;
         }
         if (d_bucket && !d_dup && dr5_count < g_dom_store_cap) {
@@ -310,10 +317,11 @@ private:
     template<class State, class Acts>
     static void bp_build(const State& state, const Acts& activities,
                          CBSCutsetKey<N>& key, std::vector<short>& Au,
-                         std::vector<std::pair<short, short>>& arcs_u) {
+                         std::vector<std::pair<short, short>>& arcs_u,
+                         std::vector<uint64_t>& rel_u, bool& irregular) {
         const short rvst = state.t_first;
         const int n = (int)activities.size();
-        key.rvst = rvst;
+        key.rvst = g_dom_bp_setkey ? (short)-1 : rvst;   // RCPSP_DOM_BP_SETKEY: the scheduled set alone, as in the paper
         Au.reserve(n);
         for (int i = 0; i < n; i++) {
             if (state.start_times[i] + activities[i].duration <= rvst) key.set(i);   // A_s
@@ -327,6 +335,33 @@ private:
                     std::binary_search(Au.begin(), Au.end(), t))
                     arcs_u.emplace_back(f, t);
             std::sort(arcs_u.begin(), arcs_u.end());
+        }
+        // RCPSP_CBS_DELAY: which remembered delays (X, M) can still act in a descendant. For a member a of M:
+        //   a scheduled                                        -> settled (its witness is scheduled too);
+        //   a scheduled member of X finishes by a's start      -> settled (a keeps waiting for that one);
+        //   otherwise the condition is OPEN. The dominating and the dominated state must hold the same open
+        //   conditions (then the counterpart schedule satisfies each one with a witness outside A_s). An open
+        //   condition with a scheduled member in X cannot be judged from the two schedules: irregular.
+        // For an arc (|X| = 1) this is exactly condition (2): arcs with both endpoints in A_u.
+        if (state.rel) {
+            auto inAs = [&](short i) { return state.start_times[i] + activities[i].duration <= rvst; };
+            for (const auto* c = state.rel.get(); c && !irregular; c = c->up.get()) {
+                bool anyS = false; int minS = 1 << 30;      // earliest finish among the scheduled members of X
+                for (unsigned i = 0; i < c->nX; ++i) {
+                    const short b = c->v[i];
+                    if (inAs(b)) { anyS = true; minS = std::min(minS, (int)state.start_times[b] + (int)activities[b].duration); }
+                }
+                for (size_t i = c->nX; i < c->v.size(); ++i) {
+                    const short a = c->v[i];
+                    if (inAs(a)) continue;
+                    if (anyS && minS <= (int)state.start_times[a]) continue;
+                    if (anyS) { irregular = true; break; }
+                    uint64_t h = c->h ^ (0x9e3779b97f4a7c15ULL * (uint64_t)(a + 1));
+                    h *= 1099511628211ULL; h ^= h >> 31;
+                    rel_u.push_back(h);
+                }
+            }
+            std::sort(rel_u.begin(), rel_u.end());
         }
     }
 

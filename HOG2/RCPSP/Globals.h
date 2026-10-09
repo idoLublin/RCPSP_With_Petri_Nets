@@ -2,6 +2,7 @@
 #define GLOBALS_H
 
 #include <vector>
+#include <array>
 #include <string>
 #include <cstdint>
 #include <limits>
@@ -215,6 +216,8 @@ inline int   g_cbs_tb        = 0;
 //   G makespan          D depth (resolutions)      T feasible-until (earliest conflict time)
 //   S total delay (sum of start times)             C conflict events       O total overload over those events
 //   N creation order (N = newest first: depth-first / LIFO among ties, n = oldest first)
+//   of the BRANCHING conflict (the parent's values until the node is evaluated):
+//   X excess demand         K activities in it         M minimal delay alternatives (= children)
 // "GTD" is RCPSP_CBS_TB=3. Any order among equal-f nodes keeps A* optimal, so every spec is sound.
 inline std::string g_cbs_tb_spec;
 inline unsigned long g_cbs_tb_seq = 0;      // per-instance creation counter behind the N key
@@ -225,10 +228,120 @@ inline unsigned long g_cbs_tb_seq = 0;      // per-instance creation counter beh
 // path returned by any stage is optimal, and an abandoned stage still leaves a valid lower bound (LB keeps
 // the maximum). Motivation: on the f = C* plateau a dive either succeeds within seconds or not at all, and
 // different orders succeed on different instances. Empty = off.
-struct CbsRestartStage { long sec; std::string spec; float T; };
+struct CbsRestartStage { long sec; std::string spec; float T; bool mirror = false; };
 inline std::string g_cbs_restart;                       // the raw spec, as given
 inline std::vector<CbsRestartStage> g_cbs_restart_stages;
 inline int g_cbs_restart_stage = 0;                     // per instance: the stage in which the search ended (1-based)
+// RCPSP_CBS_RESTART_KEEPLB=1: a restart keeps the lower bound the abandoned stages proved. An interrupted A* has
+// expanded every node with f < L (L = the last f it expanded), so C* >= L. The next stage floors the f of every
+// node at L (h := max(h, L - makespan), the same slot as RCPSP_CBS_PATHMAX's parent floor). L never exceeds C*,
+// so the floored f is still admissible and the stage is still an optimal A*. It does not re-prove the deadlines
+// below L, and when L = C* the stage starts directly among the f = C* nodes instead of climbing to them again.
+inline bool g_cbs_restart_keeplb = false;
+inline int  g_cbs_lb_floor = 0;                         // per instance: the floor in force (absolute makespan; 0 = none)
+// RCPSP_CBS_LEARN: conflict selection learns from the search - the analogue of a CP solver's conflict-driven
+// branching. The cardinal score of a conflict counts the MDAs whose delay raises the MAKESPAN, which the latest
+// starts tell us before branching. A "free" MDA (makespan unchanged) can still raise f through h_CBS or the
+// deadline propagation, which is known only once the child has been evaluated. For each activity a we count the
+// children created by a free delay of a (g_lw_tries) and those whose f ended above the parent's (g_lw_raise).
+// The selection score becomes (cardinal MDAs + sum over the free MDAs of the learned rate) / MDAs, where the rate
+// of an MDA is the largest raise / (tries + RCPSP_CBS_LEARN_PRIOR) among its activities; it goes through the same
+// threshold rule. Only WHICH conflict is branched on changes (any conflict gives a complete child set); h_CBS
+// still uses the static score. With no observations the score is the static one, so the search is unchanged.
+//   1 = the counters are per instance and SURVIVE restarts: a later stage rebuilds the top of the tree with what
+//       the earlier stages observed        2 = the counters are cleared at every restart (control for 1)
+inline int  g_cbs_learn = 0;
+inline int  g_cbs_learn_prior = 8;
+inline std::array<unsigned, 128> g_lw_tries{}, g_lw_raise{};
+inline long g_cbs_learn_tries = 0, g_cbs_learn_raises = 0;   // per instance: children credited / of those, f rose
+inline long g_cbs_learn_pickdiff = 0;                        // per instance: nodes where the learned score changed the pick
+// RCPSP_CBS_FASTFIRST=1|2|3: with a hybrid threshold above 1 no conflict can be picked by its score, so the
+// branching conflict is always the EARLIEST one, and most of the full scan is work nobody uses. In every level the
+// pick and its children are IDENTICAL to the full scan's, and nothing happens while the threshold is <= 1 (e.g. in
+// the prioritised stages of a restart).
+//   1  the MDA set is built for the earliest conflict only; the other conflicts are just counted (keys C / O of
+//      the tie-break). h_CBS comes from the picked conflict alone (the full scan takes the maximum over all fully
+//      cardinal conflicts) - smaller or equal, still admissible.
+//   2  + no h_CBS at all (h = 0 from the scan; f then comes from pathmax and the deadline propagation), which also
+//      drops the latest-start pass and the MDA costs. Conflicts are still counted.
+//   3  + no counting: one light sweep that stops at the first conflict (compute_first_conflict). Keys C and O stay
+//      0, so pair it with keys the light sweep gives for free: T, D, N, X, K, M. RCPSP_CBS_MDAREF is inactive here.
+inline int  g_cbs_fastfirst = 0;
+inline long g_cbs_fastfirst_skipped = 0;                     // per instance: conflicts counted but not examined
+// ── Bell & Park (1990) as published: what the plain baseline (cfg 1) lacked or did differently ──────────────────
+// RCPSP_BAP_MRVS=1: branch on a MINIMAL resource violating set ("only minimal resource violating sets, which have
+// no proper resource violating subsets, are considered in sequencing decisions", p. 67). The plain baseline
+// branches on every activity in progress at RVST on the violated resource. The paper does not say WHICH minimal
+// set; we take the one with the fewest activities: largest demands first until the capacity is exceeded (any proper
+// subset of it holds at most its k-1 largest demands, which fit, so it is minimal). One child per member b: b starts
+// at the earliest finish among the other members - the paper's weak form. Complete: the members overlap at RVST and
+// only move later, so in any feasible schedule two of them are disjoint (intervals on a line with no common point).
+inline bool g_bap_mrvs = false;
+// RCPSP_CBS_MIRROR=1: solve the MIRRORED project - every precedence reversed, activities renumbered so that ids
+// stay topological. A schedule read backwards from its makespan is a schedule of the mirrored project and vice
+// versa, so both have the SAME optimum. The search is a different one: it meets the conflicts from the other end
+// of the project, and its bound, dominance and branching differ. Inside RCPSP_CBS_RESTART a stage written
+// "<sec>/<TBSPEC>/<T>/M" runs on the mirror (relative to this flag). A lower bound proven in one orientation is
+// valid in the other (same optimum), so RCPSP_CBS_RESTART_KEEPLB carries across; RCPSP_CBS_LEARN counters are
+// re-indexed with the activities.
+inline bool g_cbs_mirror = false;
+inline int  g_cbs_mirror_now = 0;       // per instance: orientation of the project currently loaded (1 = mirrored)
+// RCPSP_CBS_DELAY (default 0): how a child REMEMBERS the delay that resolved a conflict. Experimental, not in the paper.
+//   0        the delay is a number (start >= earliest finish of the other conflict members, taken once from the
+//            parent's schedule). Nothing is remembered: a node is just its schedule.
+//   1 "prec" minimal delaying modes (De Reyck & Herroelen 1998): one child per (MDA M, activity k of the rest);
+//            every activity of M starts after k finishes - a precedence relation kept for the whole subtree.
+//   2 "pair" precedence posting on a minimal conflict set (Laborie 2005; Bell & Park's first variant): the smallest
+//            violating subset of the conflict, one child per ordered pair (u, v): v starts after u finishes.
+//   3 "wait" waiting conditions (Igelmund & Radermacher 1983; AND/OR precedence, Moehring, Skutella & Stork 2004):
+//            one child per MDA M as today, but the delay is kept as a condition - every activity of M starts no
+//            earlier than the earliest finish among the rest - and is re-evaluated whenever start times move.
+// In 1..3 a node is its schedule PLUS its remembered conditions: both are part of the node's identity, the low
+// level computes the least schedule satisfying all of them, and dominance is restricted to nodes whose conditions
+// over unscheduled activities coincide (Bell & Park's condition (2)). The DR5S table and the reverse
+// (bidirectional) direction compare schedules only, so the driver switches both off.
+// Coverage: for a feasible schedule p let F be the earliest finish in p among the conflict set and b0 an activity
+// finishing at F. The activities starting at F or later contain an MDA M, and in its own start times p satisfies
+// "M after b0" (modes) and "M after the earliest finish of the rest" (waiting). For pairs: the members of a
+// violating set cannot all overlap in p, so two of them are disjoint (intervals on a line).
+inline int  g_cbs_delay = 0;
+inline int  g_cbs_delay_maxkids = 0;    // RCPSP_CBS_DELAY_MAXKIDS, mode prec: an MDA whose rest has more activities than this gets the plain delay child instead (sound: it covers all its modes); 0 = no limit
+inline long g_rel_infeasible = 0;       // per instance: children dropped because their conditions admit no schedule within the horizon
+inline long g_rel_fallback   = 0;       // per instance: MDAs that fell back to the plain delay child (MAXKIDS)
+inline long g_rel_maxlen     = 0;       // per instance: most conditions held by one node
+inline int  g_rel_horizon    = 32000;   // per instance: sum of all durations - an optimal schedule never needs more
+//   4 "far"  delay further where that is safe. One child per MDA as in 0, and a node is still just its schedule:
+//            nothing is remembered and every dominance rule stays as it is. e1 = earliest finish of the rest (the
+//            plain delay). far(x) = the first finish of the rest at which x fits, on the conflict resource, beside
+//            the rest activities still running. A feasible schedule p that the plain child of the MDA M covers has
+//            p(x) >= far(x) for every x in M unless some rest activity q, still running after e1 in this node, is
+//            started in p AFTER x ("q postponed"): if every rest activity in x's way starts no later than x, all of
+//            them run when x starts, so x must fit beside them. In the other case p >= (M at e1, q at e1 + lag),
+//            lag = duration of x if x and q can never overlap on this resource, else 1. M is given the further delay
+//            only if, for every such q, another MDA M' inside M + {q} has a child that is no later than that vector
+//            in its own delays (checked to a fixpoint, because M' may itself be delayed further); p is then covered
+//            by the child of M'. Otherwise M keeps the plain delay. So every feasible schedule >= the node's
+//            schedule is >= some child: the property the search and the dominance rules rely on. RCPSP_SETDELAY and
+//            RCPSP_NMD apply the further delay without this test, which is where they lose optima.
+inline long g_far_blocked    = 0;       // per instance: MDA children for which a further delay exists
+inline long g_far_applied    = 0;       // per instance: MDA children that were given it (the test passed)
+// RCPSP_UB_SEED=0: with RCPSP_UB=1 the upper bound starts at infinity and is set only by feasible schedules the
+// search itself generates (Descendants lines 4-6); a generated state with makespan >= the bound is discarded.
+// Default 1 = the old behaviour, a seed read from the datasheet, which is NOT valid for reported runs.
+inline bool g_ub_seed = true;
+// RCPSP_LEFTSHIFT=2: the left-shift rule with ANY earlier start ("can be started earlier without violating
+// precedence or resource constraints and without adjusting the scheduled start times of other activities", p. 64),
+// where RCPSP_LEFTSHIFT=1 tests a one-unit shift only. Scheduled-set activities only, as in the paper; the window
+// lies before RVST, where usage can only fall in descendants, so the shift stays possible in all of them.
+inline bool g_leftshift_global = false;
+// RCPSP_DOM_BP_SETKEY=1: Bell & Park compare states with the same SCHEDULED SET - their CLOSED table is keyed by the
+// scheduled-set bit vector (p. 78). The table here also required the same RVST, which is stricter than the paper.
+// Sound without it: take a feasible schedule F' below the dominated state and keep the dominating state's start
+// times on the scheduled set. Before the dominating state's RVST every unscheduled activity running in F' is also
+// running in the dominating state (it starts no later there and ends after RVST), so the result is feasible, lies
+// above the dominating state and has F''s makespan. Scheduled sets grow strictly along a path of stored states,
+// so a state is never compared with its own ancestor.
+inline bool g_dom_bp_setkey = false;
 // Diagnostic (always on, CSV lbRaiseExp): the expansion count at which the proven lower bound last rose.
 // expandNumber - lbRaiseExp = expansions spent on the FINAL f-layer (the f = C* plateau when solved).
 inline long  g_lb_raise_exp  = 0;

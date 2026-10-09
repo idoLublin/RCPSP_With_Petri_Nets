@@ -2804,7 +2804,187 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
     }
   };
 
-  auto gen_children = [&emit_set](const RCPSPState_CBS<N>& par, std::vector<RCPSPState_CBS<N>>& out) {
+  // RCPSP_CBS_DELAY (Globals.h): children that remember their delay as a relation. Each child is first built by
+  // the plain constructor (start >= the earliest finish of the rest, a value every mode implies) and then given
+  // its condition; attach_rel settles the schedule under ALL conditions of the node and drops an infeasible child.
+  auto emit_rel = [](const RCPSPState_CBS<N>& par, const auto& sets, std::vector<RCPSPState_CBS<N>>& out) {
+    const short pmk = par.start_times[g_sink_id];
+    const std::vector<short>& pool = par.rvs_activities_pool;
+    if (g_cbs_delay == 2) {                       // "pair": the smallest violating subset, one child per ordered pair
+      const ResourceInfo& res = resource_info[par.resourceType];
+      std::vector<std::pair<short, short>> byDemand;       // (demand, activity)
+      byDemand.reserve(pool.size());
+      for (short a : pool) byDemand.emplace_back(res.demand_lookup.at(a), a);
+      std::sort(byDemand.begin(), byDemand.end(), [](const std::pair<short, short>& x, const std::pair<short, short>& y) {
+          return x.first != y.first ? x.first > y.first : x.second < y.second; });
+      int sum = 0; size_t k = 0;
+      while (k < byDemand.size() && sum <= (int)res.capacity) sum += byDemand[k++].first;
+      for (size_t i = 0; i < k; ++i)
+        for (size_t j = 0; j < k; ++j) {
+          if (i == j) continue;
+          const short u = byDemand[i].second, v = byDemand[j].second;   // v starts after u finishes
+          RCPSPState_CBS<N> c(par, std::vector<short>{v}, par.t);
+          if (c.attach_rel(std::vector<short>{u}, std::vector<short>{v}, pmk)) out.push_back(std::move(c));
+        }
+      return;
+    }
+    for (const auto& set : sets) {
+      std::vector<short> rest; rest.reserve(pool.size());
+      for (short a : pool) if (std::find(set.begin(), set.end(), a) == set.end()) rest.push_back(a);
+      if (g_cbs_delay == 3) {                     // "wait": M waits for the earliest finish among the rest
+        RCPSPState_CBS<N> c(par, set, par.t);
+        if (c.attach_rel(std::move(rest), set, pmk)) out.push_back(std::move(c));
+      } else if (g_cbs_delay_maxkids > 0 && (int)rest.size() > g_cbs_delay_maxkids) {
+        ++g_rel_fallback;                         // "prec", too many modes: the plain delay child covers them all
+        RCPSPState_CBS<N> c(par, set, par.t);
+        if (c.settle_rel(pmk)) out.push_back(std::move(c));
+      } else {                                    // "prec": M after one chosen activity k of the rest
+        for (short k : rest) {
+          RCPSPState_CBS<N> c(par, set, par.t);
+          if (c.attach_rel(std::vector<short>{k}, set, pmk)) out.push_back(std::move(c));
+        }
+      }
+    }
+  };
+
+  // RCPSP_CBS_DELAY=far (Globals.h): one child per MDA, built by the plain constructor; where the test passes the
+  // delayed activities are then moved on to their far times and the schedule is settled again.
+  auto emit_far = [](const RCPSPState_CBS<N>& par, const std::vector<std::vector<short>>& sets, std::vector<RCPSPState_CBS<N>>& out) {
+    const short pmk = par.start_times[g_sink_id];
+    const std::vector<short>& pool = par.rvs_activities_pool;
+    const size_t m = pool.size(), ns = sets.size();
+    const ResourceInfo& res = resource_info[par.resourceType];
+    const int cap = res.capacity;
+    // the conflict set by position: finish in the parent's schedule, demand, duration
+    std::vector<int> fin(m), dem(m), dur(m);
+    std::array<short, N> pos; pos.fill(-1);
+    int demAll = 0;
+    for (size_t p = 0; p < m; ++p) {
+      const short act = pool[p];
+      dur[p] = RCPSPex.activities[act].duration;
+      fin[p] = par.start_times[act] + dur[p];
+      dem[p] = res.demand_lookup.at(act);
+      demAll += dem[p];
+      pos[act] = (short)p;
+    }
+    std::vector<short> byFin(m);
+    for (size_t p = 0; p < m; ++p) byFin[p] = (short)p;
+    std::sort(byFin.begin(), byFin.end(), [&fin](short x, short y) { return fin[x] != fin[y] ? fin[x] < fin[y] : x < y; });
+    const size_t W = (m + 63) / 64;
+    std::vector<uint64_t> mask(ns * W, 0);             // the MDAs as sets of positions
+    struct Alt {
+      int e1 = -1;                                     // earliest finish of the rest; -1 = no rest (plain child as it is)
+      bool use = false;                                // give this MDA the further delay
+      int restDem = 0;                                 // demand of the rest
+      size_t farAt = 0, compAt = 0, compN = 0;         // its slices of farv and compv
+    };
+    std::vector<Alt> alt(ns);
+    std::vector<int> farv;                             // far time of every member of every MDA, in the order of the sets
+    std::vector<std::pair<short, int>> compv;          // (position of q, lag): rest activities whose postponement the further delay drops
+    std::vector<std::vector<int>> has(m);              // the MDAs that contain a position
+    std::vector<int> taus, runAfter;                   // distinct finishes of the rest, and the rest demand still running after each
+    for (size_t i = 0; i < ns; ++i) {
+      const std::vector<short>& set = sets[i];
+      Alt& a = alt[i];
+      uint64_t* mi = &mask[i * W];
+      a.farAt = farv.size(); a.compAt = compv.size();
+      int demD = 0; bool known = true;
+      for (short x : set) {
+        const short p = pos[x];
+        if (p < 0) { known = false; break; }
+        mi[p >> 6] |= uint64_t(1) << (p & 63); demD += dem[p];
+      }
+      if (!known || set.size() >= m) { farv.resize(farv.size() + set.size(), 0); continue; }
+      for (short x : set) has[pos[x]].push_back((int)i);
+      a.restDem = demAll - demD;
+      taus.clear(); runAfter.clear();
+      int run = a.restDem;
+      for (size_t b = 0; b < m; ++b) {
+        const short p = byFin[b];
+        if ((mi[p >> 6] >> (p & 63)) & 1) continue;    // delayed, not rest
+        run -= dem[p];
+        if (!taus.empty() && taus.back() == fin[p]) runAfter.back() = run;
+        else { taus.push_back(fin[p]); runAfter.push_back(run); }
+      }
+      a.e1 = taus.front();
+      bool blocked = false;
+      for (short x : set) {
+        const int dx = dem[pos[x]];
+        int f = taus.back();                           // after the last finish x always fits
+        for (size_t t = 0; t < taus.size(); ++t) if (runAfter[t] + dx <= cap) { f = taus[t]; break; }
+        farv.push_back(f);
+        if (f > a.e1) blocked = true;
+      }
+      if (!blocked) continue;
+      ++g_far_blocked;
+      for (size_t b = 0; b < m; ++b) {
+        const short p = byFin[b];
+        if (((mi[p >> 6] >> (p & 63)) & 1) || fin[p] <= a.e1) continue;   // delayed, or not running after e1: in nobody's way
+        int lag = std::numeric_limits<int>::max();
+        for (size_t k = 0; k < set.size(); ++k) {
+          if (farv[a.farAt + k] <= a.e1) continue;
+          const short px = pos[set[k]];
+          lag = std::min(lag, dem[px] + dem[p] > cap ? dur[px] : 1);
+        }
+        compv.emplace_back(p, lag);
+      }
+      a.compN = compv.size() - a.compAt;
+      a.use = true;
+    }
+    std::vector<uint64_t> allow(W);
+    for (bool changed = true; changed; ) {
+      changed = false;
+      for (size_t i = 0; i < ns; ++i) {
+        Alt& a = alt[i];
+        if (!a.use) continue;
+        const std::vector<short>& Di = sets[i];
+        const uint64_t* mi = &mask[i * W];
+        bool ok = true;
+        for (size_t c = 0; c < a.compN && ok; ++c) {
+          const short q = compv[a.compAt + c].first;
+          const int lim = a.e1 + compv[a.compAt + c].second;
+          // another MDA inside M + {q} can exist only if q can be traded for some member of M
+          bool trade = false;
+          for (short x : Di) if (a.restDem - dem[q] + dem[pos[x]] <= cap) { trade = true; break; }
+          bool cov = false;
+          if (trade) {
+            for (size_t w = 0; w < W; ++w) allow[w] = mi[w];
+            allow[q >> 6] |= uint64_t(1) << (q & 63);
+            for (int j : has[q]) {
+              const uint64_t* mj = &mask[(size_t)j * W];
+              bool sub = true;
+              for (size_t w = 0; w < W; ++w) if (mj[w] & ~allow[w]) { sub = false; break; }
+              if (!sub) continue;
+              const Alt& b = alt[j];
+              const std::vector<short>& Dj = sets[j];
+              bool good = true;
+              for (size_t k = 0; k < Dj.size(); ++k) {
+                const int dj = b.use ? farv[b.farAt + k] : b.e1;
+                if (dj > (pos[Dj[k]] == q ? lim : a.e1)) { good = false; break; }
+              }
+              if (good) { cov = true; break; }
+            }
+          }
+          ok = cov;
+        }
+        if (!ok) { a.use = false; changed = true; }
+      }
+    }
+    for (size_t i = 0; i < ns; ++i) {
+      const std::vector<short>& set = sets[i];
+      const Alt& a = alt[i];
+      RCPSPState_CBS<N> c(par, set, par.t);
+      if (a.use) {
+        ++g_far_applied;
+        for (size_t k = 0; k < set.size(); ++k)
+          if (farv[a.farAt + k] > c.start_times[set[k]]) c.start_times[set[k]] = (short)farv[a.farAt + k];
+        if (!c.settle_rel(pmk)) continue;              // beyond the sum of all durations: holds no optimal schedule
+      }
+      out.push_back(std::move(c));
+    }
+  };
+
+  auto gen_children = [&emit_set, &emit_rel, &emit_far](const RCPSPState_CBS<N>& par, std::vector<RCPSPState_CBS<N>>& out) {
     if (setting.use_MDA_sets) {
       if (setting.use_MDA_cache) {
         if (setting.use_strong_constraints && par.is_size2_conflict) {
@@ -2823,6 +3003,10 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
             setting.use_non_minimal_delay = false;          // singular coverage is proven for minimal delay
             for (short a : par.rvs_activities_pool) out.emplace_back(par, a, par.t);
             setting.use_non_minimal_delay = nmd;
+          } else if (g_cbs_delay == 4 && !setting.use_non_minimal_delay && !g_use_setdelay) {
+            emit_far(par, sets, out);
+          } else if (g_cbs_delay != 0 && !setting.use_non_minimal_delay) {
+            emit_rel(par, sets, out);
           } else {
             for (const auto& set : sets)
               emit_set(par, set, out);
@@ -2864,6 +3048,10 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       short ru = -1;
       const bool hc = s.compute_first_conflict(ru);
       if (!hc) { neighbors.push_back(std::move(s)); continue; }   // goal child
+      // B&P Descendants line 7 comes before lines 8-10: a left-shiftable state is discarded before it is either
+      // remembered or expanded in place. The shiftable activity stays shiftable in every descendant, so this drops
+      // nothing the test after the recursion would have kept; it only stops the recursion earlier.
+      if ((g_use_leftshift || g_use_dr4) && s.left_shift_prunable()) { ++g_leftshift_pruned; continue; }
       const CBSCutsetKey<N> ck = cbs_cutset_key<N>(s, RCPSPex.activities);
       const bool real = (ck.rvst != ipkey.rvst) && !(ck.bits == ipkey.bits);
       if (real || ++inlined > INLINE_LIMIT) { neighbors.push_back(std::move(s)); continue; }
@@ -3554,6 +3742,11 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
       if (hr_rem > h) { h = hr_rem; ++g_cbs_hierrs_better; }
     }
   }
+  // RCPSP_CBS_RESTART_KEEPLB (Globals.h): never below the bound the abandoned restart stages proved.
+  if (g_cbs_lb_floor > 0 && state1.found_conflict && !g_in_subsolve) {
+    const double keep_rem = (double)g_cbs_lb_floor - (double)state1.start_times[g_sink_id];
+    if (keep_rem > h) h = keep_rem;
+  }
   // RCPSP_CBS_PATHMAX (Globals.h): never below the parent's f. Applied before the deadline propagation so that
   // the refutation loop starts where the parent stopped instead of re-proving the same deadlines.
   if ((g_cbs_pathmax || g_cbs_pathmax_insert) && state1.found_conflict) {
@@ -3572,6 +3765,16 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
                                             &state1.rvs_activities_pool, &state1.conflict_solutions)
                          : cpcbs::nodeBound(state1.start_times, g_now + (int)h);
     if ((double)(nb - g_now) > h) h = (double)(nb - g_now);
+  }
+  // RCPSP_CBS_LEARN (Globals.h): this node came from a free delay; did its f still end above its parent's?
+  if (g_cbs_learn && state1.lw_n > 0 && !g_in_subsolve) {
+    const bool raised = (double)state1.start_times[g_sink_id] + h > (double)state1.f_floor + 1e-9;
+    for (int i = 0; i < (int)state1.lw_n; ++i) {
+      ++g_lw_tries[state1.lw_act[i]];
+      if (raised) ++g_lw_raise[state1.lw_act[i]];
+    }
+    ++g_cbs_learn_tries;
+    if (raised) ++g_cbs_learn_raises;
   }
   g_heur_time_sec += secs_since(_hct0);
   ++g_heur_calls;
@@ -3641,6 +3844,10 @@ inline uint64_t RCPSP_CBS<N>::GetStateHash(const RCPSPState_CBS<N> &node) const 
   for (size_t i = 0; i < N * sizeof(short); ++i) {
     h ^= static_cast<uint64_t>(p[i]);
     h *= FNV_PRIME;
+  }
+  if (node.rel_n) {          // RCPSP_CBS_DELAY: the remembered conditions are part of the node's identity
+    h ^= node.rel_sig;              h *= FNV_PRIME;
+    h ^= (uint64_t)node.rel_n;      h *= FNV_PRIME;
   }
   return h;
 }

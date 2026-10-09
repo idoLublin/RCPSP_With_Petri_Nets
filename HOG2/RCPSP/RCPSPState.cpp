@@ -3801,10 +3801,30 @@ short RCPSPState_CBS<N>::compute_mda_cost(
     // too — a strictly tighter but still admissible bound (admissible w.r.t. the
     // setdelay search tree, where every resolution of this conflict pays >= it).
     short new_start = std::numeric_limits<short>::max();
-    for (short other : current_jobs) {
-        if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
-        short finish = start_times[other] + RCPSPex.activities[other].duration;
-        new_start = std::min(new_start, finish);
+    const long mc_mode = rootb::PropFast();         // RCPSP_PROP_FAST: mark the set once instead of a linear search per member
+    if (mc_mode == 1) {
+        static thread_local std::array<unsigned char, 256> mc_mark{};
+        for (short m : mda_set) mc_mark[(unsigned char)m] = 1;
+        for (short other : current_jobs) {
+            if (mc_mark[(unsigned char)other]) continue;
+            short finish = start_times[other] + RCPSPex.activities[other].duration;
+            new_start = std::min(new_start, finish);
+        }
+        for (short m : mda_set) mc_mark[(unsigned char)m] = 0;
+    } else {
+        for (short other : current_jobs) {
+            if (std::find(mda_set.begin(), mda_set.end(), other) != mda_set.end()) continue;
+            short finish = start_times[other] + RCPSPex.activities[other].duration;
+            new_start = std::min(new_start, finish);
+        }
+        if (mc_mode == 2) {
+            static thread_local std::array<unsigned char, 256> mc_mark2{};
+            short ns2 = std::numeric_limits<short>::max();
+            for (short m : mda_set) mc_mark2[(unsigned char)m] = 1;
+            for (short other : current_jobs) if (!mc_mark2[(unsigned char)other]) ns2 = std::min(ns2, (short)(start_times[other] + RCPSPex.activities[other].duration));
+            for (short m : mda_set) mc_mark2[(unsigned char)m] = 0;
+            if (ns2 != new_start) { std::cerr << "RCPSP_PROP_FAST MISMATCH in compute_mda_cost: " << new_start << " vs " << ns2 << std::endl; std::abort(); }
+        }
     }
     if (g_use_setdelay && new_start != std::numeric_limits<short>::max()) {
         // Advance the whole set to the earliest bg-completion where it co-fits.
@@ -3853,6 +3873,55 @@ void reset_mda_cache() {
 // to the original first-conflict scan, so it finds the exact same conflict.
 template<short N>
 bool RCPSPState_CBS<N>::compute_first_conflict(short& res_out) const {
+    // RCPSP_PROP_FAST (RootBounds.h; 1 = on, 2 = run both and abort on a difference): the same earliest conflict
+    // from the usage of each resource per time unit, instead of three sorts per resource. Usage only rises at a
+    // start, so the first overloaded time unit is the first overloaded start event; only time units before the
+    // best conflict found so far are looked at (the sweep below stops there too), resources in the same order,
+    // members listed in the same (activity_indices) order.
+    const long fc_mode = rootb::PropFast();
+    bool fc_ret = false; short fc_t = -1, fc_res = -1;
+    static thread_local std::vector<short> fc_use, fc_pool;
+    if (fc_mode) {
+        int bt = std::numeric_limits<short>::max(); int br = -1;
+        for (int resIdx = 0; resIdx < (int)resource_info.size(); resIdx++) {
+            const ResourceInfo& res = resource_info[resIdx];
+            const int K = (int)res.activity_indices.size();
+            if (K == 0) continue;
+            int lim = bt;
+            if (br == -1) {                                   // no conflict yet: up to the last finish on this resource
+                lim = 0;
+                for (int j = 0; j < K; j++) {
+                    const short a = res.activity_indices[j];
+                    lim = std::max(lim, (int)start_times[a] + (int)RCPSPex.activities[a].duration);
+                }
+            }
+            if (lim <= 0) continue;
+            if ((int)fc_use.size() < lim) fc_use.resize(lim);
+            std::fill(fc_use.begin(), fc_use.begin() + lim, (short)0);
+            for (int j = 0; j < K; j++) {
+                const short a = res.activity_indices[j];
+                const int s = start_times[a];
+                if (s >= lim) continue;
+                const int f = std::min(lim, s + (int)RCPSPex.activities[a].duration);
+                const short d = res.demands[j];
+                for (int u = s; u < f; ++u) fc_use[u] += d;
+            }
+            for (int u = 0; u < lim; ++u) if (fc_use[u] > res.capacity) { bt = u; br = resIdx; break; }
+        }
+        fc_pool.clear();
+        if (br != -1) {
+            const ResourceInfo& res = resource_info[br];
+            for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+                const short a = res.activity_indices[j];
+                if (start_times[a] <= bt && start_times[a] + RCPSPex.activities[a].duration > bt) fc_pool.push_back(a);
+            }
+            fc_ret = true; fc_t = (short)bt; fc_res = (short)br;
+        }
+        if (fc_mode == 1) {
+            if (fc_ret) { t_first = fc_t; first_conflict_pool.assign(fc_pool.begin(), fc_pool.end()); res_out = fc_res; return true; }
+            t_first = -1; first_conflict_pool.clear(); return false;
+        }
+    }
     short best_t        = std::numeric_limits<short>::max();
     short best_resource = -1;
     std::vector<short> best_jobs;
@@ -3910,6 +3979,11 @@ bool RCPSPState_CBS<N>::compute_first_conflict(short& res_out) const {
         }
     }
 
+    if (fc_mode == 2 && (fc_ret != (best_resource != -1) || (fc_ret && (fc_t != best_t || fc_res != best_resource || fc_pool != best_jobs)))) {
+        std::cerr << "RCPSP_PROP_FAST MISMATCH in compute_first_conflict: original t=" << best_t << " res=" << best_resource << " members=" << best_jobs.size()
+                  << " | fast found=" << fc_ret << " t=" << fc_t << " res=" << fc_res << " members=" << fc_pool.size() << std::endl;
+        std::abort();
+    }
     if (best_resource != -1) {
         t_first = best_t;
         first_conflict_pool = std::move(best_jobs);
@@ -3929,6 +4003,19 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
         short res_out = -1;
         if (compute_first_conflict(res_out)) {
             rvs_activities_pool = first_conflict_pool;
+            if (g_bap_mrvs) {       // RCPSP_BAP_MRVS (Globals.h): the minimal violating set with the fewest activities
+                const ResourceInfo& res = resource_info[res_out];
+                std::vector<std::pair<short, short>> byDemand;      // (demand, activity)
+                byDemand.reserve(rvs_activities_pool.size());
+                for (short a : rvs_activities_pool) byDemand.emplace_back(res.demand_lookup.at(a), a);
+                std::sort(byDemand.begin(), byDemand.end(), [](const std::pair<short, short>& x, const std::pair<short, short>& y) {
+                    return x.first != y.first ? x.first > y.first : x.second < y.second; });
+                int sum = 0; size_t k = 0;
+                while (k < byDemand.size() && sum <= (int)res.capacity) sum += byDemand[k++].first;
+                rvs_activities_pool.clear();
+                for (size_t i = 0; i < k; ++i) rvs_activities_pool.push_back(byDemand[i].second);
+                std::sort(rvs_activities_pool.begin(), rvs_activities_pool.end());
+            }
             this->t        = t_first;
             resourceType   = res_out;
             found_conflict = true;
@@ -3938,16 +4025,40 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
         return 0;
     }
 
+    // RCPSP_CBS_FASTFIRST (Globals.h): with a threshold above 1 the pick can only be the earliest conflict
+    const bool fastfirst = g_cbs_fastfirst && g_use_hybrid && setting.use_conflict_prioritization
+                           && setting.use_MDA_sets && g_hybrid_threshold > 1.0f;
+    // Level 3: one light sweep that stops at the first conflict. No score, no h_CBS, no conflict count.
+    if (fastfirst && g_cbs_fastfirst >= 3 && setting.use_MDA_cache) {
+        rvs_activities_pool.clear(); conflict_solutions.clear();
+        short res_out = -1;
+        if (!compute_first_conflict(res_out)) { found_conflict = false; return 0; }
+        rvs_activities_pool = first_conflict_pool;
+        this->t = t_first; resourceType = res_out; found_conflict = true;
+        is_size2_conflict = (rvs_activities_pool.size() == 2);
+        short excess = (short)-resource_info[res_out].capacity;
+        for (short job : rvs_activities_pool) excess += resource_info[res_out].demand_lookup.at(job);
+        conflict_key = make_conflict_key<N>(rvs_activities_pool, res_out);
+        // fills the MDA cache GetSuccessors reads; the costs (against a dummy latest-start array) are not used
+        const std::vector<MDA> mdas = compute_mdas(rvs_activities_pool, excess, start_times, res_out, conflict_key);
+        tb_x = excess; tb_k = (unsigned char)std::min<size_t>(rvs_activities_pool.size(), 255);
+        tb_m = (short)std::min<size_t>(mdas.size(), 32000);
+        tb_nconf = 0; tb_over = 0;                 // not counted at this level
+        return 0;
+    }
+    const bool noh = fastfirst && g_cbs_fastfirst >= 2;      // level 2: no h_CBS, so no latest starts and no MDA costs
+
     // Compute latest starts fresh each time — no copy bug
     std::array<short, N> latest_starts = {};
-    computeLatestStarts(latest_starts);
+    if (noh) latest_starts = start_times;                     // dummy: the costs computed against it are never read
+    else     computeLatestStarts(latest_starts);
     // RCPSP_CBS_LSPROP: tighten them with the deadline propagation (D = incumbent-1). A latest start that
     // propagation pulls in makes delays that looked free cost-increasing, so more conflicts score cardinal.
     std::array<short, N> latest_cpm = latest_starts;
     bool lsprop = false;
     {
         static thread_local std::vector<int> lsv;
-        if (cpcbs::propLatestStarts(start_times, lsv)) {
+        if (!noh && cpcbs::propLatestStarts(start_times, lsv)) {
             lsprop = true;
             const int nAct = (int)RCPSPex.activities.size();
             for (int i = 0; i < nAct && i < (int)N && i < (int)lsv.size(); ++i)
@@ -3961,12 +4072,15 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
     int          best_free = INT_MAX, best_nm = INT_MAX;   // RCPSP_CBS_SEL: free / total MDAs of the pick
     short        best_t        = -1;
     short        best_resource = -1;
+    short        best_excess   = 0;           // RCPSP_CBS_TBSPEC key X
     ConflictKey<N>        best_key;
     std::vector<short> best_jobs;
     bool         found_any     = false;
     float        best_score_cpm = -1.0f;      // what the CPM latest starts would have picked (diagnostic)
     int          tb_nconf_acc = 0, tb_over_acc = 0;   // RCPSP_CBS_TBSPEC keys C / O
     short        best_t_cpm     = -1, best_resource_cpm = -1;
+    float        best_score_st  = -1.0f;      // RCPSP_CBS_LEARN: what the static score alone would have picked (diagnostic)
+    short        best_t_st      = -1, best_resource_st = -1;
     // DR5: earliest conflict, tracked alongside the prioritized one. The scan below
     // is exhaustive (the score==1 early-exits are commented out), so the true
     // minimum over all conflicts is seen.
@@ -3996,39 +4110,94 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                            RCPSPex.activities[res.activity_indices[j]].duration);
         };
 
+        // RCPSP_PROP_FAST (RootBounds.h): the same events (distinct start times, ascending) and the same running
+        // demand at each of them from two per-time-unit arrays, instead of three sorts and the retire / admit sweep.
+        // 1 = use them; 2 = keep the sweep and check the arrays against it.
+        const long sw_mode = rootb::PropFast();
+        static thread_local std::vector<short> sw_use;
+        static thread_local std::vector<char>  sw_mark;
         sweep_events.clear();
-        sweep_by_start.resize(K); sweep_by_finish.resize(K);
-        sweep_running.assign(K, 0);
-        for (short j = 0; j < K; j++) {
-            sweep_events.push_back(startOf(j));
-            sweep_by_start[j] = sweep_by_finish[j] = j;
+        if (sw_mode) {
+            int lim = 0;
+            for (short j = 0; j < K; j++) lim = std::max(lim, (int)finishOf(j));
+            lim += 1;                                              // a zero-length activity may start at the last finish
+            if ((int)sw_use.size() < lim) { sw_use.resize(lim); sw_mark.resize(lim); }
+            std::fill(sw_use.begin(), sw_use.begin() + lim, (short)0);
+            std::fill(sw_mark.begin(), sw_mark.begin() + lim, (char)0);
+            for (short j = 0; j < K; j++) {
+                const int s = startOf(j), f = finishOf(j);
+                sw_mark[s] = 1;
+                const short d = res.demands[j];
+                for (int u = s; u < f; ++u) sw_use[u] += d;
+            }
         }
-        std::sort(sweep_events.begin(), sweep_events.end());
-        sweep_events.erase(std::unique(sweep_events.begin(), sweep_events.end()), sweep_events.end());
-        std::sort(sweep_by_start.begin(),  sweep_by_start.end(),  [&](short a, short b){ return startOf(a)  < startOf(b);  });
-        std::sort(sweep_by_finish.begin(), sweep_by_finish.end(), [&](short a, short b){ return finishOf(a) < finishOf(b); });
+        if (sw_mode == 1) {
+            const int lim = (int)sw_use.size();
+            int last = 0;
+            for (short j = 0; j < K; j++) last = std::max(last, (int)startOf(j));
+            for (int u = 0; u <= last && u < lim; ++u) if (sw_mark[u]) sweep_events.push_back((short)u);
+        } else {
+            sweep_by_start.resize(K); sweep_by_finish.resize(K);
+            sweep_running.assign(K, 0);
+            for (short j = 0; j < K; j++) {
+                sweep_events.push_back(startOf(j));
+                sweep_by_start[j] = sweep_by_finish[j] = j;
+            }
+            std::sort(sweep_events.begin(), sweep_events.end());
+            sweep_events.erase(std::unique(sweep_events.begin(), sweep_events.end()), sweep_events.end());
+            std::sort(sweep_by_start.begin(),  sweep_by_start.end(),  [&](short a, short b){ return startOf(a)  < startOf(b);  });
+            std::sort(sweep_by_finish.begin(), sweep_by_finish.end(), [&](short a, short b){ return finishOf(a) < finishOf(b); });
+            if (sw_mode == 2) {
+                size_t e = 0; bool ok = true;
+                int last = 0;
+                for (short j = 0; j < K; j++) last = std::max(last, (int)startOf(j));
+                for (int u = 0; u <= last; ++u) if (sw_mark[u]) { if (e >= sweep_events.size() || sweep_events[e] != u) { ok = false; break; } ++e; }
+                if (!ok || e != sweep_events.size()) { std::cerr << "RCPSP_PROP_FAST MISMATCH in the conflict scan: event list" << std::endl; std::abort(); }
+            }
+        }
 
         int sweep_p = 0, sweep_q = 0;
         short total_demand = 0;
 
         for (short t : sweep_events) {
 
-            while (sweep_q < K && finishOf(sweep_by_finish[sweep_q]) <= t) {   // retire finished
-                short j = sweep_by_finish[sweep_q++];
-                if (sweep_running[j]) { sweep_running[j] = 0; total_demand -= res.demands[j]; }
-            }
-            while (sweep_p < K && startOf(sweep_by_start[sweep_p]) <= t) {     // admit started
-                short j = sweep_by_start[sweep_p++];
-                if (finishOf(j) > t) { sweep_running[j] = 1; total_demand += res.demands[j]; }
+            if (sw_mode == 1) {
+                total_demand = sw_use[t];
+            } else {
+                while (sweep_q < K && finishOf(sweep_by_finish[sweep_q]) <= t) {   // retire finished
+                    short j = sweep_by_finish[sweep_q++];
+                    if (sweep_running[j]) { sweep_running[j] = 0; total_demand -= res.demands[j]; }
+                }
+                while (sweep_p < K && startOf(sweep_by_start[sweep_p]) <= t) {     // admit started
+                    short j = sweep_by_start[sweep_p++];
+                    if (finishOf(j) > t) { sweep_running[j] = 1; total_demand += res.demands[j]; }
+                }
+                if (sw_mode == 2) {
+                    bool ok = (sw_use[t] == total_demand);
+                    for (short j = 0; j < K && ok; j++) ok = ((bool)sweep_running[j] == (startOf(j) <= t && finishOf(j) > t));
+                    if (!ok) { std::cerr << "RCPSP_PROP_FAST MISMATCH in the conflict scan: demand or running set at t=" << t << std::endl; std::abort(); }
+                }
             }
 
             if (total_demand <= res.capacity) continue;
 
+            // RCPSP_CBS_FASTFIRST: only a conflict earlier than the earliest seen so far can become the pick (the
+            // rule among weak conflicts is "t < best_t"). Every other one is counted for the tie-break keys and skipped.
+            if (fastfirst && found_any && t >= best_t) {
+                ++tb_nconf_acc; tb_over_acc += total_demand - res.capacity; ++g_cbs_fastfirst_skipped;
+                continue;
+            }
+
             // conflict: materialize members in ascending activity_indices order
             // (same order the old rescan produced)
             current_jobs.clear();
-            for (short j = 0; j < K; j++)
-                if (sweep_running[j]) current_jobs.push_back(res.activity_indices[j]);
+            if (sw_mode == 1) {
+                for (short j = 0; j < K; j++)
+                    if (startOf(j) <= t && finishOf(j) > t) current_jobs.push_back(res.activity_indices[j]);
+            } else {
+                for (short j = 0; j < K; j++)
+                    if (sweep_running[j]) current_jobs.push_back(res.activity_indices[j]);
+            }
             // DR5: a real conflict at time t — remember the earliest one seen,
             // independently of how it scores for prioritization.
             if (t < first_t) { first_t = t; first_jobs = current_jobs; }
@@ -4080,6 +4249,37 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 }
                 float score = mdas.empty() ? 0.0f : (float)cardinal_count / (float)mdas.size();
                 const int cand_nm = (int)mdas.size(), cand_free = cand_nm - cardinal_count;
+                // RCPSP_CBS_LEARN (Globals.h): the score used to CHOOSE the conflict also counts, for every free
+                // MDA, how often a free delay of its activities still raised f. `score` (static) keeps feeding h.
+                float sel_score = score;
+                if (g_cbs_learn && cand_free > 0) {
+                    float extra = 0.0f;
+                    for (const auto& mda : mdas) {
+                        if (mda.cost > 0) continue;
+                        float p = 0.0f;
+                        for (short a : mda.activities) {
+                            if (a < 0 || a >= 128 || g_lw_raise[a] == 0) continue;
+                            const float r = (float)g_lw_raise[a] / (float)(g_lw_tries[a] + (unsigned)g_cbs_learn_prior);
+                            if (r > p) p = r;
+                        }
+                        extra += p;
+                    }
+                    sel_score = ((float)cardinal_count + extra) / (float)mdas.size();
+                }
+                if (g_cbs_learn) {                 // the pick of the static score (rule of RCPSP_CBS_SEL=0)
+                    bool better_st;
+                    if (best_t_st < 0) better_st = true;
+                    else if (g_use_hybrid && setting.use_conflict_prioritization) {
+                        const float T = g_hybrid_threshold;
+                        const bool cs = (score >= T), bs = (best_score_st >= T);
+                        if (cs != bs) better_st = cs;
+                        else if (cs)  better_st = (score > best_score_st) || (score == best_score_st && t < best_t_st);
+                        else          better_st = (t < best_t_st);
+                    } else better_st = setting.use_conflict_prioritization
+                        ? (score > best_score_st || (score == best_score_st && t < best_t_st))
+                        : (t < best_t_st);
+                    if (better_st) { best_score_st = score; best_t_st = t; best_resource_st = (short)resIdx; }
+                }
                 if (lsprop) {                      // same score with the untightened latest starts
                     int cc_cpm = 0;
                     for (auto& mda : mdas)
@@ -4108,31 +4308,33 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                     // keeps dominance eligible). T=1 => only cardinals are strong;
                     // T=0 => pure prioritization; T>1 => pure first-conflict.
                     const float T = g_hybrid_threshold;
-                    const bool cand_strong = (score >= T), best_strong = (best_score >= T);
+                    const bool cand_strong = (sel_score >= T), best_strong = (best_score >= T);
                     if (cand_strong != best_strong) is_better = cand_strong;   // strong beats weak
                     else if (cand_strong) {
                         if (g_cbs_sel == 1)
                             is_better = (cand_free < best_free) || (cand_free == best_free &&
                                         (cand_nm < best_nm || (cand_nm == best_nm && t < best_t)));
                         else if (g_cbs_sel == 2)
-                            is_better = (score > best_score) || (score == best_score &&
+                            is_better = (sel_score > best_score) || (sel_score == best_score &&
                                         (cand_nm < best_nm || (cand_nm == best_nm && t < best_t)));
                         else
-                            is_better = (score > best_score) || (score == best_score && t < best_t);
+                            is_better = (sel_score > best_score) || (sel_score == best_score && t < best_t);
                     }
                     else                  is_better = (t < best_t);            // among weak: earliest
                 } else {
                     is_better = !found_any
-                        || (setting.use_conflict_prioritization && (score > best_score))
-                        || (setting.use_conflict_prioritization && score == best_score && t < best_t);
+                        || (setting.use_conflict_prioritization && (sel_score > best_score))
+                        || (setting.use_conflict_prioritization && sel_score == best_score && t < best_t);
                 }
-                if (setting.use_conflict_prioritization && score == 1.0f) {
+                if (fastfirst) cardinal_conflicts.clear();   // h_CBS from the pick alone: this candidate replaces the previous pick
+                if (setting.use_conflict_prioritization && score == 1.0f && !noh) {
                     cardinal_conflicts.push_back({current_jobs, min_cardinal_cost});
                 }
                 if (is_better) {
+                    best_excess   = excess;
                     best_t        = t;
                     best_resource = resIdx;
-                    best_score    = score;
+                    best_score    = sel_score;
                     best_free     = cand_free;
                     best_nm       = cand_nm;
                     best_mdas =     std::move(mdas);
@@ -4203,6 +4405,7 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
                 }
                 if (is_better) {
                     best_jobs     = current_jobs;
+                    best_excess   = (short)(total_demand - res.capacity);
                     best_t        = t;
                     best_resource = resIdx;
                     best_score     = score;
@@ -4258,6 +4461,8 @@ short RCPSPState_CBS<N>::compute_h_and_RVS() const{
 done:
     if (lsprop && found_any && best_t_cpm >= 0
         && (best_t != best_t_cpm || best_resource != best_resource_cpm)) ++cpcbs::st().lsPickDiff;
+    if (g_cbs_learn && found_any && best_t_st >= 0
+        && (best_t != best_t_st || best_resource != best_resource_st)) ++g_cbs_learn_pickdiff;
     // Write winning conflict
     t              = best_t;
     resourceType   = best_resource;
@@ -4266,6 +4471,8 @@ done:
     // DR5: the earliest conflict, which may differ from the prioritized one above.
     t_first        = found_any ? first_t : (short)-1;
     first_conflict_pool = std::move(first_jobs);
+    tb_x = best_excess; tb_k = (unsigned char)std::min<size_t>(best_jobs.size(), 255);
+    tb_m = (short)std::min<size_t>(best_mdas.size(), 32000);
     is_size2_conflict = (best_jobs.size() == 2);
     rvs_activities_pool = std::move(best_jobs);
     conflict_solutions = std::move(best_mdas);
@@ -4528,6 +4735,59 @@ short RCPSPState_CBS<N>::compute_start_recursive(short act, std::array<bool, N>&
 }
 
 
+// RCPSP_CBS_DELAY (Globals.h): the least schedule >= start_times that satisfies the precedence graph and every
+// remembered delay. All constraints are monotone, so repeating the two sweeps until nothing moves gives the least
+// one. false = no such schedule within the horizon (conditions that wait for each other, or a makespan beyond the
+// sum of all durations): the node holds no optimal schedule and is dropped.
+template<short N>
+bool RCPSPState_CBS<N>::propagate_rel() {
+    for (;;) {
+        propagate(0);
+        if (start_times[g_sink_id] > g_rel_horizon) return false;
+        bool changed = false;
+        for (const CbsRel* c = rel.get(); c; c = c->up.get()) {
+            int m = std::numeric_limits<int>::max();
+            for (unsigned i = 0; i < c->nX; ++i) {
+                const short b = c->v[i];
+                m = std::min(m, (int)start_times[b] + (int)RCPSPex.activities[b].duration);
+            }
+            for (size_t i = c->nX; i < c->v.size(); ++i) {
+                const short a = c->v[i];
+                if ((int)start_times[a] < m) { start_times[a] = (short)m; changed = true; }
+            }
+        }
+        if (!changed) return true;
+    }
+}
+
+template<short N>
+bool RCPSPState_CBS<N>::settle_rel(short parent_makespan) {
+    if (!propagate_rel()) { ++g_rel_infeasible; return false; }
+    if (start_times[g_sink_id] != parent_makespan) lw_n = 0;      // RCPSP_CBS_LEARN: the delay was not free after all
+    return true;
+}
+
+// Add the condition (X, M) to a child that the plain constructor has already delayed, and settle its schedule.
+template<short N>
+bool RCPSPState_CBS<N>::attach_rel(std::vector<short> X, std::vector<short> M, short parent_makespan) {
+    std::sort(X.begin(), X.end()); std::sort(M.begin(), M.end());
+    auto c = std::make_shared<CbsRel>();
+    c->nX = (unsigned short)X.size();
+    uint64_t h = 1469598103934665603ULL;
+    auto mix = [&h](uint64_t x) { h ^= x + 0x9e3779b97f4a7c15ULL; h *= 1099511628211ULL; h ^= h >> 29; };
+    for (short b : X) mix((uint64_t)(uint16_t)b);
+    mix(0xffffULL);
+    for (short a : M) mix((uint64_t)(uint16_t)a);
+    c->h = h;
+    c->v = std::move(X); c->v.insert(c->v.end(), M.begin(), M.end());
+    c->up = rel;
+    rel = std::move(c);
+    rel_sig += rel->h * 0x9e3779b97f4a7c15ULL + 0x632be59bd9b4e019ULL;   // a sum: independent of the order the conditions were added in
+    ++rel_n;
+    if ((long)rel_n > g_rel_maxlen) g_rel_maxlen = rel_n;
+    return settle_rel(parent_makespan);
+}
+
 template<short N>
 void RCPSPState_CBS<N>::propagate(short activityId) {
     for (short succ : downstream[activityId]) {
@@ -4747,6 +5007,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
     tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
     f_floor = prev.f_floor;
@@ -4785,6 +5046,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
 
     start_times[delayedActivity] = new_start;
     propagate(delayedActivity);
+    lw_note(prev, &delayedActivity, 1);   // RCPSP_CBS_LEARN
 
     // Warm-start ordering key: this child delays `delayedActivity`, so key it by
     // that activity's inflated-schedule start (RCPSP_WARMSTART; 0 when off).
@@ -4876,6 +5138,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
     tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
     f_floor = prev.f_floor;
@@ -4890,6 +5153,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
 // std::cout<<mda_activities.size()<<std::endl;
     start_times = prev.start_times;
     added_precedences = prev.added_precedences;
+    rel = prev.rel; rel_sig = prev.rel_sig; rel_n = prev.rel_n;   // RCPSP_CBS_DELAY: the parent's remembered delays; the caller settles the schedule (attach_rel / settle_rel)
 
     // Build background = conflict members NOT in the MDA set (their schedules stay fixed)
     std::vector<short> bg;
@@ -5039,6 +5303,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     } else {
         propagate_with_strong_form_0();
     }
+    lw_note(prev, mda_activities.data(), mda_activities.size());   // RCPSP_CBS_LEARN
 
 
     // if (start_times[25] > 53 && prev.start_times[25] <= 53) {
@@ -5190,6 +5455,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short 
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
     tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
     f_floor = prev.f_floor;
@@ -5212,6 +5478,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short 
     } else {
         propagate_with_strong_form_0(); // full pass with all strong constraints
     }
+    lw_note(prev, &to, 1);   // RCPSP_CBS_LEARN
 
     // Warm-start ordering key: this child enforces from->to, i.e. delays `to`.
     if (g_use_warmstart && !g_warmstart_start.empty())
@@ -5254,6 +5521,34 @@ bool RCPSPState_CBS<N>::left_shift_prunable() const {
                 (short)(start_times[d] + RCPSPex.activities[d].duration));
         }
         if (s <= earliest) continue;                  // no idle gap
+
+        // RCPSP_LEFTSHIFT=2 (Globals.h): any earlier start. i fits at tau if every resource it uses has room for it
+        // there. It can start earlier iff it fits at s-1 (a one-unit shift), or some stretch of `dur` consecutive
+        // time units inside [earliest, s) fits it entirely (it moves wholly in front of what blocks it).
+        if (g_leftshift_global) {
+            int run = 0; bool last_ok = false;
+            for (short tau = earliest; tau < s; ++tau) {
+                bool fits = true;
+                for (int r = 0; r < (int)resource_info.size() && fits; r++) {
+                    const ResourceInfo& res = resource_info[r];
+                    auto it = res.demand_lookup.find((short)i);
+                    if (it == res.demand_lookup.end() || it->second == 0) continue;
+                    short usage = 0;
+                    for (int j = 0; j < (int)res.activity_indices.size(); j++) {
+                        short a = res.activity_indices[j];
+                        if ((int)a == i) continue;
+                        short sa = start_times[a];
+                        if (sa <= tau && sa + RCPSPex.activities[a].duration > tau) usage += res.demands[j];
+                    }
+                    if (usage + it->second > res.capacity) fits = false;
+                }
+                run = fits ? run + 1 : 0;
+                last_ok = fits;
+                if (run >= (int)dur) return true;
+            }
+            if (last_ok) return true;
+            continue;
+        }
 
         // one-unit shift feasible? need spare capacity at time s-1 on every
         // resource i uses. Usage at s-1 only decreases in descendants (starts

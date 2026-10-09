@@ -124,6 +124,9 @@ struct AStarCompareWithF<RCPSPState_CBS<N>> {
                     case 'c': a = i1.data.tb_nconf;  b = i2.data.tb_nconf;  break;
                     case 'o': a = i1.data.tb_over;   b = i2.data.tb_over;   break;
                     case 'n': a = (long)i1.data.tb_seq; b = (long)i2.data.tb_seq; break;
+                    case 'x': a = i1.data.tb_x;      b = i2.data.tb_x;      break;
+                    case 'k': a = i1.data.tb_k;      b = i2.data.tb_k;      break;
+                    case 'm': a = i1.data.tb_m;      b = i2.data.tb_m;      break;
                     default:  continue;
                 }
                 if (a != b) return (c >= 'A' && c <= 'Z') ? a < b : a > b;

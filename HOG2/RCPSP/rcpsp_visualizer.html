@@ -142,6 +142,7 @@
     <span class="seg-group">
       <button class="btn seg" data-tpl="t1">Template 1</button>
       <button class="btn seg" data-tpl="t2">Template 2</button>
+      <button class="btn seg" data-tpl="t3">Template 3</button>
     </span>
     <span class="divider"></span>
     <button class="btn primary" id="btn-sgs">Reset to SGS schedule</button>
@@ -208,6 +209,21 @@ const TEMPLATES = {
       {id:'G', dur:2, dem:{R1:1, R2:3}, preds:['D','E','F']},
     ],
   },
+  t3: {
+    name: 'Template 3 · pasted instance',
+    blurb: 'The 6-activity, 4-resource instance you supplied. Capacities were not given, so each resource defaults to its tightest feasible value — R1 = 2 (x alone needs 2) and R2 = R3 = R4 = 1 — adjust any with the steppers. R1 is the only shared resource: y, x and z all draw on it (1 + 2 + 1), so under cap 2 they cannot all overlap. The makespan is dominated by the two long tails, x′ (25, after p→x) and y′ (27, after y). Opens as a serial-SGS schedule; switch to CPM earliest-start to see the raw R1 contention.',
+    defaultMode: 'sgs',
+    horizon: 40,
+    resources: [ {id:'R1', cap:2}, {id:'R2', cap:1}, {id:'R3', cap:1}, {id:'R4', cap:1} ],
+    acts: [
+      {id:'p',  dur:2,  dem:{R4:1}, preds:[]},
+      {id:'x',  dur:5,  dem:{R1:2}, preds:['p']},
+      {id:'x′', dur:25, dem:{R2:1}, preds:['x']},
+      {id:'z',  dur:5,  dem:{R1:1}, preds:['p']},
+      {id:'y',  dur:5,  dem:{R1:1}, preds:[]},
+      {id:'y′', dur:27, dem:{R3:1}, preds:['y']},
+    ],
+  },
 };
 
 let RESOURCES, ACTS, byId, EDGES;
@@ -216,6 +232,7 @@ let currentTpl = 't1';
 function loadTemplate(key){
   currentTpl = key;
   const t = TEMPLATES[key];
+  TIME_MAX = t.horizon || 26;
   RESOURCES = t.resources.map(r=>({...r}));
   ACTS = t.acts.map((a,i)=>({...a, dem:{...a.dem}, preds:[...a.preds], color:PALETTE[i%PALETTE.length]}));
   byId = Object.fromEntries(ACTS.map(a=>[a.id,a]));
@@ -250,7 +267,7 @@ function renderCapControls(){
   }));
 }
 
-const TIME_MAX = 26;               // fixed horizon so dragging never rescales the axis
+let TIME_MAX = 26;                 // horizon (set per template); fixed during a drag so the axis never rescales
 let starts = {};                   // id -> start time (integer)
 let selected = new Set();          // ids currently multi-selected
 let cascade = false;               // push downstream successors forward to keep precedence
@@ -404,8 +421,9 @@ function render(){
     const y = TOP + i*ROWH;
     const midY = y + ROWH/2;
     parts.push(`<line x1="${LEFT}" y1="${y+ROWH}" x2="${W-RIGHT}" y2="${y+ROWH}" class="row-sep"/>`);
-    // label: id + duration + per-resource demand
-    const demTxt = RESOURCES.map(r=>`${r.id}·${a.dem[r.id]||0}`).join('  ');
+    // label: id + duration + per-resource demand (only resources actually used)
+    const used = RESOURCES.filter(r=>a.dem[r.id]);
+    const demTxt = used.length ? used.map(r=>`${r.id}·${a.dem[r.id]}`).join('  ') : '—';
     parts.push(`<text x="${LEFT-12}" y="${midY-2}" text-anchor="end" class="act-label">${esc(a.id)}</text>`);
     parts.push(`<text x="${LEFT-12}" y="${midY+11}" text-anchor="end" class="act-sub">d${a.dur}  ${demTxt}</text>`);
   });
@@ -461,7 +479,7 @@ function render(){
     const w = Math.max(a.dur*L.ppu, 2);
     const y = barTop(i);
     const viol = A.violActs.has(a.id) ? ' viol' : '';
-    const demTip = RESOURCES.map(r=>`${r.id} ${a.dem[r.id]||0}`).join(', ');
+    const demTip = RESOURCES.filter(r=>a.dem[r.id]).map(r=>`${r.id} ${a.dem[r.id]}`).join(', ') || 'none';
     parts.push(`<rect class="bar-rect${viol}" data-id="${a.id}" x="${x}" y="${y}" width="${w}" height="${barH}" rx="4" fill="${a.color}"><title>${esc(a.id)} — dur ${a.dur}, demand ${demTip}; start ${starts[a.id]} → finish ${finish(a.id)}</title></rect>`);
     parts.push(`<text class="bar-label" x="${x+w/2}" y="${y+barH/2+4}" text-anchor="middle">${esc(a.id)}</text>`);
   });
@@ -588,5 +606,5 @@ let rt=null;
 window.addEventListener('resize', ()=>{ clearTimeout(rt); rt=setTimeout(render, 120); });
 
 // init
-loadTemplate('t1');
+loadTemplate('t3');
 </script>

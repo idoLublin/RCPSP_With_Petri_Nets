@@ -66,6 +66,7 @@ mutable short h = 0;
 #include <vector>
 #include <array>
 #include <bitset>
+#include <memory>
 #include <utility> // for std::pair
 
 
@@ -325,6 +326,15 @@ public:
 inline size_t CONFLICT_SIZE = 32; // set this before creating any object
 
 
+// RCPSP_CBS_DELAY (Globals.h): one remembered delay. Every activity of M starts no earlier than the earliest finish
+// among X. A precedence arc u -> v is X = {u}, M = {v}. Immutable; shared by a node and its descendants (newest first).
+struct CbsRel {
+    std::vector<short> v;                 // X (the first nX entries, sorted), then M (sorted)
+    unsigned short nX = 0;
+    uint64_t h = 0;                       // hash of (X, M)
+    std::shared_ptr<const CbsRel> up;     // the older conditions
+};
+
 template<short N>
 class RCPSPState_CBS {
 public:
@@ -355,6 +365,15 @@ public:
      std::vector<std::pair<short,short>> added_precedences={}; // accumulated from root
      mutable  bool is_size2_conflict = false;
 
+     // RCPSP_CBS_DELAY: the remembered delays of this node (null when the flag is 0). rel_sig / rel_n identify the
+     // SET of conditions (the same set reached in another order gives the same values) and are part of the identity.
+     std::shared_ptr<const CbsRel> rel;
+     uint64_t rel_sig = 0;
+     unsigned short rel_n = 0;
+     bool propagate_rel();                                                             // least schedule satisfying everything; false = none
+     bool settle_rel(short parent_makespan);                                           // re-settle a child that adds no condition
+     bool attach_rel(std::vector<short> X, std::vector<short> M, short parent_makespan);   // add (X, M) and settle
+
      // Warm-start branch-ordering key (RCPSP_WARMSTART=1). Set by the child ctors
      // to the inflated-schedule start time of the activity this child delays;
      // GetSuccessors stable-sorts siblings by it. 0 when warm start is off.
@@ -366,8 +385,20 @@ public:
      // RCPSP_CBS_TBSPEC keys C / O / N. C and O are the PARENT's values until this node is evaluated.
      mutable short tb_nconf = 0;   // conflict events (time point x resource over capacity)
      mutable int   tb_over  = 0;   // total overload over those events
+     // RCPSP_CBS_TBSPEC keys X / K / M: the branching conflict's excess demand, size and number of MDAs.
+     mutable short tb_x = 0, tb_m = 0;
+     mutable unsigned char tb_k = 0;
      unsigned      tb_seq   = 0;   // creation order within the instance
      short f_floor   = 0;     // RCPSP_CBS_PATHMAX: the parent's final f (integral makespan lower bound)
+     // RCPSP_CBS_LEARN: the activities this child delayed, kept only when the delay left the makespan unchanged
+     // (a free MDA). HCost credits them once the child's f is known. Never part of the identity (== / hash).
+     unsigned char lw_n = 0;
+     std::array<unsigned char, 3> lw_act{};
+     void lw_note(const RCPSPState_CBS& prev, const short* acts, size_t n) {
+         if (!g_cbs_learn || start_times[g_sink_id] != prev.start_times[g_sink_id]) return;
+         for (size_t i = 0; i < n && lw_n < 3; ++i)
+             if (acts[i] >= 0 && acts[i] < 128) lw_act[lw_n++] = (unsigned char)acts[i];
+     }
      // "feasible until": exact once evaluated (conflict-free => +inf), else the inherited lower bound
      short tb_key() const {
          if (h_cached) return found_conflict ? std::max(tb_tfirst, t_first) : (short)32000;
@@ -433,6 +464,7 @@ public:
     bool operator==(const RCPSPState_CBS& other) const {
         // if (added_precedences != other.added_precedences) return false;
         if (start_times != other.start_times) return false;
+        if (rel_sig != other.rel_sig || rel_n != other.rel_n) return false;   // RCPSP_CBS_DELAY: same schedule, other conditions = another node
 
         return true;
     }

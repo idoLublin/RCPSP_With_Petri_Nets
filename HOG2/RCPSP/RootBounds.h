@@ -184,17 +184,30 @@ inline Inst build() {
 inline long PropIters() { static const long v = envNum("RCPSP_PROP_ITERS", 60); return v; }
 inline long& propCalls()  { static thread_local long v = 0; return v; }
 inline long& propRounds() { static thread_local long v = 0; return v; }
-inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls) {
+// RCPSP_PROP_FAST (default 0): faster code for the same results - here the time-table step, and in RCPSPState.cpp
+// the earliest-conflict scan (compute_first_conflict). 1 = on, 2 = run the original and the fast code on every
+// call and abort on any difference (debug). RCPSPState.cpp also uses it for the linear search in compute_mda_cost
+// and for the sorts of the full conflict scan in compute_h_and_RVS. The fast step computes exactly the same windows: a time unit t blocks activity
+// i on resource k iff prof[k][t] > cap[k] - dem[k][i] and t lies outside i's own compulsory part (inside it the
+// test would read prof[k][t] > cap[k], which the overload check has just excluded). So (a) a resource whose
+// largest profile value is <= cap - dem cannot block i anywhere, (b) an activity with no such resource keeps its
+// window, and (c) for the others "blocked" is evaluated only at the time units the two scans below actually read
+// (usually one duration at the earliest start and one at the latest), and remembered, instead of for the whole
+// window. Every value read is the value the original would have stored, so the scans behave identically.
+inline long PropFast() { static const long v = envNum("RCPSP_PROP_FAST", 0); return v; }
+inline bool propagateImpl(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls, const bool fast, const bool count) {
     static thread_local std::vector<std::vector<int>> prof;
     static thread_local std::vector<char> bad;
+    static thread_local std::vector<int> maxprof;               // fast: per resource, largest profile value
     const int H = D + 2;
     if ((int)prof.size() < I.R) prof.resize(I.R);
     for (int k = 0; k < I.R; ++k) if ((int)prof[k].size() < H) prof[k].resize(H);
     if ((int)bad.size() < H) bad.resize(H);
-    ++propCalls();
+    if (fast && (int)maxprof.size() < I.R) maxprof.resize(I.R);
+    if (count) ++propCalls();
     const int maxIter = (int)PropIters();
     for (int iter = 0; iter < maxIter; ++iter) {
-        ++propRounds();
+        if (count) ++propRounds();
         bool changed = false;
         for (int i : I.topo) {
             int v = es[i];
@@ -224,28 +237,64 @@ inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<in
             }
         }
         for (int k = 0; k < I.R; ++k) std::fill(prof[k].begin(), prof[k].begin() + H, 0);
+        int cpLo = H, cpHi = 0;                      // fast: the time units that hold any compulsory part lie in [cpLo, cpHi)
         for (int i = 0; i < I.n; ++i) {
             if (I.p[i] == 0) continue;
             const int a = ls[i], b = es[i] + I.p[i];
-            if (a < b) for (int k : I.resOf[i]) for (int t = a; t < b; ++t) prof[k][t] += I.dem[k][i];
+            if (a < b) {
+                for (int k : I.resOf[i]) for (int t = a; t < b; ++t) prof[k][t] += I.dem[k][i];
+                if (!I.resOf[i].empty()) { if (a < cpLo) cpLo = a; if (b > cpHi) cpHi = b; }
+            }
         }
-        for (int k = 0; k < I.R; ++k) for (int t = 0; t <= D; ++t) if (prof[k][t] > I.cap[k]) return false;
+        if (!fast) {
+            for (int k = 0; k < I.R; ++k) for (int t = 0; t <= D; ++t) if (prof[k][t] > I.cap[k]) return false;
+        } else {                                    // the same overload test, and the largest value on the way
+            for (int k = 0; k < I.R; ++k) {
+                const int* pk = prof[k].data(); const int c = I.cap[k]; int mx = 0;
+                for (int t = cpLo; t < cpHi; ++t) { const int v = pk[t]; if (v > c) return false; if (v > mx) mx = v; }   // 0 elsewhere
+                maxprof[k] = mx;
+            }
+        }
         for (int i = 0; i < I.n; ++i) {
             if (I.p[i] == 0 || I.resOf[i].empty()) continue;
             const int a = ls[i], b = es[i] + I.p[i];
             const int lo = es[i], hi = ls[i] + I.p[i];
-            for (int t = lo; t < hi; ++t) {
-                bool bd = false;
+            bool dense = !fast;
+            const int* blkProf[8]; int thr[8], nb = 0;
+            if (fast) {
                 for (int k : I.resOf[i]) {
-                    int other = prof[k][t] - ((a < b && t >= a && t < b) ? I.dem[k][i] : 0);
-                    if (other + I.dem[k][i] > I.cap[k]) { bd = true; break; }
+                    const int th = I.cap[k] - I.dem[k][i];
+                    if (th < 0 || nb == 8) { dense = true; break; }      // demand above capacity / too many resources: original test
+                    if (maxprof[k] > th) { blkProf[nb] = prof[k].data(); thr[nb] = th; ++nb; }
                 }
-                bad[t] = bd;
+                if (!dense) {
+                    if (nb == 0) continue;                               // nothing can block it: its window stays as it is
+                    std::fill(bad.begin() + lo, bad.begin() + hi, (char)2);   // 2 = not evaluated yet
+                }
+            }
+            // blocked(u), as the original stores it: some resource has prof > cap - dem at u, outside i's own compulsory part
+            auto isBad = [&](int u) -> bool {
+                char& c = bad[u];
+                if (c == 2) {
+                    c = 0;
+                    if (u < a || u >= b) for (int q = 0; q < nb; ++q) if (blkProf[q][u] > thr[q]) { c = 1; break; }
+                }
+                return c != 0;
+            };
+            if (dense) {
+                for (int t = lo; t < hi; ++t) {
+                    bool bd = false;
+                    for (int k : I.resOf[i]) {
+                        int other = prof[k][t] - ((a < b && t >= a && t < b) ? I.dem[k][i] : 0);
+                        if (other + I.dem[k][i] > I.cap[k]) { bd = true; break; }
+                    }
+                    bad[t] = bd;
+                }
             }
             int t = es[i];
             while (t <= ls[i]) {
                 int last = -1;
-                for (int u = t; u < t + I.p[i]; ++u) if (bad[u]) last = u;
+                for (int u = t; u < t + I.p[i]; ++u) if (isBad(u)) last = u;
                 if (last >= 0) t = last + 1; else break;
             }
             if (t > ls[i]) return false;
@@ -253,7 +302,7 @@ inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<in
             t = ls[i];
             while (t >= es[i]) {
                 int first = -1;
-                for (int u = t; u < t + I.p[i]; ++u) if (bad[u]) { first = u; break; }
+                for (int u = t; u < t + I.p[i]; ++u) if (isBad(u)) { first = u; break; }
                 if (first >= 0) t = first - I.p[i]; else break;
             }
             if (t < es[i]) return false;
@@ -262,6 +311,22 @@ inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<in
         if (!changed) break;
     }
     return true;
+}
+inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls) {
+    const long mode = PropFast();
+    if (mode == 0) return propagateImpl(I, D, es, ls, false, true);
+    if (mode == 1) return propagateImpl(I, D, es, ls, true, true);
+    static thread_local std::vector<int> e2, l2;                // 2: differential check
+    e2 = es; l2 = ls;
+    const bool r1 = propagateImpl(I, D, es, ls, false, true);
+    const bool r2 = propagateImpl(I, D, e2, l2, true, false);
+    if (r1 != r2 || es != e2 || ls != l2) {
+        std::cerr << "RCPSP_PROP_FAST MISMATCH at D=" << D << ": original " << r1 << " fast " << r2 << std::endl;
+        for (int i = 0; i < I.n; ++i) if (es[i] != e2[i] || ls[i] != l2[i])
+            std::cerr << "  act " << i << ": window [" << es[i] << "," << ls[i] << "] vs fast [" << e2[i] << "," << l2[i] << "]" << std::endl;
+        std::abort();
+    }
+    return r1;
 }
 
 // energetic-reasoning feasibility check on intervals [t1, t2); false = overload (D refuted)

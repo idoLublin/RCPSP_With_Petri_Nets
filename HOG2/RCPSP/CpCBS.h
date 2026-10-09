@@ -185,7 +185,9 @@ template <class Arr>
 inline bool refuted(const Arr& start, int D) {
     const rootb::Inst& I = ctx().I;
     Nogood g;
-    if (tt0(I, start, D, NGOn() ? &g : nullptr)) { if (NGOn()) store(g); return true; }
+    // RCPSP_PROP_FAST=1 without nogoods: skip the pre-check. It refutes D exactly when the first round of propagate
+    // does (same windows [start, D - tail], same compulsory parts, same overload test), so the answer is unchanged.
+    if (!(rootb::PropFast() == 1 && !NGOn()) && tt0(I, start, D, NGOn() ? &g : nullptr)) { if (NGOn()) store(g); return true; }
     if (!TTFull()) return false;
     // reused across calls: with RCPSP_CBS_TT_STEPS=16 this runs up to 17 times per node
     std::vector<int>& es = esBuf();

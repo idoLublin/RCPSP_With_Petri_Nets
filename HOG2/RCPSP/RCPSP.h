@@ -2080,7 +2080,7 @@ inline double singleResViaTT2(const RCPSPState_TT2& node) {
 inline double RCPSP_TT2::HCost(const RCPSPState_TT2 &state1, const RCPSPState_TT2 &state2) const {
   ++g_prof_h_calls_all;
   if (state1.hKnown) { ++g_prof_h_known; return state1.h; }   // fused successor cache supplied h at reconstruction => no lookup, no recompute
-  if (state1.isDeltaZero && !g_tt2_hfresh){//||!state1.isCriticalInActive) {
+  if (state1.isDeltaZero && !g_tt2_hfresh && !(g_tt2_hdz_fix && state1.predessesor_h <= 0)){//||!state1.isCriticalInActive) {   // HDZFIX: a 0 here is an uncomputed parent h (Globals.h)
     ++g_prof_h_deltazero;
     state1.h = state1.predessesor_h;
     return state1.h;

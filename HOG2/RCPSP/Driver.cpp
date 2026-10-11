@@ -1084,6 +1084,7 @@ void solveRCPSP_TT2_HDA(int group, int exam, const std::string& filename, const 
         std::exit(1);
     }
     const int N = hdaThreads();
+    g_tt2_hdz_fix = true;   // HDA* re-opens and lowers g far more often than serial A*; see Globals.h
     std::cout << "started solving TT2-HDA (" << N << " threads): " << group << ":" << exam << std::endl;
     count = 0; LB = 0;
     getPetri(petri, group, exam, problemType);
@@ -5624,6 +5625,7 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_TT2_BATCH")) g_tt2_batch     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_DR4"))   g_tt2_dr4       = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_KILL"))  g_tt2_kill      = std::atoi(e);        // dead-node count (1) / skip (2), Globals.h
+    if (const char* e = std::getenv("RCPSP_TT2_HDZFIX")) g_tt2_hdz_fix = std::atoi(e) != 0; // zero-delay h shortcut fix, Globals.h
     if (const char* e = std::getenv("RCPSP_TT2_DUPPROBE")) g_tt2_dupprobe = std::atoi(e) != 0; // A* duplicate-lookup census, Globals.h
     if (const char* e = std::getenv("RCPSP_TT2_WAIT"))  g_tt2_wait      = std::atoi(e) != 0;   // explicit-wait model (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_WAITJUMP")) g_tt2_waitjump = std::atoi(e) != 0; // pass-through wait jumps (Globals.h)

@@ -129,6 +129,7 @@ inline void Inject(WorkerAStar& astar, RCPSP_TT2_HDA& env, const RCPSPState_TT2&
     auto& n = oc.Lookup(id);
     if (fless((double)s.g, n.g)) {
         n.g = s.g; n.f = n.g + n.h; n.data = s;
+        n.data.h = (short)n.h;                    // s.h was never computed here; children inherit data.h (zero-delay shortcut)
         if (loc == kOpenList) oc.KeyChanged(id); else oc.Reopen(id);
     }
 }

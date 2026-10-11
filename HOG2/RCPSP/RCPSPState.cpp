@@ -6746,6 +6746,144 @@ else {
 
 }
 
+// ── RCPSP_TT2_COMPACT: the token lists as a function of the compact part ─────────────────────────
+// In the forward model (the root, the firing constructor with Direction = 1, the wait constructor) the two token
+// lists of a state follow from its finished set and its active list:
+//  * resource place r holds, ready now, its root amount minus what the active activities hold, plus one token per
+//    active activity that returns to r (amount = the return arc, delay = the activity's remaining time); the pool
+//    is time-ordered with one entry per delay (tt2CanonicalPools);
+//  * activity place p (at most one producing and one consuming transition) is empty once its consumer has started;
+//    before that it holds the producer's token - delay 0 if the producer has finished, the producer's remaining
+//    time if it is active - or the root marking if the producer has not started.
+// This rests on three facts. A firing takes its demand from tokens that are ready: it is fired at the delay that
+// getAvailableTransitionIndices_TT2 computed. Every transition returns to a resource exactly what it takes, and
+// the producer of a place is a predecessor of its consumer: tt2CompactPrepare checks the loaded net for these two
+// and refuses it otherwise.
+struct TT2CompactTab {
+    std::array<std::vector<std::pair<short, short>>, 4> rootRes;
+    std::vector<std::pair<short, short>> rootAct;
+    std::array<int, 4> total{};                                   // amount in each resource place at the root
+    std::vector<std::vector<std::pair<short, short>>> resOut;     // per transition id: (resource place, amount returned)
+    std::vector<short> prod, prodW, cons;                         // per activity place: producer, its arc weight, consumer (0 = none)
+};
+static TT2CompactTab g_tt2_ctab;
+
+bool tt2CompactPrepare(const RCPSPState_TT2& root) {
+    TT2CompactTab& T = g_tt2_ctab;
+    T = TT2CompactTab{};
+    const auto no = [](const std::string& why) {
+        std::cout << "RCPSP_TT2_COMPACT: off for this instance (" << why << ")" << std::endl;
+        return false;
+    };
+    const int NT = (int)petri.Transitions.size();
+    const int NA = (int)root.activity_nodes.size();
+    if (NT < 1 || NT > 127) return no("more than 127 transitions");
+    if (NA < 1 || NA + 4 != (int)petri.places.size()) return no("the activity places are not places 4 and up");
+    if (root.finishedActivitiys.any() || !root.activeTransitionIndices.empty()) return no("the root has started activities");
+    T.rootRes = root.resource_nodes;
+    T.rootAct = root.activity_nodes;
+    for (int r = 0; r < 4; ++r) {
+        const auto& v = root.resource_nodes[r];
+        if (v.size() > 1 || (v.size() == 1 && (v[0].first <= 0 || v[0].second != 0)))
+            return no("root pool of resource place " + std::to_string(r) + " is not one ready token");
+        T.total[r] = v.empty() ? 0 : v[0].first;
+    }
+    T.resOut.assign(NT + 1, {});
+    T.prod.assign(NA, 0); T.prodW.assign(NA, 0); T.cons.assign(NA, 0);
+    for (int t = 1; t <= NT; ++t) {
+        const Transition& tr = petri.Transitions[t - 1];
+        std::array<int, 4> out{}, dem{};
+        for (const auto& [pid, w] : tr.arcs_out_indices) {
+            if (w <= 0 || pid < 0 || pid - 4 >= NA) return no("output arc of transition " + std::to_string(t));
+            if (pid < 4) { out[pid] += w; T.resOut[t].push_back({pid, w}); continue; }
+            if (T.prod[pid - 4]) return no("place " + std::to_string(pid) + " has two producers");
+            T.prod[pid - 4] = (short)t; T.prodW[pid - 4] = w;
+        }
+        for (const auto& [pid, w] : tr.arcs_in_indices) {
+            if (pid < 4) continue;                                // resources are taken through resource_demands
+            if (pid - 4 >= NA) return no("input arc of transition " + std::to_string(t));
+            if (T.cons[pid - 4]) return no("place " + std::to_string(pid) + " has two consumers");
+            T.cons[pid - 4] = (short)t;
+        }
+        for (const auto& [resName, d] : RCPSPex.activities[t - 1].resource_demands) {
+            if (d <= 0) continue;
+            const int pid = petri.place_name_to_id.at(resName);
+            if (pid < 0 || pid >= 4) return no("a resource place id above 3");
+            dem[pid] += d;
+        }
+        if (dem != out) return no("transition " + std::to_string(t) + " does not return what it takes");
+    }
+    for (int i = 0; i < NA; ++i) {
+        if (!T.prod[i]) continue;
+        if (T.rootAct[i] != std::pair<short, short>(0, 0)) return no("place " + std::to_string(i + 4) + " is produced and marked at the root");
+        if (!T.cons[i]) continue;
+        const auto& preds = RCPSPex.backword_dependencies[T.cons[i] - 1];
+        if (std::find(preds.begin(), preds.end(), T.prod[i]) == preds.end())
+            return no("the producer of place " + std::to_string(i + 4) + " is not a predecessor of its consumer");
+    }
+    return true;
+}
+
+void tt2CompactRebuild(RCPSPState_TT2& s) {
+    const TT2CompactTab& T = g_tt2_ctab;
+    std::array<short, 128> rem; rem.fill(-1);                     // remaining time of the active activities
+    for (const auto& [id, r] : s.activeTransitionIndices) rem[id] = r;
+    const int NA = (int)T.rootAct.size();
+    s.activity_nodes.resize(NA);
+    for (int i = 0; i < NA; ++i) {
+        const short c = T.cons[i], p = T.prod[i];
+        if (c && (s.finishedActivitiys[c] || rem[c] != -1)) s.activity_nodes[i] = {0, 0};                // taken by its consumer
+        else if (p && s.finishedActivitiys[p])              s.activity_nodes[i] = {T.prodW[i], 0};       // produced, ready
+        else if (p && rem[p] != -1)                         s.activity_nodes[i] = {T.prodW[i], rem[p]};  // arrives when the producer ends
+        else                                                s.activity_nodes[i] = T.rootAct[i];
+    }
+    std::array<int, 4> held{};
+    for (auto& v : s.resource_nodes) v.clear();
+    for (const auto& [id, r] : s.activeTransitionIndices)
+        for (const auto& [pid, w] : T.resOut[id]) { held[pid] += w; s.resource_nodes[pid].emplace_back(w, r); }
+    for (int r = 0; r < 4; ++r) {
+        auto& v = s.resource_nodes[r];
+        const int ready = T.total[r] - held[r];
+        if (ready < 0) {
+            std::cerr << "[TT2-COMPACT] resource place " << r << ": the active activities hold " << held[r] << " of " << T.total[r] << std::endl;
+            std::exit(7);
+        }
+        std::sort(v.begin(), v.end(), [](const std::pair<short, short>& a, const std::pair<short, short>& b) { return a.second < b.second; });
+        size_t n = 0;                                             // one entry per delay
+        for (size_t i = 0; i < v.size(); ++i) {
+            if (n && v[n - 1].second == v[i].second) v[n - 1].first += v[i].first;
+            else v[n++] = v[i];
+        }
+        v.resize(n);
+        if (ready > 0) v.insert(v.begin(), std::pair<short, short>((short)ready, (short)0));
+    }
+}
+
+void tt2CompactCheck(const RCPSPState_TT2& s, const char* where) {
+    RCPSPState_TT2 r(s);
+    tt2CompactRebuild(r);
+    ++g_tt2_compact_checked;
+    if (r.activity_nodes == s.activity_nodes && r.resource_nodes == s.resource_nodes) return;
+    const auto dump = [](const char* name, const std::vector<std::pair<short, short>>& v) {
+        std::cerr << "  " << name << ":";
+        for (const auto& p : v) std::cerr << " " << p.first << "^" << p.second;
+        std::cerr << std::endl;
+    };
+    std::cerr << "[TT2-COMPACT] rebuilt token lists differ from the kept ones (" << where << "), g=" << s.g
+              << " last=" << s.lastTransitionId << " waitSlack=" << s.waitSlack << std::endl << "  finished:";
+    for (int i = 1; i <= (int)petri.Transitions.size(); ++i) if (s.finishedActivitiys[i]) std::cerr << " " << i;
+    std::cerr << std::endl;
+    dump("active (id^remaining)", s.activeTransitionIndices);
+    dump("activity kept   ", s.activity_nodes);
+    dump("activity rebuilt", r.activity_nodes);
+    for (int k = 0; k < 4; ++k) if (r.resource_nodes[k] != s.resource_nodes[k]) {
+        std::cerr << "  resource place " << k << std::endl;
+        dump("kept   ", s.resource_nodes[k]);
+        dump("rebuilt", r.resource_nodes[k]);
+    }
+    std::exit(7);
+}
+
 short getForwardHcost_TT2(
     const std::vector<short>& unstartedTransitions,
     const std::vector<std::pair<short, short>>& activity_tokens,

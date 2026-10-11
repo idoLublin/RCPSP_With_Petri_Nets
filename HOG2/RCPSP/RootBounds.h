@@ -312,10 +312,151 @@ inline bool propagateImpl(const Inst& I, int D, std::vector<int>& es, std::vecto
     }
     return true;
 }
+// RCPSP_PROP_INC (default 0; acts only with RCPSP_PROP_FAST=1): the same fixpoint, computed incrementally.
+// Inside one call the windows only shrink (es grows, ls falls), so a compulsory part [ls, es + p) only grows. Hence
+//  (a) the profile is not rebuilt in every round: the time units that became compulsory since the last round are
+//      added to it, which gives the values a rebuild would give;
+//  (b) the overload test and the per-resource maximum look only at those units (the others were tested before and
+//      have not changed);
+//  (c) the time-table step is repeated for an activity only if its window changed since the step was last done for
+//      it, or the profile of one of its resources changed inside its window in this round. Otherwise the step would
+//      read the same values and leave the window as it is: its earliest and latest start were found free of blocked
+//      time units, and "blocked" depends only on the profile inside the window and on the activity's own compulsory
+//      part. (If the step moved the window and the compulsory part grew, the profile changes inside the window in
+//      the next round and the step is repeated.)
+// Windows, result and number of rounds are those of RCPSP_PROP_FAST=1. 1 = on, 2 = also run the RCPSP_PROP_FAST=1
+// code on every call and abort on any difference. Not used with RCPSP_ROOT_PAIR.
+inline long PropInc() { static const long v = envNum("RCPSP_PROP_INC", 0); return v; }
+inline bool propagateInc(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls, const bool count) {
+    static thread_local std::vector<std::vector<int>> prof;
+    static thread_local std::vector<char> bad;
+    static thread_local std::vector<int> maxprof, chgLo, chgHi, fEs, fLs, cpA, cpB;
+    const int H = D + 2, n = I.n, R = I.R;
+    if ((int)prof.size() < R) prof.resize(R);
+    for (int k = 0; k < R; ++k) { if ((int)prof[k].size() < H) prof[k].resize(H); std::fill(prof[k].begin(), prof[k].begin() + H, 0); }
+    if ((int)bad.size() < H) bad.resize(H);
+    maxprof.assign(R, 0); chgLo.assign(R, H); chgHi.assign(R, 0);
+    fEs.assign(n, INT_MIN); fLs.assign(n, INT_MIN);    // window of each activity right after its last time-table step
+    cpA.assign(n, 0); cpB.assign(n, 0);                // compulsory part of each activity that is in the profile (empty if cpA >= cpB)
+    if (count) ++propCalls();
+    const int maxIter = (int)PropIters();
+    for (int iter = 0; iter < maxIter; ++iter) {
+        if (count) ++propRounds();
+        bool changed = false;
+        for (int i : I.topo) {
+            int v = es[i];
+            for (int q : I.preds[i]) v = std::max(v, es[q] + I.p[q]);
+            if (v > es[i]) { es[i] = v; changed = true; }
+        }
+        for (int h = n - 1; h >= 0; --h) {
+            const int i = I.topo[h];
+            int v = std::min(ls[i], D - I.p[i]);
+            for (int s : I.succ[i]) v = std::min(v, ls[s] - I.p[i]);
+            if (v < ls[i]) { ls[i] = v; changed = true; }
+        }
+        for (int i = 0; i < n; ++i) if (es[i] > ls[i] || es[i] < 0) return false;
+        for (int k = 0; k < R; ++k) { chgLo[k] = H; chgHi[k] = 0; }
+        for (int i = 0; i < n; ++i) {                  // (a) add the new compulsory time units
+            if (I.p[i] == 0) continue;
+            const int a = ls[i], b = es[i] + I.p[i];
+            if (a >= b) continue;
+            const int oa = cpA[i], ob = cpB[i];
+            const bool had = oa < ob;
+            if (had && a == oa && b == ob) continue;
+            for (int k : I.resOf[i]) {
+                const int d = I.dem[k][i]; int* pk = prof[k].data();
+                if (!had) { for (int t = a; t < b; ++t) pk[t] += d; }
+                else { for (int t = a; t < oa; ++t) pk[t] += d; for (int t = ob; t < b; ++t) pk[t] += d; }
+                const int lo = had ? (a < oa ? a : ob) : a, hi = had ? (ob < b ? b : oa) : b;
+                if (lo < chgLo[k]) chgLo[k] = lo;
+                if (hi > chgHi[k]) chgHi[k] = hi;
+            }
+            cpA[i] = a; cpB[i] = b;
+        }
+        for (int k = 0; k < R; ++k) {                  // (b) overload test and maximum on the changed units
+            const int* pk = prof[k].data(); const int c = I.cap[k]; int mx = maxprof[k];
+            for (int t = chgLo[k]; t < chgHi[k]; ++t) { const int v = pk[t]; if (v > c) return false; if (v > mx) mx = v; }
+            maxprof[k] = mx;
+        }
+        for (int i = 0; i < n; ++i) {
+            if (I.p[i] == 0 || I.resOf[i].empty()) continue;
+            const int a = ls[i], b = es[i] + I.p[i];
+            const int lo = es[i], hi = ls[i] + I.p[i];
+            if (es[i] == fEs[i] && ls[i] == fLs[i]) {  // (c) same window as after its last step: did the profile change inside it?
+                bool touched = false;
+                for (int k : I.resOf[i]) if (chgLo[k] < hi && chgHi[k] > lo) { touched = true; break; }
+                if (!touched) continue;
+            }
+            bool dense = false;
+            const int* blkProf[8]; int thr[8], nb = 0;
+            for (int k : I.resOf[i]) {
+                const int th = I.cap[k] - I.dem[k][i];
+                if (th < 0 || nb == 8) { dense = true; break; }
+                if (maxprof[k] > th) { blkProf[nb] = prof[k].data(); thr[nb] = th; ++nb; }
+            }
+            if (!dense) {
+                if (nb == 0) { fEs[i] = es[i]; fLs[i] = ls[i]; continue; }
+                std::fill(bad.begin() + lo, bad.begin() + hi, (char)2);
+            }
+            auto isBad = [&](int u) -> bool {
+                char& c = bad[u];
+                if (c == 2) {
+                    c = 0;
+                    if (u < a || u >= b) for (int q = 0; q < nb; ++q) if (blkProf[q][u] > thr[q]) { c = 1; break; }
+                }
+                return c != 0;
+            };
+            if (dense) {
+                for (int t = lo; t < hi; ++t) {
+                    bool bd = false;
+                    for (int k : I.resOf[i]) {
+                        int other = prof[k][t] - ((a < b && t >= a && t < b) ? I.dem[k][i] : 0);
+                        if (other + I.dem[k][i] > I.cap[k]) { bd = true; break; }
+                    }
+                    bad[t] = bd;
+                }
+            }
+            int t = es[i];
+            while (t <= ls[i]) {
+                int last = -1;
+                for (int u = t; u < t + I.p[i]; ++u) if (isBad(u)) last = u;
+                if (last >= 0) t = last + 1; else break;
+            }
+            if (t > ls[i]) return false;
+            if (t > es[i]) { es[i] = t; changed = true; }
+            t = ls[i];
+            while (t >= es[i]) {
+                int first = -1;
+                for (int u = t; u < t + I.p[i]; ++u) if (isBad(u)) { first = u; break; }
+                if (first >= 0) t = first - I.p[i]; else break;
+            }
+            if (t < es[i]) return false;
+            if (t < ls[i]) { ls[i] = t; changed = true; }
+            fEs[i] = es[i]; fLs[i] = ls[i];
+        }
+        if (!changed) break;
+    }
+    return true;
+}
 inline bool propagate(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls) {
     const long mode = PropFast();
     if (mode == 0) return propagateImpl(I, D, es, ls, false, true);
-    if (mode == 1) return propagateImpl(I, D, es, ls, true, true);
+    if (mode == 1) {
+        const long inc = (PairOn() && !I.inc.empty()) ? 0 : PropInc();
+        if (inc == 0) return propagateImpl(I, D, es, ls, true, true);
+        if (inc == 1) return propagateInc(I, D, es, ls, true);
+        static thread_local std::vector<int> e3, l3;            // 2: differential check against the RCPSP_PROP_FAST=1 code
+        e3 = es; l3 = ls;
+        const bool r1 = propagateImpl(I, D, es, ls, true, true);
+        const bool r3 = propagateInc(I, D, e3, l3, false);
+        if (r1 != r3 || es != e3 || ls != l3) {
+            std::cerr << "RCPSP_PROP_INC MISMATCH at D=" << D << ": fast " << r1 << " incremental " << r3 << std::endl;
+            for (int i = 0; i < I.n; ++i) if (es[i] != e3[i] || ls[i] != l3[i])
+                std::cerr << "  act " << i << ": window [" << es[i] << "," << ls[i] << "] vs incremental [" << e3[i] << "," << l3[i] << "]" << std::endl;
+            std::abort();
+        }
+        return r1;
+    }
     static thread_local std::vector<int> e2, l2;                // 2: differential check
     e2 = es; l2 = ls;
     const bool r1 = propagateImpl(I, D, es, ls, false, true);

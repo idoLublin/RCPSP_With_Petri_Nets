@@ -1525,6 +1525,8 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
       _succHit = true; ++g_succ_hits;
     }
   }
+  bool preDone = false;   // RCPSP_TT2_PRECHECK: the generated children already passed DR5 (see below)
+  long preCut = 0;        // and this many were pruned before construction
   if (!_succHit) {
   std::chrono::steady_clock::time_point _pa0; if (_prof) _pa0 = std::chrono::steady_clock::now();
   std::vector<short> tempUnstarted;
@@ -1563,6 +1565,41 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
   // Explicit-wait model (RCPSP_TT2_WAIT=1): firings below keep only delta-0 transitions; the wait edge and the DR4
   // horizon are added after them. Sub-solves keep the native model.
   const bool waitModel = g_tt2_wait && !g_in_subsolve;
+
+  // RCPSP_TT2_PRECHECK (Globals.h): the serial and batch firings below test each child against DR5 BEFORE it is
+  // built, and the DR5 loop after generation is skipped for them. A time-advancing child is tested on its DR5
+  // view; a batch subset child is built anyway (its extensions start from it) and tested as built. The view of
+  // "fire t after delay d": g' = g + d; the scheduled set gains t; an active i stays active iff rem_i > d, with
+  // release g + rem_i (the clock advance leaves it unchanged); t becomes active with release g' + p_t if p_t > 0.
+  // The tests run in the order the DR5 loop would run them, so every decision is the same. Off wherever something
+  // between generation and that loop drops, adds or reorders children, and where the prune observer needs the
+  // built state.
+  const bool preDR5 = g_tt2_precheck && g_tt2_dr5 && !g_tt2_hda_worker && !g_orderswap && !_recON && !waitModel
+                      && !g_tt2_dr_prune_observer && TT2DominanceTable::FastOn() && neighbors.empty();
+  TT2DominanceTable* const preTab = preDR5 ? &get_tt2_dominance_table() : nullptr;
+  const TT2DominanceTable::Key preKey = preDR5 ? TT2DominanceTable::MakeKey(nodeID) : TT2DominanceTable::Key{0, 0};
+  auto prePrune = [&](short t, short d) -> bool {          // true: DR5 prunes "fire t after d"; do not build it
+    short ids[129], rels[129];
+    const int g2 = nodeID.g + d, p = RCPSPex.activities[t - 1].duration;
+    int n = 0; bool placed = (p <= 0);
+    for (const auto& [id, rem] : nodeID.activeTransitionIndices) {   // ascending ids, t inserted in place
+      if (!placed && t < id) { ids[n] = t; rels[n] = (short)(g2 + p); ++n; placed = true; }
+      if (rem > d && n < 128) { ids[n] = id; rels[n] = (short)(nodeID.g + rem); ++n; }
+    }
+    if (!placed && n < 128) { ids[n] = t; rels[n] = (short)(g2 + p); ++n; }
+    TT2DominanceTable::Key k = preKey;
+    if (t < 64) k.lo |= 1ULL << t; else k.hi |= 1ULL << (t - 64);
+    if (g_tt2_precheck == 2) {                              // check mode: build the child and compare the view
+      const RCPSPState_TT2 full(nodeID, t, d, 1);
+      bool same = TT2DominanceTable::MakeKey(full) == k && full.g == g2 && (int)full.activeTransitionIndices.size() == n;
+      for (int j = 0; same && j < n; ++j)
+        same = full.activeTransitionIndices[j].first == ids[j] && (short)(full.g + full.activeTransitionIndices[j].second) == rels[j];
+      if (!same) { std::cerr << "[PRECHECK] DR5 view differs: transition " << t << " delay " << d << std::endl; std::exit(7); }
+    }
+    if (!preTab->check_and_insert_raw(k, (short)g2, n, ids, rels, nullptr)) return false;
+    ++preCut; ++g_tt2_precheck_cut;
+    return true;
+  };
 
   // Free-activity immediate firing (RCPSP_TT2_FREEFIRE=1; SUB-SOLVE ONLY). In the
   // single-resource-k relaxation an activity with ZERO demand on the constrained
@@ -1677,6 +1714,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
         }
         if (dr4dominated) { ++g_tt2_dr4_pruned; continue; }
       }
+      if (preDR5 && prePrune(transId, Timedelta)) continue;
       neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta,1));
       if (waitModel) neighbors.back().isDeltaZero = false;   // fresh h on wait-model firings (see the wait block below)
       if (_recON) _recs.push_back({{transId,Timedelta}});
@@ -1705,6 +1743,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
           }
           if (dr4dom) { ++g_tt2_dr4_pruned; continue; }
         }
+        if (preDR5 && prePrune(transId, Timedelta)) continue;
         neighbors.emplace_back(RCPSPState_TT2(nodeID, transId, Timedelta, 1)); // (a)
         if (_recON) _recs.push_back({{transId,Timedelta}});
       } else
@@ -1731,27 +1770,34 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
     // The subset-so-far state is neighbors[curIdx] (nodeID when curIdx < 0): each child is MOVED into neighbors and
     // the recursion reads it back from there, so a batch child is built once instead of built and copied. Direct
     // recursion (no std::function). Same children in the same order as before.
+    // RCPSP_TT2_PRECHECK: a child DR5 prunes stays out of neighbors; its extensions start from `local` instead.
     long emitted = 0;
     std::vector<std::pair<short,short>> recPath;     // only the successor cache reads it: the firings of the subset
-    auto rec = [&](auto& self, int start, int curIdx, std::array<int,4> used) -> void {
+    auto rec = [&](auto& self, int start, int curIdx, const RCPSPState_TT2* local, std::array<int,4> used) -> void {
         for (int i = start; i < (int)A0.size(); i++) {
           if (emitted >= g_tt2_batch_cap) return;   // safety valve (singletons already emitted)
           std::array<int,4> d; demandOf(A0[i], d);
           bool feasible = true;
           for (int r = 0; r < 4; r++) if (used[r] + d[r] > avail0[r]) { feasible = false; break; }
           if (!feasible) continue;
-          RCPSPState_TT2 child(curIdx < 0 ? nodeID : neighbors[curIdx], A0[i], 0, 1);    // fire A0[i] now (τ=0)
+          RCPSPState_TT2 child(local ? *local : curIdx < 0 ? nodeID : neighbors[curIdx], A0[i], 0, 1);    // fire A0[i] now (τ=0)
           if (waitModel) child.isDeltaZero = false;   // fresh h on wait-model firings (see the wait block below)
           std::array<int,4> nu = { used[0]+d[0], used[1]+d[1], used[2]+d[2], used[3]+d[3] };
           if (_recON) { recPath.push_back({(short)A0[i], (short)0}); _recs.push_back(recPath); }
-          neighbors.push_back(std::move(child));
           ++emitted;
-          self(self, i + 1, (int)neighbors.size() - 1, nu);   // extend the subset
+          if (preDR5 && preTab->check_and_insert(child)) {
+            ++preCut; ++g_tt2_precheck_cut;
+            self(self, i + 1, -1, &child, nu);               // extend the subset
+          } else {
+            neighbors.push_back(std::move(child));
+            self(self, i + 1, (int)neighbors.size() - 1, nullptr, nu);   // extend the subset
+          }
           if (_recON) recPath.pop_back();
         }
       };
-    rec(rec, 0, -1, {0,0,0,0});
+    rec(rec, 0, -1, nullptr, {0,0,0,0});
   }
+  preDone = preDR5 && !immFired;   // the forced single firings above were not pre-tested: the DR5 loop handles them
   // ── EXPLICIT-WAIT MODEL (RCPSP_TT2_WAIT=1) ─────────────────────────────────
   // The firings above kept only transitions whose input tokens are all ready NOW (delta 0), so every activity
   // starts from a node standing exactly at its start time. Time advances only through this edge: one unit, while
@@ -1820,7 +1866,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
   }
   }  // end if(!_succHit): generation is skipped entirely on a cache hit
   if (_prof && !_succHit) g_prof_gen_sec += secs_since(_pg0);
-  g_prof_children_raw += (long)neighbors.size();
+  g_prof_children_raw += (long)neighbors.size() + preCut;
 
   // Order-swap dominance (RCPSP_ORDERSWAP=1), TT2 form: drop the non-canonical
   // order of a frozen back-to-back pair whose swap is feasible (Hartmann 1998
@@ -1843,7 +1889,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
   // HDA* workers (g_tt2_hda_worker) skip this: the child may belong to another worker, and DR5 runs
   // against the OWNER's table (HDAStarTT2.h).
   if (_prof && g_tt2_dr5) _pd0 = std::chrono::steady_clock::now();
-  if (g_tt2_dr5 && !g_tt2_hda_worker) {
+  if (g_tt2_dr5 && !g_tt2_hda_worker && !preDone) {   // RCPSP_TT2_PRECHECK already tested them at generation
     auto& tab = get_tt2_dominance_table();
     size_t w = 0;
     for (size_t i = 0; i < neighbors.size(); i++) {

@@ -234,23 +234,31 @@ public:
     // the bucket by `s` and inserts `s`. One call per generated child, in GetSuccessors.
     bool check_and_insert(const RCPSPState_TT2& s) {
         if (!FastOn()) return check_and_insert_vec(s);
-        ++checks;
         const int n = (int)std::min<size_t>(s.activeTransitionIndices.size(), 128);
         short sid[128], srel[128];
-        int R = s.g;
         for (int j = 0; j < n; ++j) {
             sid[j]  = s.activeTransitionIndices[j].first;
             srel[j] = (short)(s.g + s.activeTransitionIndices[j].second);
-            if (srel[j] > R) R = srel[j];
         }
-        auto& bucket = fbuckets[MakeKey(s)];
-        if (SortedOn()) return checkSorted(s, bucket, n, R, sid, srel);
+        return check_and_insert_raw(MakeKey(s), s.g, n, sid, srel, &s);
+    }
+
+    // The same check on the state's DR5 view only: scheduled set k, g, and the active ids (ascending) with their
+    // releases g + rem. RCPSP_TT2::GetSuccessors uses it to test a child BEFORE building it (RCPSP_TT2_PRECHECK).
+    // `s` is the built state when there is one; the prune observer needs it, so callers without one must not run
+    // while an observer is set. Fast storage only.
+    bool check_and_insert_raw(const Key& k, short g, int n, const short* sid, const short* srel, const RCPSPState_TT2* s) {
+        ++checks;
+        int R = g;
+        for (int j = 0; j < n; ++j) if (srel[j] > R) R = srel[j];
+        auto& bucket = fbuckets[k];
+        if (SortedOn()) return checkSorted(k, g, s, bucket, n, R, sid, srel);
         bool twin = false;
         for (size_t i = 0; i < bucket.size(); ++i) {
             const FEntry& e = bucket[i];
             ++comparisons;
-            if (domFast(e.g, e.n, e.R, e.ids(), e.rels(), s.g, n, R, sid, srel)) {
-                if (g_tt2_wait && e.g < s.g && waitTwin(e.n, e.ids(), e.rels(), n, sid, srel)) { twin = true; continue; }
+            if (domFast(e.g, e.n, e.R, e.ids(), e.rels(), g, n, R, sid, srel)) {
+                if (g_tt2_wait && e.g < g && waitTwin(e.n, e.ids(), e.rels(), n, sid, srel)) { twin = true; continue; }
                 ++pruned;
                 if (e.side != (short)g_tt2_dom_side) {
                     ++crossSide;
@@ -258,7 +266,7 @@ public:
                         std::cerr << "[DR5 CROSS-SIDE PRUNE] entry.side=" << e.side
                                   << " current side=" << g_tt2_dom_side << std::endl;
                 }
-                if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
+                if (g_tt2_dr_prune_observer && s) g_tt2_dr_prune_observer(*s);
                 if (i > 0 && MtfOn()) std::swap(bucket[0], bucket[i]);
                 return true; }
         }
@@ -266,8 +274,8 @@ public:
         for (size_t i = 0; i < bucket.size();) {                 // skyline, same order as the vector version
             ++comparisons;
             const FEntry& e = bucket[i];
-            if (domFast(s.g, n, R, sid, srel, e.g, e.n, e.R, e.ids(), e.rels())) {
-                markDead(MakeKey(s), e.g, e.n, e.ids(), e.rels());
+            if (domFast(g, n, R, sid, srel, e.g, e.n, e.R, e.ids(), e.rels())) {
+                markDead(k, e.g, e.n, e.ids(), e.rels());
                 if (i + 1 != bucket.size()) bucket[i] = std::move(bucket.back());
                 bucket.pop_back();
                 ++thinned;
@@ -275,7 +283,7 @@ public:
         }
         bucket.emplace_back();
         FEntry& ne = bucket.back();
-        ne.g = s.g; ne.side = (short)g_tt2_dom_side; ne.n = (short)n; ne.R = (short)R;
+        ne.g = g; ne.side = (short)g_tt2_dom_side; ne.n = (short)n; ne.R = (short)R;
         if (n <= K) { for (int j = 0; j < n; ++j) { ne.id[j] = sid[j]; ne.rel[j] = srel[j]; } }
         else { ne.big.reset(new short[2 * n]); for (int j = 0; j < n; ++j) { ne.big[j] = sid[j]; ne.big[n + j] = srel[j]; } }
         ++inserts;
@@ -283,9 +291,8 @@ public:
         return false;
     }
 
-    bool checkSorted(const RCPSPState_TT2& s, std::vector<FEntry>& bucket, int n, int R,
+    bool checkSorted(const Key& k, short gs, const RCPSPState_TT2* s, std::vector<FEntry>& bucket, int n, int R,
                      const short* sid, const short* srel) {
-        const short gs = s.g;
         bool twin = false;
         for (const FEntry& e : bucket) {                        // candidates that may dominate s: g <= g_s
             if (e.g > gs) break;
@@ -299,7 +306,7 @@ public:
                         std::cerr << "[DR5 CROSS-SIDE PRUNE] entry.side=" << e.side
                                   << " current side=" << g_tt2_dom_side << std::endl;
                 }
-                if (g_tt2_dr_prune_observer) g_tt2_dr_prune_observer(s);
+                if (g_tt2_dr_prune_observer && s) g_tt2_dr_prune_observer(*s);
                 return true; }
         }
         if (twin) { ++waitExempt; return false; }
@@ -310,7 +317,7 @@ public:
         for (size_t i = lo; i < bucket.size(); ++i) {
             ++comparisons;
             if (domFast(gs, n, R, sid, srel, bucket[i].g, bucket[i].n, bucket[i].R, bucket[i].ids(), bucket[i].rels())) {
-                markDead(MakeKey(s), bucket[i].g, bucket[i].n, bucket[i].ids(), bucket[i].rels());
+                markDead(k, bucket[i].g, bucket[i].n, bucket[i].ids(), bucket[i].rels());
                 ++thinned; continue;
             }
             if (w != i) bucket[w] = std::move(bucket[i]);

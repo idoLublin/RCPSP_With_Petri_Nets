@@ -719,6 +719,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
     g_tt2_sym_pruned = 0;                // symmetry-breaking counter is per-instance
     g_tt2_dr4_pruned = 0;                // DR4 delayed-start prune counter is per-instance
     g_tt2_dead_expanded = 0; for (long& d : g_tt2_dup) d = 0;   // RCPSP_TT2_KILL / RCPSP_TT2_DUPPROBE counters are per-instance
+    g_tt2_precheck_cut = 0;
     g_tt2_wait_edges = 0; g_tt2_wait_cut = 0; g_tt2_wait_pass = 0; g_tt2_wait_jumped = 0;   // explicit-wait model counters are per-instance
     g_tt2_immsel_fired = 0;              // immediate-selection counter is per-instance
     g_tt2_freefire_fired = 0;            // free-fire counter is per-instance
@@ -1009,6 +1010,8 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
         if (g_tt2_kill)
             std::cout << "TT2 KILL: mode=" << g_tt2_kill << " deadRecords=" << dt.deadCount()
                       << " deadExpanded=" << g_tt2_dead_expanded << std::endl;
+        if (g_tt2_precheck)
+            std::cout << "TT2 PRECHECK: pruned before construction=" << g_tt2_precheck_cut << std::endl;
     }
     if (g_tt2_dupprobe)
         std::cout << "TT2 DUP: new=" << g_tt2_dup[0] << " openLower=" << g_tt2_dup[1] << " openNotLower=" << g_tt2_dup[2]
@@ -2658,6 +2661,7 @@ static std::string tt2FeatureTag() {
     if (g_tt2_batch)     add("batch");
     if (g_tt2_kill)      add("kill" + std::to_string(g_tt2_kill));
     if (g_tt2_dupprobe)  add("dupprobe");
+    if (g_tt2_precheck)  add(g_tt2_precheck == 2 ? "precheckchk" : "precheck");
     if (g_tt2_sym)       add("sym");
     if (!tt2TbSpec().empty()) add("tbs" + tt2TbSpec());
     if (g_tt2_gendesc)   add("gendesc");
@@ -5649,6 +5653,7 @@ int main(int argc, char* argv[]) {
     if (const char* e = std::getenv("RCPSP_CBS_FREEFIX_TRIES")) g_cbs_freefix_tries = std::max(1, std::atoi(e));
     if (const char* e = std::getenv("RCPSP_TT2_HDZFIX")) g_tt2_hdz_fix = std::atoi(e) != 0; // zero-delay h shortcut fix, Globals.h
     if (const char* e = std::getenv("RCPSP_TT2_DUPPROBE")) g_tt2_dupprobe = std::atoi(e) != 0; // A* duplicate-lookup census, Globals.h
+    if (const char* e = std::getenv("RCPSP_TT2_PRECHECK")) g_tt2_precheck = std::atoi(e); // DR5 before a child is built, Globals.h
     if (const char* e = std::getenv("RCPSP_TT2_WAIT"))  g_tt2_wait      = std::atoi(e) != 0;   // explicit-wait model (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_WAITJUMP")) g_tt2_waitjump = std::atoi(e) != 0; // pass-through wait jumps (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_COMPACT")) g_tt2_compact = std::max(0, std::min(2, std::atoi(e)));   // stored TT2 nodes without token lists (Globals.h)

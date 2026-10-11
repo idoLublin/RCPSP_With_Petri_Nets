@@ -418,8 +418,8 @@ inline bool propagateInc(const Inst& I, int D, std::vector<int>& es, std::vector
             }
             int t = es[i];
             while (t <= ls[i]) {
-                int last = -1;
-                for (int u = t; u < t + I.p[i]; ++u) if (isBad(u)) last = u;
+                int last = -1;                         // the last blocked unit of [t, t + p): scan from the right
+                for (int u = t + I.p[i] - 1; u >= t; --u) if (isBad(u)) { last = u; break; }
                 if (last >= 0) t = last + 1; else break;
             }
             if (t > ls[i]) return false;

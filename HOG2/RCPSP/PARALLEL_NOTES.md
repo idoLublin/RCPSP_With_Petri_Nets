@@ -158,3 +158,36 @@ cheap:
    it also bounds the workers that run ahead);
 2. a tighter batch / flush cadence;
 3. a larger j60/j90 run on the server.
+
+## 6. With compact states (`RCPSP_TT2_COMPACT=1`, merged from `ido` 37c3ea0)
+
+Merge commit `0b4fdfb` also carries the HDA* integration. tt2hda accepts compact;
+`tt2CompactPrepare` runs on the main thread before the workers start, the rebuild only
+reads that table, and its counters are `thread_local`. States routed between workers
+stay stripped.
+
+Validation: serial j30 with compact 0/1/2 gives identical expansions (7,156,039), all
+optimal. HDA* j30 with compact 1/2 is 480/480 optimal, and check mode (=2) found no
+mismatches.
+
+| 4 threads, KILL=2 | serial | HDA* | HDA* + compact |
+|---|---|---|---|
+| j30 speed-up (all 480) | 1× | 2.67× | **3.02×** |
+| j30 peak memory | — | 909 MB | **539 MB** |
+| j60 sample solved (96, 30 s) | 71 | 75 | **75** |
+| j60 speed-up, 71 commonly solved | 1× | 1.42× | **1.97×** |
+| j60 speed-up, > 1 s serial | 1× | 1.92× | **2.53×** |
+| j60 peak memory | 5.0 GB | 11.8 GB | **5.8 GB** |
+| j60 LB where neither solves (21) | — | higher on 9 | higher on 10, never lower |
+
+Compact halves HDA*'s memory (back to serial level) and makes it ~19% faster: smaller
+states mean cheaper routing and fewer allocations, and allocation is HDA*'s bottleneck.
+
+## 7. HOG2 duplicate detection = hash identity
+
+`AStarOpenClosed::Lookup` is `unordered_map<uint64_t,uint64_t>::find(GetStateHash(s))`.
+States are never compared, so the 64-bit hash IS the node identity. Under
+TemplateAStar the map can't be dropped: decrease-key and reopen find nodes through it.
+A collision silently merges two states, so any cheaper hash must stay full 64-bit
+quality. DR5 stays non-strict (≥): it is sound because a pruned state is never stored,
+and a strict rule would only hand exact duplicates to the hash check.

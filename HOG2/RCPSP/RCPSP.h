@@ -1489,7 +1489,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // Dead node (RCPSP_TT2_KILL, DominanceTT2.h): a later state dominated this one after it was
   // enqueued. =1 only counts it; =2 skips it -- the dominating state covers its subtree.
   // Off inside nested sub-solves (they run their own searches through this function).
-  if (g_tt2_kill_armed && !g_in_subsolve && !g_tt2_hda_worker && get_tt2_dominance_table().is_dead(nodeID)) {
+  if (g_tt2_kill_armed && !g_in_subsolve && get_tt2_dominance_table().is_dead(nodeID)) {   // HDA*: the node and its table belong to this worker
     ++g_tt2_dead_expanded;
     if (g_tt2_kill_armed >= 2) { neighbors.clear(); if (_prof) g_prof_succ_sec += secs_since(_pt0); return; }
   }

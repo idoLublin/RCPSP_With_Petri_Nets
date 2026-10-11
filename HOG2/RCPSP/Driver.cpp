@@ -1077,9 +1077,9 @@ static int hdaThreads() {
     return std::max(1u, std::thread::hardware_concurrency());
 }
 void solveRCPSP_TT2_HDA(int group, int exam, const std::string& filename, const std::string& problemType) {
-    if (g_tt2_singleres || g_tt2_hierrs || g_tt2_kill || g_subsolve_succ_cache || g_h_cache || g_tt2_reverse || g_tt2_dupprobe
+    if (g_tt2_singleres || g_tt2_hierrs || g_subsolve_succ_cache || g_h_cache || g_tt2_reverse || g_tt2_dupprobe
         || tt2nb::On() || tt2nb::WinOn() || rootb::DlbOn() || rootb::SeedOn() || rootb::ProbeOn()) {
-        std::cerr << "tt2hda: a flag that is not thread-safe yet is set (SINGLERES/HIERRS/KILL/DUPPROBE/sub-solve caches/"
+        std::cerr << "tt2hda: a flag that is not thread-safe yet is set (SINGLERES/HIERRS/DUPPROBE/sub-solve caches/"
                      "reverse/TT2_TT/root bounds); refusing." << std::endl;
         std::exit(1);
     }
@@ -1106,7 +1106,11 @@ void solveRCPSP_TT2_HDA(int group, int exam, const std::string& filename, const 
     bool trivial = false;
     rootb::reset(); tt2nb::reset();
     if (tryTrivialRootSchedule_TT2(trivEst, trivMakespan)) { trivial = true; r.proven = true; r.makespan = trivMakespan; r.lb = trivMakespan; }
-    else r = hda::Solve(first, last, N, (double)astar_timeout_seconds, seedUB);
+    else {
+        g_tt2_kill_armed = g_tt2_dr5 ? g_tt2_kill : 0;   // RCPSP_TT2_KILL: each worker skips nodes its own DR5 table retired
+        r = hda::Solve(first, last, N, (double)astar_timeout_seconds, seedUB);
+        g_tt2_kill_armed = 0;
+    }
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 
     uint64_t exp = 0, expMax = 0; long sent = 0, recv = 0, dr5P = 0, dr5I = 0; double heur = 0;

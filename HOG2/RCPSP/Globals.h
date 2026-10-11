@@ -378,6 +378,11 @@ inline bool  g_tt2_dr5       = false;  // RCPSP_TT2_DR5=1: cutset (DR5) dominanc
 inline int   g_tt2_dom_side  = 0;      // bidirectional DR table selector (0=forward, 1=backward); DominanceTT2.h get_tt2_dominance_table() picks the side's table.
 inline bool  g_tt2_dr4       = false;  // RCPSP_TT2_DR4=1: DR4 delayed-start dominance in TT2 successor generation (Liu et al. rule 4, ported from new_herustic). Prune firing l at delta d_l if some other available transition i has d_i < d_l and d_i + p_i <= d_l (sound left-shift; min-delta child never pruned).
 inline long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
+inline int   g_tt2_kill      = 0;      // RCPSP_TT2_KILL (needs RCPSP_TT2_DR5): DR5 entries retired by a later dominating state are recorded as DEAD (DominanceTT2.h). 1 = count expansions of dead nodes only (search unchanged), 2 = also skip them (no children). Forward TT2 A* (solveRCPSP_TT2) only.
+inline int   g_tt2_kill_armed = 0;     // g_tt2_kill while solveRCPSP_TT2's A* runs, 0 otherwise (keeps the other TT2 drivers unaffected)
+inline long  g_tt2_dead_expanded = 0;  // RCPSP_TT2_KILL: expansions of dead nodes (per instance; with =2 these emitted no children)
+inline bool  g_tt2_dupprobe  = false;  // RCPSP_TT2_DUPPROBE=1: classify every child that reaches A* against its open/closed list (measurement only; one extra lookup per child)
+inline long  g_tt2_dup[5]    = {0, 0, 0, 0, 0};   // per instance: new / on OPEN with lower g / on OPEN, not lower / on CLOSED with lower g / on CLOSED, not lower
 inline bool  g_tt2_wait      = false;  // RCPSP_TT2_WAIT=1: explicit-wait model. A transition fires only when all its input tokens are ready NOW, and a separate wait edge advances the clock one unit (RCPSP_TT2::GetSuccessors). Every integer schedule is then a path on the forward and the reversed net, so bidirectional frontiers always share cuts. DR4 becomes a horizon on the wait chain; DR5 exempts a state's own wait ancestors (DominanceTT2.h).
 inline long  g_tt2_wait_edges = 0;     // explicit-wait model: wait children generated (per instance; CSV: waitEdges)
 inline long  g_tt2_wait_cut   = 0;     // explicit-wait model: wait edges cut by the DR4 horizon (per instance; CSV: waitCut)

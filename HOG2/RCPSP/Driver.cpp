@@ -713,6 +713,7 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
     get_tt2_dominance_table().clear();   // DR5 table is per-instance (RCPSP_TT2_DR5=1)
     g_tt2_sym_pruned = 0;                // symmetry-breaking counter is per-instance
     g_tt2_dr4_pruned = 0;                // DR4 delayed-start prune counter is per-instance
+    g_tt2_dead_expanded = 0; for (long& d : g_tt2_dup) d = 0;   // RCPSP_TT2_KILL / RCPSP_TT2_DUPPROBE counters are per-instance
     g_tt2_wait_edges = 0; g_tt2_wait_cut = 0; g_tt2_wait_pass = 0; g_tt2_wait_jumped = 0;   // explicit-wait model counters are per-instance
     g_tt2_immsel_fired = 0;              // immediate-selection counter is per-instance
     g_tt2_freefire_fired = 0;            // free-fire counter is per-instance
@@ -844,7 +845,16 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
    g_prof_t0 = std::chrono::steady_clock::now(); g_prof_next_trace = 5.0;
    const auto rootSavedTO = astar_timeout_seconds;   // root bounds already used part of the per-instance budget
    if (rootb::seconds() > 0) astar_timeout_seconds = std::max<decltype(rootSavedTO)>(1, rootSavedTO - (decltype(rootSavedTO))std::ceil(rootb::seconds()));
+   g_tt2_kill_armed = g_tt2_dr5 ? g_tt2_kill : 0;   // dead nodes come from DR5 thinning; this search only
+   if (g_tt2_dupprobe)
+       g_tt2_dup_probe = [&astar](const RCPSPState_TT2& c) {
+           double g;
+           if (astar.GetOpenListGCost(c, g))   return c.g < g ? 1 : 2;
+           if (astar.GetClosedListGCost(c, g)) return c.g < g ? 3 : 4;
+           return 0;
+       };
    astar.GetPath(&as1, first, last, path);
+   g_tt2_kill_armed = 0; g_tt2_dup_probe = nullptr;
    astar_timeout_seconds = rootSavedTO;
    g_prof_astar_sec = secs_since(g_prof_t0);
     // // 1. Setup the search
@@ -989,7 +999,13 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
                   << " inserts=" << dt.inserts << " thinned=" << dt.thinned
                   << " comparisons=" << dt.comparisons
                   << " buckets=" << dt.bucketCount() << " maxBucket=" << dt.maxBucket << std::endl;
+        if (g_tt2_kill)
+            std::cout << "TT2 KILL: mode=" << g_tt2_kill << " deadRecords=" << dt.deadCount()
+                      << " deadExpanded=" << g_tt2_dead_expanded << std::endl;
     }
+    if (g_tt2_dupprobe)
+        std::cout << "TT2 DUP: new=" << g_tt2_dup[0] << " openLower=" << g_tt2_dup[1] << " openNotLower=" << g_tt2_dup[2]
+                  << " closedLower=" << g_tt2_dup[3] << " closedNotLower=" << g_tt2_dup[4] << std::endl;
     if (g_tt2_sym)
         std::cout << "TT2 SYM: successors skipped by canonical order = " << g_tt2_sym_pruned << std::endl;
     if (g_tt2_theta)
@@ -2552,6 +2568,8 @@ static std::string tt2FeatureTag() {
     if (g_tt2_dr5)       add("dr5");
     if (g_tt2_dr4)       add("dr4");
     if (g_tt2_batch)     add("batch");
+    if (g_tt2_kill)      add("kill" + std::to_string(g_tt2_kill));
+    if (g_tt2_dupprobe)  add("dupprobe");
     if (g_tt2_sym)       add("sym");
     if (!tt2TbSpec().empty()) add("tbs" + tt2TbSpec());
     if (g_tt2_gendesc)   add("gendesc");
@@ -5535,6 +5553,8 @@ int main(int argc, char* argv[]) {
     }
     if (const char* e = std::getenv("RCPSP_TT2_BATCH")) g_tt2_batch     = std::atoi(e) != 0;
     if (const char* e = std::getenv("RCPSP_TT2_DR4"))   g_tt2_dr4       = std::atoi(e) != 0;
+    if (const char* e = std::getenv("RCPSP_TT2_KILL"))  g_tt2_kill      = std::atoi(e);        // dead-node count (1) / skip (2), Globals.h
+    if (const char* e = std::getenv("RCPSP_TT2_DUPPROBE")) g_tt2_dupprobe = std::atoi(e) != 0; // A* duplicate-lookup census, Globals.h
     if (const char* e = std::getenv("RCPSP_TT2_WAIT"))  g_tt2_wait      = std::atoi(e) != 0;   // explicit-wait model (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_WAITJUMP")) g_tt2_waitjump = std::atoi(e) != 0; // pass-through wait jumps (Globals.h)
     if (const char* e = std::getenv("RCPSP_TT2_HFRESH")) g_tt2_hfresh = std::atoi(e) != 0;   // fresh h on zero-delay children (Globals.h)

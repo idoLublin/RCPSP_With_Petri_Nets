@@ -36,6 +36,9 @@
 #include <algorithm>
 #include <memory>
 #include <cstdlib>
+#include <string>
+#include <cstring>
+#include <unordered_set>
 #include "RCPSPState.h"
 
 
@@ -45,6 +48,10 @@
 // offering the reversed side every cut it might match. Sound for the incumbent/UB direction:
 // g is an actual path cost, so g_f + g_b is an actual schedule length. Null by default.
 inline std::function<void(const RCPSPState_TT2&)> g_tt2_dr_prune_observer;
+
+// RCPSP_TT2_DUPPROBE: set by solveRCPSP_TT2 to look a child up in its A*'s open/closed list.
+// Returns the g_tt2_dup index (0 new, 1/2 open lower/not, 3/4 closed lower/not). Null by default.
+inline std::function<int(const RCPSPState_TT2&)> g_tt2_dup_probe;
 
 class TT2DominanceTable {
 public:
@@ -146,6 +153,45 @@ public:
         return true;
     }
 
+    // ── DEAD NODES (RCPSP_TT2_KILL) ─────────────────────────────────────────
+    // An entry retired by skyline thinning is a state that a later state dominates; its A* node
+    // may still sit on OPEN. Recording it lets RCPSP_TT2::GetSuccessors recognise that node when
+    // it is expanded (count it, or skip it with =2: the dominating state covers its subtree, the
+    // same argument every DR5 prune already rests on). The record is exact -- scheduled set, g,
+    // active ids and releases -- so no hash collision can kill a live node. A node whose g was
+    // lowered by a better path was re-inserted with that g, so it never matches its old record.
+    static std::string deadKey(const Key& k, int g, int n, const short* ids, const short* rels) {
+        std::string r(sizeof(Key) + (2 + 2 * n) * sizeof(short), '\0');
+        char* p = &r[0];
+        std::memcpy(p, &k, sizeof(Key)); p += sizeof(Key);
+        const short hdr[2] = {(short)g, (short)n};
+        std::memcpy(p, hdr, sizeof(hdr)); p += sizeof(hdr);
+        std::memcpy(p, ids, n * sizeof(short)); p += n * sizeof(short);
+        std::memcpy(p, rels, n * sizeof(short));
+        return r;
+    }
+    void markDead(const Key& k, int g, int n, const short* ids, const short* rels) {
+        if (g_tt2_kill_armed && !g_in_subsolve) dead.insert(deadKey(k, g, n, ids, rels));
+    }
+    void markDeadVec(const Key& k, const Entry& e) {
+        if (!g_tt2_kill_armed || g_in_subsolve) return;
+        const int n = (int)e.active.size();
+        std::vector<short> ids(n), rels(n);
+        for (int j = 0; j < n; ++j) { ids[j] = e.active[j].first; rels[j] = (short)(e.g + e.active[j].second); }
+        dead.insert(deadKey(k, e.g, n, ids.data(), rels.data()));
+    }
+    bool is_dead(const RCPSPState_TT2& s) const {
+        if (dead.empty()) return false;
+        const int n = (int)std::min<size_t>(s.activeTransitionIndices.size(), 128);
+        short ids[128], rels[128];
+        for (int j = 0; j < n; ++j) {
+            ids[j]  = s.activeTransitionIndices[j].first;
+            rels[j] = (short)(s.g + s.activeTransitionIndices[j].second);
+        }
+        return dead.count(deadKey(MakeKey(s), s.g, n, ids, rels)) != 0;
+    }
+    size_t deadCount() const { return dead.size(); }
+
     // Per-instance counters (reported by the driver).
     uint64_t crossSide = 0;   // prunes where the entry came from the OTHER search
     uint64_t checks = 0, comparisons = 0, pruned = 0, inserts = 0, thinned = 0;
@@ -153,7 +199,7 @@ public:
     size_t   maxBucket = 0;
 
     void clear() {
-        buckets.clear(); fbuckets.clear();
+        buckets.clear(); fbuckets.clear(); dead.clear();
         checks = comparisons = pruned = inserts = thinned = waitExempt = 0;
         maxBucket = 0;
     }
@@ -221,6 +267,7 @@ public:
             ++comparisons;
             const FEntry& e = bucket[i];
             if (domFast(s.g, n, R, sid, srel, e.g, e.n, e.R, e.ids(), e.rels())) {
+                markDead(MakeKey(s), e.g, e.n, e.ids(), e.rels());
                 if (i + 1 != bucket.size()) bucket[i] = std::move(bucket.back());
                 bucket.pop_back();
                 ++thinned;
@@ -263,6 +310,7 @@ public:
         for (size_t i = lo; i < bucket.size(); ++i) {
             ++comparisons;
             if (domFast(gs, n, R, sid, srel, bucket[i].g, bucket[i].n, bucket[i].R, bucket[i].ids(), bucket[i].rels())) {
+                markDead(MakeKey(s), bucket[i].g, bucket[i].n, bucket[i].ids(), bucket[i].rels());
                 ++thinned; continue;
             }
             if (w != i) bucket[w] = std::move(bucket[i]);
@@ -309,6 +357,7 @@ public:
         for (size_t i = 0; i < bucket.size();) {
             ++comparisons;
             if (dominates(s.activeTransitionIndices, s.g, bucket[i].active, bucket[i].g)) {
+                markDeadVec(MakeKey(s), bucket[i]);
                 bucket[i] = std::move(bucket.back());
                 bucket.pop_back();
                 ++thinned;
@@ -326,6 +375,7 @@ public:
 private:
     std::unordered_map<Key, std::vector<Entry>, KeyHash> buckets;
     std::unordered_map<Key, std::vector<FEntry>, KeyHash> fbuckets;
+    std::unordered_set<std::string> dead;   // RCPSP_TT2_KILL records (deadKey)
 };
 
 // One table, cleared per instance by the driver. For bidirectional search the active

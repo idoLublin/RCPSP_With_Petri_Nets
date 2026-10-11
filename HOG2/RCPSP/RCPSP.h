@@ -1486,6 +1486,13 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
       std::fflush(g_prof_trace); g_prof_next_trace = _el + 5.0;
     }
   }
+  // Dead node (RCPSP_TT2_KILL, DominanceTT2.h): a later state dominated this one after it was
+  // enqueued. =1 only counts it; =2 skips it -- the dominating state covers its subtree.
+  // Off inside nested sub-solves (they run their own searches through this function).
+  if (g_tt2_kill_armed && !g_in_subsolve && get_tt2_dominance_table().is_dead(nodeID)) {
+    ++g_tt2_dead_expanded;
+    if (g_tt2_kill_armed >= 2) { neighbors.clear(); if (_prof) g_prof_succ_sec += secs_since(_pt0); return; }
+  }
   //auto startS1 = std::chrono::high_resolution_clock::now();
   // ── Successor-cache fast path (sub-solve only): rebuild children from cached firing
   // recipes (skips the available-scan + batch enumeration). Recipes are tiny; no states stored.
@@ -1851,6 +1858,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     neighbors.resize(w);
   }
   g_prof_children_kept += (long)neighbors.size();
+  if (g_tt2_dup_probe && !g_in_subsolve) for (const auto& c : neighbors) ++g_tt2_dup[g_tt2_dup_probe(c)];   // RCPSP_TT2_DUPPROBE
   if (_prof) g_prof_succ_sec += secs_since(_pt0);
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;

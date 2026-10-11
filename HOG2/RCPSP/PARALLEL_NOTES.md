@@ -69,20 +69,47 @@ lower bound.
 `static const bool x = [](){ getenv... }()` function statics are safe: C++11
 guarantees thread-safe one-time init.
 
-## 3. HDA* worker design (Phase 1, not started)
+## 3. HDA* as built (`HDAStarTT2.h`, mode `tt2hda_<size>`)
 
-- Each worker owns: an open heap, a node store, a `TT2DominanceTable` used as its only
-  index, and an inbox.
-- The dominance-table entry stores the node id:
-  - an exact match with a better g → decrease-key;
-  - dominated → prune;
-  - thinned → node dead (skip at pop).
+HOG2 has no HDA*, neither this copy nor upstream (June 2026). It has `ParallelIDAStar`
+and upstream `ParallelAStarIDAStar`, which run IDA* below an A* frontier with no
+duplicate detection and no DR5, so they don't fit TT2. HDA* is therefore assembled
+from HOG2 parts, with **no HOG2 file modified**:
 
-  This replaces HOG2's hash index (section 1 shows it only does decrease-key).
-- Owner of a state = `mix(MakeKey(s)) % N`. h is computed at the owner, after the
-  DR5 check.
-- Shared atomic UB. Each worker publishes its f_min. A sent/received counter detects
-  messages in flight.
+- **Per worker:** HOG2's `TemplateAStar`, unchanged, with `SetReopenNodes(true)`.
+- **Messages:** HOG2's `SharedQueue` (`utils/SharedQueue.h`), one inbox per worker,
+  carrying `shared_ptr` batches.
+- **Owner** = hash of `MakeKey`. Inside workers `RCPSP_TT2::GetSuccessors` skips DR5
+  (`g_tt2_hda_worker`). The worker env routes each child: owned children go through
+  DR5 on the worker's own `thread_local` table into its TemplateAStar; the rest are
+  buffered per destination (`RCPSP_HDA_BATCH`, default 64; flushed every 16
+  expansions and before idling or stopping).
+- **Received states** pass DR5 at the owner, then enter the public `openClosedList`
+  with the same updates TemplateAStar makes for its own children: new →
+  `AddOpenNode`; lower g → decrease-key on OPEN, `Reopen` on CLOSED.
+- **Termination:** shared atomic UB, plus `work` = busy workers + batches in flight.
+  `work == 0` means UB is optimal. On the deadline every worker drains its inbox,
+  and LB = min over workers of the open-list f_min.
+- **Run:** `RCPSP_HDA_THREADS=4 RCPSP_TT2_DR5=1 RCPSP_TT2_DR4=1 RCPSP_TT2_BATCH=1
+  RCPSP_TT2_KILL=2 ./Driver tt2hda_j60`
+- **Refused flags** (state not per-thread yet): SINGLERES, HIERRS, sub-solve caches,
+  TT2_TT, root bounds, DUPPROBE, reverse.
+
+**Build with jemalloc.** glibc malloc is the bottleneck when one thread frees states
+another allocated. On j30 13:1 with 4 threads it took 8.6 s, against 3.6 s with
+jemalloc. jemalloc also makes the serial solver ~15% faster.
+
+    g++ -std=c++20 -fopenmp -O3 -I../.. -I../gui/STUB Driver.cpp -o Driver -l:libjemalloc.so.2
+
+(or `LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2` on an existing binary)
+
+**Bug found on the way (also affects serial; fix behind `RCPSP_TT2_HDZFIX`, forced on in
+tt2hda).** TemplateAStar's decrease-key and reopen replace a node's stored state with
+the new copy, whose `h` member was never computed (0). That node's zero-delay
+children then inherit h = 0 (f = g) through the `predessesor_h` shortcut. This is
+admissible but weak. Serially it changes little (j30 with the fix: +0.7% expansions,
+480/480 optimal). In HDA* it produced LBs far below the root h. It stays off by default
+so existing serial results reproduce.
 
 ## 4. j60 sample (exams 1–2 of every group = 96 instances, 30 s, same flags)
 
@@ -105,3 +132,29 @@ looking up the exact record costs about what the skipped expansions save. The id
 belongs in the HDA* worker. There the dominance entry carries the node id, so marking
 a node dead is one bit with no extra lookup or memory. Leave `RCPSP_TT2_KILL` off in
 production runs; keep it as the measurement hook.
+
+## 5. HDA* results (4 cores, jemalloc; DR5+DR4+BATCH)
+
+Serial = `tt2_<size>` with jemalloc. All makespans were checked against
+`known_optima.csv`. No reported LB exceeded a known optimum, and no UB fell below one.
+
+| | j30 (480, 60 s) | j60 sample (96, 30 s) |
+|---|---|---|
+| solved: serial / HDA* 4 threads | 480 / 480 | 71 / **75** (+(21,2) (37,1) (37,2) (41,1); none lost) |
+| wrong makespans | 0 | 0 |
+| speed-up, all commonly solved | 2.56× (with KILL=2), 2.03× (without) | 1.12–1.37× |
+| speed-up, instances > 1 s serial | 2.77× (KILL=2) | 1.43–1.62× |
+| extra expansions vs serial | +8% (KILL=2) | +69–89% |
+| LB on instances neither solves (21) | — | higher than serial on 9, equal on 12, lower on 0 |
+| 2 threads (j30) | 1.54× overall, 480/480 | — |
+| 1 thread | identical expansions to serial | — |
+| j30 with a 1 s timeout (LB/UB check) | 476 proven, 4 timed out, all bounds valid | — |
+
+The limit on j60 is search overhead, not speed per node. Without an incumbent, workers
+expand nodes above the global f_min, and DR5 sees states out of order, so dominated
+states are often expanded before their dominator arrives. Things to try next, all
+cheap:
+1. seed and share the UB (`RCPSP_TT2_UB=1` already prunes at the generator; in HDA*
+   it also bounds the workers that run ahead);
+2. a tighter batch / flush cadence;
+3. a larger j60/j90 run on the server.

@@ -298,6 +298,8 @@ arm_mod(){ case $1 in
   # dfar (2026-10-09): delay further where that is safe. A node is still just its schedule, so the dominance
   # rules stay as they are; the row to compare it with is the same arm without the modifier.
   dfar)  echo "RCPSP_CBS_DELAY=far" ;;
+  # inc (2026-10-09): the propagation of the heuristic computed incrementally - same search, less time (needs pf).
+  inc)   echo "RCPSP_PROP_INC=1" ;;      incchk) echo "RCPSP_PROP_INC=2" ;;
   nolazy) echo "RCPSP_LAZY=0" ;;             # eager A*: every generated node is evaluated at once (the portfolio runs on it too)
   notp) echo "RCPSP_CBS_TT=0" ;;              noprop) echo "RCPSP_CBS_TT=0 RCPSP_CBS_PATHMAX=0" ;;
   nodr5) echo "RCPSP_DR5=0" ;;                lrn2) echo "RCPSP_CBS_LEARN=2" ;;

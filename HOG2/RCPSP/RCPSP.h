@@ -9,6 +9,7 @@
 #include "../utils//GLUtil.h"
 #include <functional>
 #include <deque>
+#include <optional>
 #include "petriclasses.h"
 #include "DominanceCBS.h"   // DR5 cutset dominance (guarded by setting.use_dr5)
 #include "DominanceTT2.h"   // DR5 cutset dominance for TT2/TTPNR (guarded by g_tt2_dr5)
@@ -1469,7 +1470,15 @@ inline uint64_t tt2VerifyHash(const RCPSPState_TT2& s){         // 2nd hash over
   return h;
 }
 
-inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<RCPSPState_TT2> &neighbors) const {
+inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vector<RCPSPState_TT2> &neighbors) const {
+  // RCPSP_TT2_COMPACT (Globals.h): a stored node does not keep its token lists. Rebuild them on a copy for this
+  // expansion; the children are released again at the end. Value 2 keeps the lists and compares them with a rebuild.
+  std::optional<RCPSPState_TT2> _rebuilt;
+  if (g_tt2_compact_on) {
+    if (tt2CompactStripped(nodeStored)) { _rebuilt.emplace(nodeStored); tt2CompactRebuild(*_rebuilt); ++g_tt2_compact_rebuilds; }
+    else if (g_tt2_compact_on == 2) tt2CompactCheck(nodeStored, "expanded node");
+  }
+  const RCPSPState_TT2 &nodeID = _rebuilt ? *_rebuilt : nodeStored;
   // ── profiling (RCPSP_TT2_PROF; see Globals.h) ──
   const bool _prof = g_tt2_prof;
   std::chrono::steady_clock::time_point _pt0, _pg0, _pd0;
@@ -1851,6 +1860,9 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
     neighbors.resize(w);
   }
   g_prof_children_kept += (long)neighbors.size();
+  // RCPSP_TT2_COMPACT: the children are stored without their token lists (value 2: kept, and compared with a rebuild)
+  if (g_tt2_compact_on == 1) { for (auto& c : neighbors) tt2CompactStrip(c); }
+  else if (g_tt2_compact_on == 2) { for (const auto& c : neighbors) tt2CompactCheck(c, "child"); }
   if (_prof) g_prof_succ_sec += secs_since(_pt0);
   // auto endS1 = std::chrono::high_resolution_clock::now();
   // secssesorTIME += endS1 - startS1;

@@ -215,6 +215,9 @@ public:
         // 1. Bitset comparison (fast)
         if (finishedActivitiys != other.finishedActivitiys) return false;
         if (waitSlack != other.waitSlack) return false;   // explicit-wait model: different remaining waits
+        // RCPSP_TT2_COMPACT: stored nodes do not keep the token lists (they follow from the finished set and the
+        // active list), so the identity is the compact part alone.
+        if (g_tt2_compact_on) return activeTransitionIndices == other.activeTransitionIndices;
 
         // 2. Vectors must be SORTED for this to work!
         // If State A has [{1, 5}, {2, 3}] and State B has [{2, 3}, {1, 5}],
@@ -234,6 +237,17 @@ public:
         return true;
     }
 };
+
+// RCPSP_TT2_COMPACT (Globals.h): the token lists of a forward TT2 state are a function of its finished set and its
+// active list. These rebuild them (RCPSPState.cpp), so that stored search nodes need not keep them.
+bool tt2CompactPrepare(const RCPSPState_TT2& root);                 // per instance: tables from the loaded net; false = net not supported
+void tt2CompactRebuild(RCPSPState_TT2& s);                          // set resource_nodes / activity_nodes from finished + active
+void tt2CompactCheck(const RCPSPState_TT2& s, const char* where);   // rebuilt lists == the lists s holds, else exit(7)
+inline bool tt2CompactStripped(const RCPSPState_TT2& s) { return s.activity_nodes.empty(); }   // a full state has one entry per activity place
+inline void tt2CompactStrip(RCPSPState_TT2& s) {                    // release the token lists: size and capacity
+    for (auto& v : s.resource_nodes) std::vector<std::pair<short, short>>().swap(v);
+    std::vector<std::pair<short, short>>().swap(s.activity_nodes);
+}
 
 // RCPSP_TT2_TBSPEC=<keys>: explicit order among nodes of equal priority (f in TT2, b in HBAE), replacing the
 // built-in chains (TT2: higher g, more finished, more active; HBAE: zero-delay child, higher g, more finished,

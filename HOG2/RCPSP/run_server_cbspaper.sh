@@ -76,6 +76,9 @@
 #   +dombp +domdr5s one dominance table instead of both            +tt4 +tt8 +tt32 propagation steps
 #   +lrnp2 +lrnp32 learned selection with prior 2 / 32 (default 8)
 #   +pf faster propagation code (RCPSP_PROP_FAST=1): the same search, less time per node     +pfchk = run both, abort on a difference
+#   +frx extra "brother" children: one more child per MDA child, as few conflicts as possible without a higher f
+#        (RCPSP_CBS_FREEFIX; +frx1 cheaper, +frxnp control without the contradiction test). Server run 2026-10-11:
+#        ARMS="p-final p-final+frx p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frx" TAG=frx ./run_server_cbspaper.sh
 #   CXX_EXTRA="-march=native" adds compiler flags to the build (use its own BIN_NAME): same search, faster code.
 #   TAG=<name>: REQUIRED when another launch runs an arm of the same name (or ran it and its files must stay):
 #   directories, logs and merged files are then named <arm>.<TAG> (RUN_<arm>.<TAG>_<size>.csv). Without it two
@@ -300,6 +303,15 @@ arm_mod(){ case $1 in
   dfar)  echo "RCPSP_CBS_DELAY=far" ;;
   # inc (2026-10-09): the propagation of the heuristic computed incrementally - same search, less time (needs pf).
   inc)   echo "RCPSP_PROP_INC=1" ;;      incchk) echo "RCPSP_PROP_INC=2" ;;
+  # frx (2026-10-11): extra "brother" children (RCPSP_CBS_FREEFIX, Globals.h). For every MDA child c, one more child
+  # c+ = c with as few conflicts as possible and f(c+) <= max(g(c), f(parent)) <= f(c): conflicts resolved in time
+  # order by the MDA leaving the fewest overloaded resource-time units that the CP contradiction test does not
+  # refute at that bound. The MDA branching itself is unchanged (still exact). Compare with the same arm without it.
+  #   frx1  only the smallest zero-delta MDA is tried per conflict (cheaper)
+  #   frxnp precedence test only, no contradiction test (measured to raise f: control row)
+  frx)   echo "RCPSP_CBS_FREEFIX=1" ;;
+  frx1)  echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_TRIES=1" ;;
+  frxnp) echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_PROP=0" ;;
   nolazy) echo "RCPSP_LAZY=0" ;;             # eager A*: every generated node is evaluated at once (the portfolio runs on it too)
   notp) echo "RCPSP_CBS_TT=0" ;;              noprop) echo "RCPSP_CBS_TT=0 RCPSP_CBS_PATHMAX=0" ;;
   nodr5) echo "RCPSP_DR5=0" ;;                lrn2) echo "RCPSP_CBS_LEARN=2" ;;
@@ -399,7 +411,7 @@ done; done
 
 echo "=== EFFECTIVE FLAGS AND RESULT (rows must be 480) ==="
 for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv"; [ -f "$f" ] || { echo "RUN_${A}_${sz}: MISSING"; continue; }
-  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay; do
+  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay cbsFreeFix freeFixProp freeFixTries; do
     i=$(col "$f" $c); [ -n "$i" ] && fl="$fl $c=$(awk -F, -v i="$i" 'NR==2{print $i}' "$f")"; done
   fin=$(awk -F, 'NR>1 && $13=="True"' "$f" | wc -l); tot=$(awk -F, 'NR>1' "$f" | wc -l)
   st=""; i=$(col "$f" restartStage); [ -n "$i" ] && st=" solved-by-stage: $(awk -F, -v i="$i" 'NR>1 && $13=="True"{n[$i]++} END{for(k in n) printf "%s=%d ", k, n[k]}' "$f")"

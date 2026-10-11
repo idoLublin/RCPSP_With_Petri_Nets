@@ -6400,11 +6400,26 @@ if (direction) {
     // abs_start removed: it was a 256-byte-per-state shadow schedule used only by the single-res
     // releases (now marking-derived) and order-swap (stubbed). Sub-solve / bounds derive start
     // times from the marking (running: g - (dur - remaining)); the final schedule from the path.
-    // 2. Copy State
+    // 2. Copy State. The firing below appends one token per output arc to a resource place, and one entry to the
+    // active list when the activity has a duration; a plain copy has no spare capacity, so each such append would
+    // reallocate (a second malloc + copy + free). Copy those containers with exactly that much room instead.
     finishedActivitiys = prev.finishedActivitiys;
-    resource_nodes = prev.resource_nodes;
+    {
+        int extra[4] = {0, 0, 0, 0};
+        for (const auto& [placeID, outAmount] : petri.Transitions[transitionId - 1].arcs_out_indices)
+            if (placeID >= 0 && placeID < 4) ++extra[placeID];
+        for (int r = 0; r < 4; ++r) {
+            if (!extra[r]) { resource_nodes[r] = prev.resource_nodes[r]; continue; }
+            resource_nodes[r].reserve(prev.resource_nodes[r].size() + extra[r]);
+            resource_nodes[r].assign(prev.resource_nodes[r].begin(), prev.resource_nodes[r].end());
+        }
+    }
     activity_nodes = prev.activity_nodes;
-    activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
+    if (RCPSPex.activities[transitionId - 1].duration > 0) {
+        activeTransitionIndices.reserve(prev.activeTransitionIndices.size() + 1);
+        activeTransitionIndices.assign(prev.activeTransitionIndices.begin(), prev.activeTransitionIndices.end());  // Copy active list
+    } else
+        activeTransitionIndices = prev.activeTransitionIndices;  // Copy active list
     nextCritical=prev.nextCritical;
 
     transitionsCached = false;

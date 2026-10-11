@@ -1728,27 +1728,29 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeStored, std::vect
     // (b) Enumerate feasible non-empty subsets by incremental firing. `cur` already
     // has the subset-so-far started; `used` is its cumulative τ=0 demand. Emitting
     // one successor per recursion node yields every feasible subset exactly once.
+    // The subset-so-far state is neighbors[curIdx] (nodeID when curIdx < 0): each child is MOVED into neighbors and
+    // the recursion reads it back from there, so a batch child is built once instead of built and copied. Direct
+    // recursion (no std::function). Same children in the same order as before.
     long emitted = 0;
-    std::function<void(int, const RCPSPState_TT2&, std::array<int,4>, const std::vector<std::pair<short,short>>&)> rec =
-      [&](int start, const RCPSPState_TT2& cur, std::array<int,4> used, const std::vector<std::pair<short,short>>& path) {
+    std::vector<std::pair<short,short>> recPath;     // only the successor cache reads it: the firings of the subset
+    auto rec = [&](auto& self, int start, int curIdx, std::array<int,4> used) -> void {
         for (int i = start; i < (int)A0.size(); i++) {
           if (emitted >= g_tt2_batch_cap) return;   // safety valve (singletons already emitted)
           std::array<int,4> d; demandOf(A0[i], d);
           bool feasible = true;
           for (int r = 0; r < 4; r++) if (used[r] + d[r] > avail0[r]) { feasible = false; break; }
           if (!feasible) continue;
-          RCPSPState_TT2 child(cur, A0[i], 0, 1);    // fire A0[i] now (τ=0)
+          RCPSPState_TT2 child(curIdx < 0 ? nodeID : neighbors[curIdx], A0[i], 0, 1);    // fire A0[i] now (τ=0)
           if (waitModel) child.isDeltaZero = false;   // fresh h on wait-model firings (see the wait block below)
           std::array<int,4> nu = { used[0]+d[0], used[1]+d[1], used[2]+d[2], used[3]+d[3] };
-          std::vector<std::pair<short,short>> npath;   // only the successor cache reads it
-          if (_recON) { npath = path; npath.push_back({(short)A0[i], (short)0}); }
-          neighbors.push_back(child);
-          if (_recON) _recs.push_back(npath);
+          if (_recON) { recPath.push_back({(short)A0[i], (short)0}); _recs.push_back(recPath); }
+          neighbors.push_back(std::move(child));
           ++emitted;
-          rec(i + 1, child, nu, npath);              // extend the subset
+          self(self, i + 1, (int)neighbors.size() - 1, nu);   // extend the subset
+          if (_recON) recPath.pop_back();
         }
       };
-    rec(0, nodeID, {0,0,0,0}, {});
+    rec(rec, 0, -1, {0,0,0,0});
   }
   // ── EXPLICIT-WAIT MODEL (RCPSP_TT2_WAIT=1) ─────────────────────────────────
   // The firings above kept only transitions whose input tokens are all ready NOW (delta 0), so every activity

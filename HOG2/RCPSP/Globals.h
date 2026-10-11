@@ -10,7 +10,7 @@
 #include "petriclasses.h"
 
 using namespace P_RCPSP;
-short LB=0;
+thread_local short LB=0;   // per thread: TemplateAStar raises it on every expansion (HDA* workers each run one)
 // ── Structs and Enums ─────────────────────────────────────────────
 struct ResourceInfo {
     std::string resource_nume;
@@ -190,7 +190,7 @@ inline bool            allcorrect         = true;
 // If OPEN exhausts without a goal, the incumbent IS the optimum.
 inline bool  g_use_ub     = false;
 inline short g_incumbent  = std::numeric_limits<short>::max();
-inline long  g_ub_pruned  = 0;
+inline thread_local long  g_ub_pruned  = 0;
 
 // ── Per-rule prune counters (debug) ──────────────────────────────
 // Reset per instance in solveRCPSP_CBS. UB/dominance already counted elsewhere
@@ -377,23 +377,24 @@ inline bool  g_use_lazy      = false;  // RCPSP_LAZY=1: use LazyAStarCBS (deferr
 inline bool  g_tt2_dr5       = false;  // RCPSP_TT2_DR5=1: cutset (DR5) dominance for the TT2/TTPNR search (DominanceTT2.h), checked+inserted in RCPSP_TT2::GetSuccessors. Includes always-on skyline thinning.
 inline int   g_tt2_dom_side  = 0;      // bidirectional DR table selector (0=forward, 1=backward); DominanceTT2.h get_tt2_dominance_table() picks the side's table.
 inline bool  g_tt2_dr4       = false;  // RCPSP_TT2_DR4=1: DR4 delayed-start dominance in TT2 successor generation (Liu et al. rule 4, ported from new_herustic). Prune firing l at delta d_l if some other available transition i has d_i < d_l and d_i + p_i <= d_l (sound left-shift; min-delta child never pruned).
-inline long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
+inline thread_local long  g_tt2_dr4_pruned = 0;     // successors skipped by DR4 (per instance; CSV: dr4Pruned)
 inline int   g_tt2_kill      = 0;      // RCPSP_TT2_KILL (needs RCPSP_TT2_DR5): DR5 entries retired by a later dominating state are recorded as DEAD (DominanceTT2.h). 1 = count expansions of dead nodes only (search unchanged), 2 = also skip them (no children). Forward TT2 A* (solveRCPSP_TT2) only.
+inline thread_local bool g_tt2_hda_worker = false;   // set inside HDA* worker threads (HDAStarTT2.h): RCPSP_TT2::GetSuccessors then leaves DR5 to the owning worker
 inline int   g_tt2_kill_armed = 0;     // g_tt2_kill while solveRCPSP_TT2's A* runs, 0 otherwise (keeps the other TT2 drivers unaffected)
-inline long  g_tt2_dead_expanded = 0;  // RCPSP_TT2_KILL: expansions of dead nodes (per instance; with =2 these emitted no children)
+inline thread_local long  g_tt2_dead_expanded = 0;  // RCPSP_TT2_KILL: expansions of dead nodes (per instance; with =2 these emitted no children)
 inline bool  g_tt2_dupprobe  = false;  // RCPSP_TT2_DUPPROBE=1: classify every child that reaches A* against its open/closed list (measurement only; one extra lookup per child)
-inline long  g_tt2_dup[5]    = {0, 0, 0, 0, 0};   // per instance: new / on OPEN with lower g / on OPEN, not lower / on CLOSED with lower g / on CLOSED, not lower
+inline thread_local long  g_tt2_dup[5]    = {0, 0, 0, 0, 0};   // per instance: new / on OPEN with lower g / on OPEN, not lower / on CLOSED with lower g / on CLOSED, not lower
 inline bool  g_tt2_wait      = false;  // RCPSP_TT2_WAIT=1: explicit-wait model. A transition fires only when all its input tokens are ready NOW, and a separate wait edge advances the clock one unit (RCPSP_TT2::GetSuccessors). Every integer schedule is then a path on the forward and the reversed net, so bidirectional frontiers always share cuts. DR4 becomes a horizon on the wait chain; DR5 exempts a state's own wait ancestors (DominanceTT2.h).
-inline long  g_tt2_wait_edges = 0;     // explicit-wait model: wait children generated (per instance; CSV: waitEdges)
-inline long  g_tt2_wait_cut   = 0;     // explicit-wait model: wait edges cut by the DR4 horizon (per instance; CSV: waitCut)
+inline thread_local long  g_tt2_wait_edges = 0;     // explicit-wait model: wait children generated (per instance; CSV: waitEdges)
+inline thread_local long  g_tt2_wait_cut   = 0;     // explicit-wait model: wait edges cut by the DR4 horizon (per instance; CSV: waitCut)
 inline bool  g_tt2_waitjump   = true;  // RCPSP_TT2_WAITJUMP (default 1, wait model only): a wait chain where nothing can start jumps in one edge to the first time something becomes ready; HBAE re-creates the skipped nodes as closed meet-only nodes
-inline long  g_tt2_wait_jumped = 0;    // wait-model units skipped by those jumps (per instance; CSV: waitJumped)
+inline thread_local long  g_tt2_wait_jumped = 0;    // wait-model units skipped by those jumps (per instance; CSV: waitJumped)
 inline long  g_tt2_wait_meetonly = 0;  // HBAE: skipped wait nodes re-created for the meet (per instance; CSV: waitMeetOnly)
-inline long  g_tt2_wait_pass  = 0;     // explicit-wait model: wait edges from a node where nothing could start (its only successor; CSV: waitPass)
+inline thread_local long  g_tt2_wait_pass  = 0;     // explicit-wait model: wait edges from a node where nothing could start (its only successor; CSV: waitPass)
 inline bool  g_tt2_immsel    = false;  // RCPSP_TT2_IMMSEL=1: immediate selection (D&H / Hartmann Remark 1) — when every available transition is fireable NOW and one of them cannot be co-processed with any not-yet-started activity, it is forced: emit only that single firing (a left-shift; no optimum lost). Branching reduction, not a state prune.
-inline long  g_tt2_immsel_fired = 0;   // nodes where immediate selection collapsed the branching (per instance)
+inline thread_local long  g_tt2_immsel_fired = 0;   // nodes where immediate selection collapsed the branching (per instance)
 inline bool  g_tt2_freefire  = false;  // RCPSP_TT2_FREEFIRE=1 (SUB-SOLVE ONLY): force-fire an available activity with 0 demand on the constrained resource k that is ready NOW (delta==0). A left-shift of "free" activities (they never conflict), pure branching reduction. Gated to g_in_subsolve; the single-res relaxation zeroes 3/4 of demands so most activities become free.
-inline long  g_tt2_freefire_fired = 0; // nodes where a free activity was force-fired (per instance)
+inline thread_local long  g_tt2_freefire_fired = 0; // nodes where a free activity was force-fired (per instance)
 inline bool  g_tt2_batch     = false;  // RCPSP_TT2_BATCH=1: batch/macro expansion — each successor starts a resource-feasible SUBSET of the now-available activities in one edge (plus the time-advancing single firings), trading depth for branching. Superset of single-firing (singletons included) => still optimal.
 inline bool  g_tt2_hfresh    = false;  // always compute h fresh: RCPSP_TT2::HCost skips the zero-delay shortcut (h = predessesor_h). HBAE sets it per instance (RCPSP_BI_HFRESH, default 1) because its stored states keep h = 0, so the shortcut scored zero-delay children h = 0 (f = g): admissible but inconsistent. RCPSP_TT2_HFRESH=1 sets it for any mode (e.g. tt2consist).
 inline long  g_tt2_batch_cap = 200000; // RCPSP_TT2_BATCH_CAP: safety cap on feasible subsets enumerated per node (singletons emitted first, so a cap never breaks optimality). Guards the 2^|A0| worst case on resource-abundant instances.
@@ -411,7 +412,7 @@ inline long  g_tt2_batch_cap = 200000; // RCPSP_TT2_BATCH_CAP: safety cap on fea
 // Both are equally sound (any fixed total order works); they differ ONLY in traversal
 // order, which is the clean way to isolate plateau/tie-break effects from real pruning.
 inline int   g_tt2_sym        = 0;
-inline long  g_tt2_sym_pruned = 0;     // successors skipped by the canonical-order rule
+inline thread_local long  g_tt2_sym_pruned = 0;     // successors skipped by the canonical-order rule
 inline bool  g_tt2_gendesc    = false;   // RCPSP_TT2_GENDESC=1: generate TT2 successors in DESCENDING id; with the heap's last-in-first-out tie tendency this makes the canonical (smaller-id) sibling expand first — canonical-first ordering without a comparator tie-break.
 inline bool  g_tt2_sym_tiebreak = false; // RCPSP_TT2_SYMTB=1: deterministic final tie-break preferring SMALLER lastTransitionId (canonical-aligned) so the canonical parent expands before the non-canonical one => symmetry breaking can then only remove REDISCOVERIES, never a first-discovery edge => should become strictly-not-worse.
 
@@ -423,7 +424,7 @@ inline bool  g_tt2_sym_tiebreak = false; // RCPSP_TT2_SYMTB=1: deterministic fin
 // Σenergy/C energy bound. Bound-only (no filtering/pruning); always admissible,
 // so it can never make the search return a suboptimal makespan — only tighten h.
 inline bool  g_tt2_theta        = false; // RCPSP_TT2_THETA=1: enable the Θ-tree bound in the TT2/TTPNR search
-inline long  g_tt2_theta_better = 0;     // times the Θ-tree bound strictly beat the existing bound at a state (per instance; CSV: thetaBoundBetter)
+inline thread_local long  g_tt2_theta_better = 0;     // times the Θ-tree bound strictly beat the existing bound at a state (per instance; CSV: thetaBoundBetter)
 // Same Θ-tree bound adapted to CBS (RCPSP_CBS_THETA=1): floored into HCost like the
 // warm-start LB (est_i = start_times[i], an admissible earliest start). Ablatable,
 // independently admissible, default off. Recorded in the CBS CSV (useThetaBound/thetaBoundBetter).
@@ -558,35 +559,35 @@ inline std::vector<int> g_rs_Kmax;       // [R]
 // time spent computing the heuristic, call count, and per-feature time for the
 // expensive bounds so we can see where runtime actually goes.
 #include <chrono>
-inline double g_heur_time_sec      = 0.0;  // cumulative wall time inside HCost compute (CSV: heurTimeSec)
-inline long   g_heur_calls         = 0;    // HCost computations, excl. cache hits (CSV: heurCalls)
-inline double g_root_h             = -1.0; // heuristic value at the root/start node (CSV: rootH)
+inline thread_local double g_heur_time_sec      = 0.0;  // cumulative wall time inside HCost compute (CSV: heurTimeSec)
+inline thread_local long   g_heur_calls         = 0;    // HCost computations, excl. cache hits (CSV: heurCalls)
+inline thread_local double g_root_h             = -1.0; // heuristic value at the root/start node (CSV: rootH)
 // ── TT2 PROFILING (RCPSP_TT2_PROF=1) ─────────────────────────────────────────
 // Per-instance wall time by search phase, reset in solveRCPSP_TT2 and written to the TT2 CSV.
 // Timers run only when g_tt2_prof is on (a steady_clock read is ~20-30ns). Counters and the
 // f-bound checkpoints are always on: an increment, plus one clock read every 1024 expansions.
 #include <cstdio>
 inline bool   g_tt2_prof            = false;
-inline double g_prof_succ_sec       = 0.0;  // whole RCPSP_TT2::GetSuccessors
-inline double g_prof_avail_sec      = 0.0;  // unstarted scan + getAvailableTransitionIndices_TT2
-inline double g_prof_gen_sec        = 0.0;  // child construction: firing, DR4, symmetry, batch subsets
-inline double g_prof_dr5_sec        = 0.0;  // DR5 check_and_insert over the children
-inline double g_prof_hash_sec       = 0.0;  // RCPSP_TT2::GetStateHash
-inline double g_prof_hcp_sec        = 0.0;  // heuristic, critical-path part (getForwardHcost)
-inline double g_prof_hres_sec       = 0.0;  // heuristic, resource part (getforwardResource)
+inline thread_local double g_prof_succ_sec       = 0.0;  // whole RCPSP_TT2::GetSuccessors
+inline thread_local double g_prof_avail_sec      = 0.0;  // unstarted scan + getAvailableTransitionIndices_TT2
+inline thread_local double g_prof_gen_sec        = 0.0;  // child construction: firing, DR4, symmetry, batch subsets
+inline thread_local double g_prof_dr5_sec        = 0.0;  // DR5 check_and_insert over the children
+inline thread_local double g_prof_hash_sec       = 0.0;  // RCPSP_TT2::GetStateHash
+inline thread_local double g_prof_hcp_sec        = 0.0;  // heuristic, critical-path part (getForwardHcost)
+inline thread_local double g_prof_hres_sec       = 0.0;  // heuristic, resource part (getforwardResource)
 inline double g_prof_astar_sec      = 0.0;  // TemplateAStar::GetPath total (set by the driver)
-inline long   g_prof_succ_calls     = 0;    // GetSuccessors calls (= expansions incl. re-expansions)
-inline long   g_prof_hash_calls     = 0;
-inline long   g_prof_children_raw   = 0;    // children after DR4/symmetry, before DR5
-inline long   g_prof_children_kept  = 0;    // children after DR5 (and UB if on)
-inline long   g_prof_h_calls_all    = 0;    // HCost entries, including the two shortcuts below
-inline long   g_prof_h_known        = 0;    // HCost returned a fused/cached h
-inline long   g_prof_h_deltazero    = 0;    // HCost reused the parent h (zero-time firing)
-inline int    g_prof_maxf           = -1;   // max f expanded so far: the proven lower bound (consistent h)
-inline int    g_prof_f_at[5]        = {-1, -1, -1, -1, -1};  // g_prof_maxf at 1 / 10 / 60 / 120 / 240 s
+inline thread_local long   g_prof_succ_calls     = 0;    // GetSuccessors calls (= expansions incl. re-expansions)
+inline thread_local long   g_prof_hash_calls     = 0;
+inline thread_local long   g_prof_children_raw   = 0;    // children after DR4/symmetry, before DR5
+inline thread_local long   g_prof_children_kept  = 0;    // children after DR5 (and UB if on)
+inline thread_local long   g_prof_h_calls_all    = 0;    // HCost entries, including the two shortcuts below
+inline thread_local long   g_prof_h_known        = 0;    // HCost returned a fused/cached h
+inline thread_local long   g_prof_h_deltazero    = 0;    // HCost reused the parent h (zero-time firing)
+inline thread_local int    g_prof_maxf           = -1;   // max f expanded so far: the proven lower bound (consistent h)
+inline thread_local int    g_prof_f_at[5]        = {-1, -1, -1, -1, -1};  // g_prof_maxf at 1 / 10 / 60 / 120 / 240 s
 inline std::chrono::steady_clock::time_point g_prof_t0;      // A* start
 inline std::FILE* g_prof_trace      = nullptr;  // RCPSP_TT2_PROF_TRACE=<file>: a snapshot every 5 s
-inline double g_prof_next_trace     = 5.0;
+inline thread_local double g_prof_next_trace     = 5.0;
 inline int    g_prof_group = 0, g_prof_exam = 0;
 inline const char* g_prof_size      = "";
 inline double g_singleres_time_sec = 0.0;  // time inside the single-resource bound (CSV: singleResTimeSec)
@@ -639,8 +640,8 @@ inline bool g_subsolve_succ_cache = false;   // RCPSP_SUBSOLVE_SUCC_CACHE=1 (PAR
 inline long g_succ_cache_cap      = 0;       // RCPSP_SUCC_CACHE_CAP: max entries; 0 = UNLIMITED (server has memory).
                                              // Only a speed knob: a very large map costs rehash/lookup/alloc time,
                                              // so cap it only if profiling shows map growth outweighs the hits it buys.
-inline long g_succ_probes = 0;               // expansions probed (per instance)
-inline long g_succ_hits   = 0;               // served from cache (per instance)
+inline thread_local long g_succ_probes = 0;               // expansions probed (per instance)
+inline thread_local long g_succ_hits   = 0;               // served from cache (per instance)
 
 // ── h-value cache (RCPSP_SUBSOLVE_H_CACHE=1) — the light lever ────────────────
 // Memoize h=max(CP,RC) per (state,k) across sub-solves (deterministic, so sound; 128-bit
@@ -650,8 +651,8 @@ inline long g_succ_hits   = 0;               // served from cache (per instance)
 inline bool g_h_cache      = false;          // RCPSP_SUBSOLVE_H_CACHE=1
 inline bool g_h_cache_solved = false;        // RCPSP_SUBSOLVE_H_CACHE_SOLVED=1: cache ONLY solved (proven-path) nodes with
                                              // EXACT h*=M-g (back-filled after each sub-solve), not every open node's heuristic h
-inline long g_hcache_probes= 0;              // per instance
-inline long g_hcache_hits  = 0;              // per instance
+inline thread_local long g_hcache_probes= 0;              // per instance
+inline thread_local long g_hcache_hits  = 0;              // per instance
 inline std::unordered_set<uint64_t> g_shadow_set;
 inline long g_shadow_probes = 0;
 inline long g_shadow_hits   = 0;
@@ -785,7 +786,7 @@ inline bool  g_use_setdelay       = false; // RCPSP_SETDELAY=1: set-together MDA
 // COUNT children that survive DR5 yet are order-swap candidates — the NET-NEW
 // prunes rule 7 would add. If ~0, order-swap is subsumed; no prune worth adding.
 inline bool  g_orderswap      = false;  // RCPSP_ORDERSWAP=1: measure order-swap candidates (no pruning yet)
-inline long  g_orderswap_cand = 0;      // children kept by DR5 that ARE order-swap reducible (per instance)
+inline thread_local long  g_orderswap_cand = 0;      // children kept by DR5 that ARE order-swap reducible (per instance)
 
 // ── Non-minimal delay env toggle (RCPSP_NMD=1) ───────────────────────────────
 // Exposes setting.use_non_minimal_delay to the normal benchmark/sweep runner (it

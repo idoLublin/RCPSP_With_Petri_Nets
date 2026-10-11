@@ -568,7 +568,7 @@ bool resFastOn() {
 static const std::vector<std::array<int, 4>>& resDemandMatrix() {
   struct Slot { uint64_t gen = ~0ULL; const P_RCPSP::Activity* ptr = nullptr; int n = -1, nres = -1;
                 std::vector<std::array<int, 4>> dem; };
-  static Slot slot[2]; static int next = 0;
+  static thread_local Slot slot[2]; static thread_local int next = 0;   // thread_local: HDA* workers
   const P_RCPSP::Activity* ptr = RCPSPex.activities.data();
   const int n = (int)RCPSPex.activities.size(), nres = (int)RCPSPex.resources.size();
   for (auto& s : slot)
@@ -5980,7 +5980,7 @@ bool genCheckOn() {
 static thread_local bool g_gen_in_check = false;
 // Per-instance demand tables, invalidated like resDemandMatrix (instance-load counter + activity buffer, 2 slots).
 const ActDemandSlot& actDemandSlot() {
-  static ActDemandSlot slot[2]; static int next = 0;
+  static thread_local ActDemandSlot slot[2]; static thread_local int next = 0;   // thread_local: HDA* workers
   const void* ptr = RCPSPex.activities.data();
   const int n = (int)RCPSPex.activities.size();
   for (auto& s : slot) if (s.gen == g_rcpsp_load_gen && s.ptr == ptr && s.n == n) return s;

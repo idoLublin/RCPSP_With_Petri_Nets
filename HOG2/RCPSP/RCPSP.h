@@ -1489,7 +1489,7 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // Dead node (RCPSP_TT2_KILL, DominanceTT2.h): a later state dominated this one after it was
   // enqueued. =1 only counts it; =2 skips it -- the dominating state covers its subtree.
   // Off inside nested sub-solves (they run their own searches through this function).
-  if (g_tt2_kill_armed && !g_in_subsolve && get_tt2_dominance_table().is_dead(nodeID)) {
+  if (g_tt2_kill_armed && !g_in_subsolve && !g_tt2_hda_worker && get_tt2_dominance_table().is_dead(nodeID)) {
     ++g_tt2_dead_expanded;
     if (g_tt2_kill_armed >= 2) { neighbors.clear(); if (_prof) g_prof_succ_sec += secs_since(_pt0); return; }
   }
@@ -1829,8 +1829,10 @@ inline void RCPSP_TT2::GetSuccessors(const RCPSPState_TT2 &nodeID, std::vector<R
   // generated child, exactly like the CBS side does in RCPSP_CBS::GetSuccessors:
   // a child dominated by an earlier state (same scheduled set, no-later releases)
   // is dropped and never enqueued. Skyline thinning is folded into the insert.
+  // HDA* workers (g_tt2_hda_worker) skip this: the child may belong to another worker, and DR5 runs
+  // against the OWNER's table (HDAStarTT2.h).
   if (_prof && g_tt2_dr5) _pd0 = std::chrono::steady_clock::now();
-  if (g_tt2_dr5) {
+  if (g_tt2_dr5 && !g_tt2_hda_worker) {
     auto& tab = get_tt2_dominance_table();
     size_t w = 0;
     for (size_t i = 0; i < neighbors.size(); i++) {

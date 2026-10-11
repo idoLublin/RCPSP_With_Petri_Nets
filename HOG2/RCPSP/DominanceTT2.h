@@ -383,7 +383,7 @@ private:
 // SEPARATE dominance tables while interleaving.
 extern int g_tt2_dom_side;
 inline TT2DominanceTable& get_tt2_dominance_table() {
-    static TT2DominanceTable t0, t1;
+    static thread_local TT2DominanceTable t0, t1;   // per thread: each HDA* worker (HDAStarTT2.h) owns its own
     return (g_tt2_dom_side == 0) ? t0 : t1;
 }
 

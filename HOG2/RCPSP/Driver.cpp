@@ -17,6 +17,7 @@
 #include <ctime>            // timestamped, self-describing run filenames
 namespace fs = std::filesystem;
 #include "RCPSP.h"
+#include "HDAStarTT2.h"   // RCPSP_HDA: hash-distributed A* for TT2 (mode tt2hda_<size>)
 #include "RootBounds.h"     // RCPSP_ROOT_DLB / RCPSP_ROOT_SEED: root deadline lower bound + heuristic incumbent
 #include "LazyAStarCBS.h"   // RCPSP_LAZY=1: deferred-heuristic A* (compute conflicts/h at pop, not insertion)
 //****importent i changed GLUtil.h with recVec == operator abit****//
@@ -1063,6 +1064,75 @@ static void writeTT2ProfCols(std::ostream& o, uint64_t openAtEnd, uint64_t items
     file << "\n";
 
     return 0;
+}
+
+ // ── HDA* forward TT2 (mode "tt2hda_<size>", HDAStarTT2.h) ───────────────────────
+// Same instance setup and trivial-root shortcut as solveRCPSP_TT2, then the search runs on
+// RCPSP_HDA_THREADS workers (default: hardware threads). Flags whose state is not per-thread
+// (sub-solves, root bounds, node deadline reasoning, dead-node kill) are refused.
+std::string outName(const std::string& folder, const std::string& baseName, const std::string& extension);   // defined below
+static bool onlyInstance(const std::string& size, int g, int e);                                               // defined below
+static int hdaThreads() {
+    if (const char* e = std::getenv("RCPSP_HDA_THREADS")) { int n = std::atoi(e); if (n > 0) return n; }
+    return std::max(1u, std::thread::hardware_concurrency());
+}
+void solveRCPSP_TT2_HDA(int group, int exam, const std::string& filename, const std::string& problemType) {
+    if (g_tt2_singleres || g_tt2_hierrs || g_tt2_kill || g_subsolve_succ_cache || g_h_cache || g_tt2_reverse || g_tt2_dupprobe
+        || tt2nb::On() || tt2nb::WinOn() || rootb::DlbOn() || rootb::SeedOn() || rootb::ProbeOn()) {
+        std::cerr << "tt2hda: a flag that is not thread-safe yet is set (SINGLERES/HIERRS/KILL/DUPPROBE/sub-solve caches/"
+                     "reverse/TT2_TT/root bounds); refusing." << std::endl;
+        std::exit(1);
+    }
+    const int N = hdaThreads();
+    std::cout << "started solving TT2-HDA (" << N << " threads): " << group << ":" << exam << std::endl;
+    count = 0; LB = 0;
+    getPetri(petri, group, exam, problemType);
+    getRCPSP(RCPSPex, group, exam, problemType);
+    { static const double RSL[4] = {0.2, 0.5, 0.7, 1.0}; g_instance_rs = RSL[((group - 1) % 4 + 4) % 4]; }
+    if (g_tt2_ub) { precomputeResourceInfo(); precomputeUpstream(); precomputeDownstream(); }
+    deriveEndpointNames(initialstatename, finalstatename);
+    RCPSPState_TT2 first;
+    RCPSPState_TT2 last = first;
+    last.g = HCost_TT2(last, first);
+    g_heur_time_sec = 0.0; g_heur_calls = 0; g_root_h = -1.0;
+    g_incumbent = std::numeric_limits<short>::max();
+    int seedUB = 0;
+    if (g_tt2_ub) { int sgs = serialSGS_makespan(); if (sgs > 0 && sgs < (int)std::numeric_limits<short>::max()) { g_incumbent = (short)sgs; seedUB = sgs; } }
+
+    auto t0 = std::chrono::steady_clock::now();
+    std::vector<int> trivEst; int trivMakespan = 0;
+    hda::Result r;
+    bool trivial = false;
+    rootb::reset(); tt2nb::reset();
+    if (tryTrivialRootSchedule_TT2(trivEst, trivMakespan)) { trivial = true; r.proven = true; r.makespan = trivMakespan; r.lb = trivMakespan; }
+    else r = hda::Solve(first, last, N, (double)astar_timeout_seconds, seedUB);
+    const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    uint64_t exp = 0, expMax = 0; long sent = 0, recv = 0, dr5P = 0, dr5I = 0; double heur = 0;
+    for (const auto& w : r.stats) { exp += w.expanded; expMax = std::max<uint64_t>(expMax, w.expanded); sent += w.sentStates; recv += w.recvStates; dr5P += w.dr5Pruned; dr5I += w.dr5Inserts; heur += w.heurSec; }
+    std::cout << "TT2-HDA: " << (r.proven ? "optimal" : "not proven") << " makespan=" << r.makespan << " LB=" << r.lb
+              << " expanded=" << exp << " (max/worker " << expMax << ") routed=" << sent << " dr5Pruned=" << dr5P
+              << (r.timedOut ? " TIMEOUT" : "") << " time=" << secs << "s" << std::endl;
+    std::ofstream file(filename, std::ios::app);
+    file << group << "," << exam << "," << secs << "," << (r.proven ? "True" : "False") << "," << (r.proven ? r.makespan : -1) << ","
+         << r.makespan << "," << r.lb << "," << exp << "," << expMax << "," << sent << "," << recv << "," << dr5P << "," << dr5I << ","
+         << heur << "," << N << "," << (trivial ? 1 : 0) << "," << (r.timedOut ? 1 : 0) << "," << problemType << ","
+         << getPeakMemoryKB() << "," << astar_timeout_seconds << "\n";
+}
+
+void runBenchmarkTT2HDA(const std::string& problemType) {
+    std::string filename = outName("new_results", "output_tt2hda_" + problemType + "_", ".csv");
+    { std::ofstream f(filename);
+      if (!f.is_open()) { std::cerr << "Error opening file: " << filename << std::endl; return; }
+      f << "group,exam,time,solved,makespan,ub,lb,expandNumber,expandMaxWorker,routedStates,receivedStates,domPruned,domInserts,"
+           "heurTimeSec,threads,trivialAtRoot,timedOut,problemType,maxMem,timeoutS" << std::endl; }
+    std::cout << "\n=== TT2 HDA* (" << hdaThreads() << " threads) | " << problemType << " ===" << std::endl;
+    for (int i = 1; i <= 48; i++)
+        for (int j = 1; j <= 10; j++) {
+            if (!onlyInstance(problemType, i, j)) continue;
+            solveRCPSP_TT2_HDA(i, j, filename, problemType);
+        }
+    std::cout << "\nTT2 HDA* benchmark done (" << problemType << ") -> " << filename << std::endl;
 }
 
  int solveRCPSP_TT2_Backward(int group, int exam, const std::string& filename,const std::string& problemType="j30") {
@@ -5892,6 +5962,9 @@ int main(int argc, char* argv[]) {
             g_tt2_reverse = true;
             runBenchmarkTT2(problemType);
             g_tt2_reverse = false;
+        } else if (arg1.rfind("tt2hda_", 0) == 0) {
+            // HDA* forward TT2 on RCPSP_HDA_THREADS workers: "tt2hda_j30" etc. (HDAStarTT2.h)
+            runBenchmarkTT2HDA(arg1.substr(7));
         } else if (arg1.rfind("tt2_", 0) == 0) {
             // TT2 mode: argument is "tt2_j30", "tt2_j60", "tt2_j90"
             std::string problemType = arg1.substr(4);

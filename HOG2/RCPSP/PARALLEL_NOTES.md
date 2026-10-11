@@ -191,3 +191,68 @@ TemplateAStar the map can't be dropped: decrease-key and reopen find nodes throu
 A collision silently merges two states, so any cheaper hash must stay full 64-bit
 quality. DR5 stays non-strict (≥): it is sound because a pruned state is never stored,
 and a strict rule would only hand exact duplicates to the hash check.
+
+## 8. Serial speed, same search (TT2 and CBS)
+
+None of these changes alters the search. Each was checked against the same configuration
+without it: same solved / makespan / expanded / generated and every DR5 counter, on all
+480 j30.
+
+| Change | Where | Switch |
+|---|---|---|
+| Batch subset children are built once (moved into `neighbors`, no copy, no `std::function`) | `RCPSP.h` | always |
+| The firing constructor reserves exactly the room its appends need | `RCPSPState.cpp` | always |
+| **DR5 is tested before a child is built** | `RCPSP.h`, `DominanceTT2.h` | `RCPSP_TT2_PRECHECK=1` (2 = check mode) |
+| CBS `propagateInc`: the earliest-start scan stops at the last blocked unit | `RootBounds.h` | always |
+
+**Pre-check.** About 72% of TT2 children used to be built in full (token lists and all)
+and then dropped by DR5. DR5 reads only the scheduled set, g, and the release of each
+active activity. For "fire t after delay d" all three come straight from the parent:
+- g' = g + d;
+- the scheduled set gains t;
+- an active i stays active iff rem_i > d, keeping its release g + rem_i;
+- t is active with release g' + p_t if p_t > 0.
+
+So time-advancing children are tested on that view and only the survivors are built.
+A batch subset child is still built, because its extensions start from it, but it is
+kept only if it survives. The tests run in the order the old DR5 loop ran them, so every
+decision is the same.
+- Off where that cannot hold: HDA* workers, order-swap, the sub-solve successor
+  cache, the wait model, and the prune observer.
+- Validated with DR5+DR4+BATCH, DR5+DR4, +KILL=2, +COMPACT=1 and DR5+SYM; check mode
+  (=2) found no view mismatch.
+
+Instruction counts (callgrind, exact), TT2 DR5+DR4+BATCH on j30 13:2, 366,354
+expansions in every build:
+
+| Build | Instructions | |
+|---|---|---|
+| before (a250df9) | 15.69 G | |
+| + batch move / reserves (4eeaedf) | 14.96 G | −4.7% |
+| + `RCPSP_TT2_PRECHECK=1` | 11.18 G | **−28.7%** |
+
+Wall time is noisier here; j30 13:1 (3 runs each) went from 15.5 s to 14.1 s.
+CBS (cfg8 + `PROP_FAST=1 PROP_INC=1`, j30 5:1): 28.48 G → 28.11 G (−1.3%), same 171,097
+expansions; `RCPSP_PROP_INC=2` found no mismatch on all 480 j30.
+
+After the pre-check the largest TT2 items are DR5 itself (17%; the children that
+survive scan their bucket twice), the availability scan (10%), the open list, and
+malloc/free (~20%). CBS is dominated by `propagateInc` (~46%), with the cost spread
+over its loops.
+
+**Allocator.** This needs no code change. Measured on the final build (pre-check on,
+j30 13:1, 3 runs each, same expansions):
+
+| | time | peak memory |
+|---|---|---|
+| glibc malloc | 13.5 s | 1.04 GB |
+| glibc, `GLIBC_TUNABLES=glibc.malloc.tcache_count=65535` | 13.1 s | 1.04 GB |
+| jemalloc | **12.3 s (−9%)** | **0.96 GB** |
+
+Before the pre-check jemalloc gave −19% on TT2 (and −10% on CBS 5:1). The pre-check
+removed most of the allocations it was saving. For HDA* jemalloc is still essential
+(§3). To use it, where `libjemalloc2` is installed (`ldconfig -p | grep jemalloc`):
+
+    LD_PRELOAD=/lib/x86_64-linux-gnu/libjemalloc.so.2 ./Driver ...
+
+or link with `-l:libjemalloc.so.2`. `-march=native` gave no measurable gain.

@@ -84,6 +84,24 @@ guarantees thread-safe one-time init.
 - Shared atomic UB. Each worker publishes its f_min. A sent/received counter detects
   messages in flight.
 
-## 4. j60 sample
+## 4. j60 sample (exams 1–2 of every group = 96 instances, 30 s, same flags)
 
-Running (exams 1–2 of every group, 30 s, both configs). Results will be added here.
+| | off | kill=2 |
+|---|---|---|
+| solved | 70 | 70 (same set) |
+| wrong vs `known_optima.csv` | 0 / 70 | 0 / 70 |
+| pops on the 70 solved | 3,637,277 | 3,450,120 (−5.1%) |
+| time on the 70 solved | 77.5 s | 82.2 s (+6.1%) |
+| LB (maxF) at timeout, 26 unsolved | — | higher on 1, lower on 1, equal on 24 |
+| peak memory, j60 41:1 alone | 2.78 GB | 2.84 GB (+2%; 553k dead records) |
+
+Four runs shared one machine, so the times are noisy. An OOM kill seen during the
+sweep came from four ~4 GB processes sharing the limit; the baseline also peaks at
+about 4 GB there. After a re-run every row is present.
+
+**Verdict.** The dead-node skip is sound: 0 wrong across 576 instances. But as a
+side set next to TemplateAStar it does not pay off serially, because building and
+looking up the exact record costs about what the skipped expansions save. The idea
+belongs in the HDA* worker. There the dominance entry carries the node id, so marking
+a node dead is one bit with no extra lookup or memory. Leave `RCPSP_TT2_KILL` off in
+production runs; keep it as the measurement hook.

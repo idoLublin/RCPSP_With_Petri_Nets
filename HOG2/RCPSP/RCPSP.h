@@ -2772,6 +2772,119 @@ static const std::array<short, 32> optimal_37_1 = {
   62, // 30 (act31)
   79  // 31 (act32)
 };
+// RCPSP_CBS_FREEFIX (Globals.h): extend a freshly generated MDA child `start` (a brother) into a node with as few
+// conflicts as possible whose f does not exceed F, a lower bound on the brother's own f. Repeatedly take the earliest
+// conflict (r, t, G) not yet found to be unresolvable within F, try its MDAs whose delays keep every activity at or
+// before its latest start for deadline F (precedence), build each with the ordinary MDA constructor, keep only
+// those with makespan <= F that the CP contradiction test of h_CBS-RCPSP does not refute at F
+// (RCPSP_CBS_FREEFIX_PROP, needs RCPSP_CBS_TT), and apply the one leaving the fewest overloaded resource-time units
+// (then the least excess). A conflict with no such MDA is skipped. Returns false when nothing was resolved.
+template<short N> ConflictKey<N> make_conflict_key(const std::vector<short>& current_jobs, short res_idx);   // RCPSPState.cpp
+
+// Overloaded (resource, time unit) pairs of a schedule and their total excess demand.
+template<short N>
+inline std::pair<int, int> cbs_overload(const RCPSPState_CBS<N>& x) {
+  static thread_local std::vector<short> use;
+  const int T = x.makespan();
+  int units = 0, excess = 0;
+  if (T <= 0) return {0, 0};
+  for (const ResourceInfo& res : resource_info) {
+    if ((int)use.size() < T) use.resize(T);
+    std::fill(use.begin(), use.begin() + T, (short)0);
+    for (size_t j = 0; j < res.activity_indices.size(); ++j) {
+      const short a = res.activity_indices[j];
+      const int s = x.start_times[a], f = std::min(T, s + (int)RCPSPex.activities[a].duration);
+      for (int u = s; u < f; ++u) use[u] += res.demands[j];
+    }
+    for (int u = 0; u < T; ++u) if (use[u] > res.capacity) { ++units; excess += use[u] - res.capacity; }
+  }
+  return {units, excess};
+}
+
+template<short N>
+inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, RCPSPState_CBS<N>& out) {
+  const int R = (int)resource_info.size();
+  if (start.makespan() > F) return false;
+  const bool useProp = g_cbs_freefix_prop && cpcbs::TTOn() && cpcbs::Active();
+  static thread_local std::vector<short> use;
+  std::vector<std::pair<short, std::vector<short>>> stuck;      // (resource, members): no resolution within F
+  std::optional<RCPSPState_CBS<N>> cur;
+  int applied = 0;
+  for (int it = 0; it < g_cbs_freefix_max; ++it) {
+    const RCPSPState_CBS<N>& x = cur ? *cur : start;
+    const int T = x.makespan();
+    int bt = INT_MAX, br = -1;
+    std::vector<short> bG;
+    for (int r = 0; r < R; ++r) {                                 // earliest conflict not known to be stuck
+      const ResourceInfo& res = resource_info[r];
+      const int K = (int)res.activity_indices.size();
+      const int lim = std::min<int>(T, bt);
+      if (K == 0 || lim <= 0) continue;
+      if ((int)use.size() < lim) use.resize(lim);
+      std::fill(use.begin(), use.begin() + lim, (short)0);
+      for (int j = 0; j < K; ++j) {
+        const short a = res.activity_indices[j];
+        const int s = x.start_times[a], f = std::min(lim, s + (int)RCPSPex.activities[a].duration);
+        for (int u = s; u < f; ++u) use[u] += res.demands[j];
+      }
+      for (int u = 0; u < lim; ++u) {
+        if (use[u] <= res.capacity) continue;
+        std::vector<short> G;
+        for (int j = 0; j < K; ++j) {
+          const short a = res.activity_indices[j];
+          if (x.start_times[a] <= u && u < x.start_times[a] + RCPSPex.activities[a].duration) G.push_back(a);
+        }
+        std::sort(G.begin(), G.end());
+        bool known = false;
+        for (const auto& c : stuck) if (c.first == r && c.second == G) { known = true; break; }
+        if (known) continue;
+        bt = u; br = r; bG = std::move(G);
+        break;
+      }
+    }
+    if (br < 0) break;                                            // nothing left that might be resolvable
+    std::array<short, N> ls;
+    x.computeLatestStarts(ls);                                    // backward pass from x's makespan T ...
+    for (int i = 0; i <= g_sink_id; ++i) ls[i] = (short)(ls[i] + (F - T));   // ... shifted to deadline F
+    const ResourceInfo& res = resource_info[br];
+    short dem = 0;
+    for (short a : bG) dem += res.demand_lookup.at(a);
+    ConflictKey<N> key = make_conflict_key<N>(bG, (short)br);
+    const std::vector<MDA> mdas = x.compute_mdas(bG, (short)(dem - res.capacity), ls, br, key);
+    std::vector<const MDA*> cand;                                 // within F by precedence, smallest first
+    for (const MDA& m : mdas) if (m.cost == 0) cand.push_back(&m);
+    std::stable_sort(cand.begin(), cand.end(), [](const MDA* a, const MDA* b) { return a->activities.size() < b->activities.size(); });
+    if ((int)cand.size() > g_cbs_freefix_tries) cand.resize(g_cbs_freefix_tries);
+    // Build every candidate (cheap tests first), order by overload, and run the costly contradiction test in that
+    // order: the first survivor is the minimum-overload candidate that keeps f, with one test in the usual case.
+    std::vector<std::pair<std::pair<int, int>, RCPSPState_CBS<N>>> built;
+    for (const MDA* m : cand) {
+      // The MDA constructor reads the conflict members from its parent's rvs_activities_pool.
+      std::vector<short> savedPool = std::move(x.rvs_activities_pool);
+      const short savedRes = x.resourceType;
+      x.rvs_activities_pool = bG; x.resourceType = (short)br;
+      RCPSPState_CBS<N> y(x, m->activities, (short)bt);
+      x.rvs_activities_pool = std::move(savedPool); x.resourceType = savedRes;
+      if (y.makespan() > F) continue;                           // g alone would exceed the bound
+      const std::pair<int, int> ov = cbs_overload<N>(y);
+      built.emplace_back(ov, std::move(y));
+    }
+    std::stable_sort(built.begin(), built.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    bool done = false;
+    for (auto& b : built) {
+      if (useProp && cpcbs::refuted(b.second.start_times, F)) continue;   // h_CBS-RCPSP would raise f above F
+      cur = std::move(b.second);
+      ++applied; done = true;
+      break;
+    }
+    if (!done) stuck.emplace_back((short)br, bG);
+  }
+  if (!applied) return false;
+  g_cbs_freefix_resolved += applied;
+  out = std::move(*cur);
+  return true;
+}
+
 template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
@@ -3049,6 +3162,31 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   };
 
   gen_children(nodeID, neighbors);
+
+  // RCPSP_CBS_FREEFIX (Globals.h): for every MDA child (brother) c, one extra child c+ = c with as few conflicts as
+  // possible and f(c+) <= F_c = max(g(c), f(node)), a lower bound on f(c) (pathmax), so f(c+) <= f(c) without
+  // evaluating c. The extras join the ordinary children before the filters below (dominance first come first
+  // served, duplicates by schedule); one equal to an existing child is dropped here.
+  if (g_cbs_freefix && !g_in_subsolve && nodeID.found_conflict && nodeID.h_cached) {
+    const int Fp = (int)std::ceil((double)nodeID.makespan() + nodeID.h_cache - 1e-9);
+    const size_t nStd = neighbors.size();
+    for (size_t i = 0; i < nStd; ++i) {
+      const int Fc = std::max<int>(neighbors[i].makespan(), Fp);
+      RCPSPState_CBS<N> x;
+      if (!cbs_free_resolve<N>(neighbors[i], Fc, x)) continue;
+      bool dup = false;
+      for (const auto& c : neighbors) if (c.start_times == x.start_times) { dup = true; break; }
+      if (dup) continue;
+      if (g_cbs_freefix == 2) {   // diagnostic: evaluate the brother and its extension now and compare f
+        const double fc = (double)neighbors[i].makespan() + HCost(neighbors[i], neighbors[i]);
+        const double fx = (double)x.makespan() + HCost(x, x);
+        ++g_ffd_n;
+        if (!x.found_conflict) ++g_ffd_goal;
+        if (fx <= fc + 1e-9) ++g_ffd_same; else { ++g_ffd_up; g_ffd_upsum += (long)std::lround(fx - fc); }
+      }
+      neighbors.push_back(std::move(x)); ++g_cbs_freefix_kids;
+    }
+  }
 
   // RCPSP_INLINE: B&P's Descendants recursion. An intermediate child (same
   // RVST and scheduled set as the expanded node) is not enqueued to OPEN —

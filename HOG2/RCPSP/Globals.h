@@ -254,6 +254,22 @@ inline int  g_cbs_learn = 0;
 inline int  g_cbs_learn_prior = 8;
 inline std::array<unsigned, 128> g_lw_tries{}, g_lw_raise{};
 inline long g_cbs_learn_tries = 0, g_cbs_learn_raises = 0;   // per instance: children credited / of those, f rose
+// RCPSP_CBS_FREEFIX=1 (default 0): besides the MDA branching, for every MDA child c (a brother) one extra child c+
+// = c with as few conflicts as possible WITHOUT a higher f than c's: conflicts are resolved one at a time in time
+// order, each by the MDA that leaves the fewest overloaded resource-time units among those keeping makespan <= F_c
+// and (RCPSP_CBS_FREEFIX_PROP=1, with RCPSP_CBS_TT) not refuted by the CP contradiction test of h_CBS-RCPSP at
+// D = F_c, where F_c = max(g(c), f(node)) <= f(c) (pathmax); conflicts with no such MDA are skipped. Built with the ordinary MDA constructor, so it is an ordinary CBS node (CV(child) is a subset of CV(node),
+// Lemma 3.1 holds); the complete MDA branching is still generated, so coverage (Lemma 4.1) and optimality are
+// unchanged (RCPSP.h, cbs_free_resolve). =2: the same, plus a diagnostic that evaluates the extra child at once and
+// counts how often its f stayed at or below its brother's.
+// RCPSP_CBS_FREEFIX_MAX (default 64): at most this many resolutions per extra child.
+// RCPSP_CBS_FREEFIX_TRIES (default 8): candidate MDAs evaluated per conflict.
+inline int  g_cbs_freefix = 0;
+inline int  g_cbs_freefix_max = 64;
+inline int  g_cbs_freefix_prop = 1;
+inline int  g_cbs_freefix_tries = 8;
+inline long g_cbs_freefix_kids = 0, g_cbs_freefix_resolved = 0;
+inline long g_ffd_n = 0, g_ffd_same = 0, g_ffd_goal = 0, g_ffd_up = 0, g_ffd_upsum = 0;   // RCPSP_CBS_FREEFIX=2 diagnostic: extra child f vs parent f   // per instance: extra children emitted / resolutions in them
 inline long g_cbs_learn_pickdiff = 0;                        // per instance: nodes where the learned score changed the pick
 // RCPSP_CBS_FASTFIRST=1|2|3: with a hybrid threshold above 1 no conflict can be picked by its score, so the
 // branching conflict is always the EARLIEST one, and most of the full scan is work nobody uses. In every level the

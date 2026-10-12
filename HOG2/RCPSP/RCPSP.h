@@ -2849,11 +2849,22 @@ inline std::pair<int, int> cbs_overload(const RCPSPState_CBS<N>& x) {
   return {units, excess};
 }
 
+// A conflict that could not be resolved within bound F, identified by resource, members and member starts
+// (RCPSP_CBS_FREEFIX_SHARE: shared by the brothers of one expansion).
 template<short N>
-inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, RCPSPState_CBS<N>& out) {
+inline uint64_t cbs_stuck_key(const RCPSPState_CBS<N>& x, int r, const std::vector<short>& G, int F) {
+  uint64_t h = 1469598103934665603ULL ^ (uint64_t)(uint32_t)(r * 65536 + F);
+  for (short a : G) { h = (h ^ (uint64_t)(uint16_t)a) * 1099511628211ULL; h = (h ^ (uint64_t)(uint16_t)x.start_times[a]) * 1099511628211ULL; }
+  return h;
+}
+
+template<short N>
+inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optional<RCPSPState_CBS<N>>& out,
+                             std::vector<uint64_t>* shared = nullptr) {
   const int R = (int)resource_info.size();
   if (start.makespan() > F) return false;
   const bool useProp = g_cbs_freefix_prop && cpcbs::TTOn() && cpcbs::Active();
+  const bool cheapTest = useProp && g_cbs_freefix_test == 1;       // single round per candidate, full test at the end
   static thread_local std::vector<short> use;
   std::vector<std::pair<short, std::vector<short>>> stuck;      // (resource, members): no resolution within F
   std::optional<RCPSPState_CBS<N>> cur;
@@ -2878,14 +2889,26 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, RCPSPState_C
       for (int u = 0; u < lim; ++u) {
         if (use[u] <= res.capacity) continue;
         std::vector<short> G;
+        int next = INT_MAX;                                       // next time an activity of r starts or ends
         for (int j = 0; j < K; ++j) {
           const short a = res.activity_indices[j];
-          if (x.start_times[a] <= u && u < x.start_times[a] + RCPSPex.activities[a].duration) G.push_back(a);
+          const int s = x.start_times[a], e = s + RCPSPex.activities[a].duration;
+          if (s <= u && u < e) G.push_back(a);
+          if (s > u && s < next) next = s;
+          if (e > u && e < next) next = e;
         }
         std::sort(G.begin(), G.end());
         bool known = false;
         for (const auto& c : stuck) if (c.first == r && c.second == G) { known = true; break; }
-        if (known) continue;
+        if (!known && shared && !shared->empty()) {
+          const uint64_t k = cbs_stuck_key<N>(x, r, G, F);
+          for (uint64_t s : *shared) if (s == k) { known = true; break; }
+        }
+        if (known) {                                              // the same members until the next event: skip them
+          if (next == INT_MAX) break;
+          u = next - 1;
+          continue;
+        }
         bt = u; br = r; bG = std::move(G);
         break;
       }
@@ -2920,16 +2943,23 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, RCPSPState_C
     std::stable_sort(built.begin(), built.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
     bool done = false;
     for (auto& b : built) {
-      if (useProp && cpcbs::refuted(b.second.start_times, F)) continue;   // h_CBS-RCPSP would raise f above F
+      if (cheapTest) { if (cpcbs::tt0(cpcbs::ctx().I, b.second.start_times, F, nullptr)) continue; }   // first round only
+      else if (useProp && cpcbs::refuted(b.second.start_times, F)) continue;   // h_CBS-RCPSP would raise f above F
       cur = std::move(b.second);
       ++applied; done = true;
       break;
     }
-    if (!done) stuck.emplace_back((short)br, bG);
+    if (!done) {
+      if (g_cbs_freefix_stop) break;                              // RCPSP_CBS_FREEFIX_STOP: keep the free prefix only
+      if (shared) shared->push_back(cbs_stuck_key<N>(x, br, bG, F));
+      stuck.emplace_back((short)br, bG);
+    }
   }
   if (!applied) return false;
+  if (g_cbs_freefix_goal && cbs_overload<N>(*cur).first > 0) return false;   // RCPSP_CBS_FREEFIX_GOAL: schedules only
+  if (cheapTest && cpcbs::refuted(cur->start_times, F)) { ++g_cbs_freefix_finalfail; return false; }   // the full test, once
   g_cbs_freefix_resolved += applied;
-  out = std::move(*cur);
+  out = std::move(cur);
   return true;
 }
 
@@ -3215,18 +3245,25 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   // possible and f(c+) <= F_c = max(g(c), f(node)), a lower bound on f(c) (pathmax), so f(c+) <= f(c) without
   // evaluating c. The extras join the ordinary children before the filters below (dominance first come first
   // served, duplicates by schedule); one equal to an existing child is dropped here.
-  if (g_cbs_freefix && !g_in_subsolve && nodeID.found_conflict && nodeID.h_cached) {
+  // RCPSP_CBS_FREEFIX_LAZY: one extra child of THIS node instead, built now that its f is known (see Globals.h).
+  if (g_cbs_freefix && !g_in_subsolve && nodeID.found_conflict && nodeID.h_cached && !(g_cbs_freefix_lazy && nodeID.ff_extra)) {
     const int Fp = (int)std::ceil((double)nodeID.makespan() + nodeID.h_cache - 1e-9);
+    std::vector<uint64_t> sharedStuck;                       // RCPSP_CBS_FREEFIX_SHARE
+    std::vector<uint64_t>* const sh = g_cbs_freefix_share ? &sharedStuck : nullptr;
     const size_t nStd = neighbors.size();
-    for (size_t i = 0; i < nStd; ++i) {
-      const int Fc = std::max<int>(neighbors[i].makespan(), Fp);
-      RCPSPState_CBS<N> x;
-      if (!cbs_free_resolve<N>(neighbors[i], Fc, x)) continue;
+    for (size_t i = 0; i < (g_cbs_freefix_lazy ? (size_t)1 : nStd); ++i) {
+      const RCPSPState_CBS<N>& base = g_cbs_freefix_lazy ? nodeID : neighbors[i];
+      if (g_cbs_freefix_maxover > 0 && cbs_overload<N>(base).first > g_cbs_freefix_maxover) continue;   // too far from a schedule
+      const int Fc = g_cbs_freefix_lazy ? Fp : std::max<int>(neighbors[i].makespan(), Fp);
+      std::optional<RCPSPState_CBS<N>> xo;
+      if (!cbs_free_resolve<N>(base, Fc, xo, sh)) continue;
+      RCPSPState_CBS<N>& x = *xo;
       bool dup = false;
       for (const auto& c : neighbors) if (c.start_times == x.start_times) { dup = true; break; }
       if (dup) continue;
+      if (g_cbs_freefix_lazy) { x.ff_extra = 1; if (Fc > x.f_floor) x.f_floor = (short)Fc; }   // below `base`: f(base) is a bound
       if (g_cbs_freefix == 2) {   // diagnostic: evaluate the brother and its extension now and compare f
-        const double fc = (double)neighbors[i].makespan() + HCost(neighbors[i], neighbors[i]);
+        const double fc = g_cbs_freefix_lazy ? (double)Fp : (double)neighbors[i].makespan() + HCost(neighbors[i], neighbors[i]);
         const double fx = (double)x.makespan() + HCost(x, x);
         ++g_ffd_n;
         if (!x.found_conflict) ++g_ffd_goal;

@@ -408,6 +408,7 @@ public:
      // (a free MDA). HCost credits them once the child's f is known. Never part of the identity (== / hash).
      unsigned char lw_n = 0;
      std::array<unsigned char, 3> lw_act{};
+     unsigned char ff_extra = 0;   // RCPSP_CBS_FREEFIX_LAZY: this node is an extra child (its own extra is not built)
      void lw_note(const RCPSPState_CBS& prev, const short* acts, size_t n) {
          if (!g_cbs_learn || start_times[g_sink_id] != prev.start_times[g_sink_id]) return;
          for (size_t i = 0; i < n && lw_n < 3; ++i)

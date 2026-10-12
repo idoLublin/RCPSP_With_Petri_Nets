@@ -228,7 +228,9 @@ inline unsigned long g_cbs_tb_seq = 0;      // per-instance creation counter beh
 // path returned by any stage is optimal, and an abandoned stage still leaves a valid lower bound (LB keeps
 // the maximum). Motivation: on the f = C* plateau a dive either succeeds within seconds or not at all, and
 // different orders succeed on different instances. Empty = off.
-struct CbsRestartStage { long sec; std::string spec; float T; bool mirror = false; };
+// Optional 4th field: letters M (the stage runs on the mirrored project) and/or F (the stage adds the FREEFIX extra
+// children, with the RCPSP_CBS_FREEFIX_* options; the other stages run with RCPSP_CBS_FREEFIX as given).
+struct CbsRestartStage { long sec; std::string spec; float T; bool mirror = false; bool freefix = false; };
 inline std::string g_cbs_restart;                       // the raw spec, as given
 inline std::vector<CbsRestartStage> g_cbs_restart_stages;
 inline int g_cbs_restart_stage = 0;                     // per instance: the stage in which the search ended (1-based)
@@ -264,11 +266,28 @@ inline long g_cbs_learn_tries = 0, g_cbs_learn_raises = 0;   // per instance: ch
 // counts how often its f stayed at or below its brother's.
 // RCPSP_CBS_FREEFIX_MAX (default 64): at most this many resolutions per extra child.
 // RCPSP_CBS_FREEFIX_TRIES (default 8): candidate MDAs evaluated per conflict.
+// Cost options (default 0 = as in the 2026-10-11 server run, where each extra child cost ~100 propagations):
+// RCPSP_CBS_FREEFIX_TEST=1: each candidate MDA is tested with the single-round time-table check (cpcbs::tt0), and
+//   the finished extra child once with the full contradiction test; an extra child that fails it is dropped.
+// RCPSP_CBS_FREEFIX_SHARE=1: a conflict found unresolvable for one brother (same resource, members and member
+//   starts, same bound) is not tried again for the other brothers of the same expansion.
+// RCPSP_CBS_FREEFIX_LAZY=1: the extra child of a node is built when that node is EXPANDED (its f is then known), as
+//   its child instead of its brother, and starts from f_floor = that f. Admissible: every schedule below the extra
+//   child is below the node. Not built for a node that is itself an extra child.
 inline int  g_cbs_freefix = 0;
 inline int  g_cbs_freefix_max = 64;
 inline int  g_cbs_freefix_prop = 1;
 inline int  g_cbs_freefix_tries = 8;
+// RCPSP_CBS_FREEFIX_STOP=1: stop at the first conflict (in time order) with no free resolution, instead of skipping
+//   it and trying the later ones: the extra child resolves the free PREFIX of the conflicts.
+// RCPSP_CBS_FREEFIX_GOAL=1: keep an extra child only if it is conflict-free (a schedule). Below the optimum every
+//   node is expanded anyway, and a partial extra child only adds a second, largely redundant subtree there; a
+//   conflict-free one adds no subtree and, at f = C*, ends the search.
+// RCPSP_CBS_FREEFIX_MAXOVER=K (>0): try the extra child only from a node with at most K overloaded resource-time units.
+inline int  g_cbs_freefix_test = 0, g_cbs_freefix_share = 0, g_cbs_freefix_lazy = 0, g_cbs_freefix_stop = 0, g_cbs_freefix_goal = 0;
+inline int  g_cbs_freefix_maxover = 0;
 inline long g_cbs_freefix_kids = 0, g_cbs_freefix_resolved = 0;
+inline long g_cbs_freefix_finalfail = 0;   // per instance: extra children dropped by the final full test (TEST=1)
 inline long g_ffd_n = 0, g_ffd_same = 0, g_ffd_goal = 0, g_ffd_up = 0, g_ffd_upsum = 0;   // RCPSP_CBS_FREEFIX=2 diagnostic: extra child f vs parent f   // per instance: extra children emitted / resolutions in them
 inline long g_cbs_learn_pickdiff = 0;                        // per instance: nodes where the learned score changed the pick
 // RCPSP_CBS_FASTFIRST=1|2|3: with a hybrid threshold above 1 no conflict can be picked by its score, so the

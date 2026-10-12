@@ -2858,6 +2858,51 @@ inline uint64_t cbs_stuck_key(const RCPSPState_CBS<N>& x, int r, const std::vect
   return h;
 }
 
+// Distinct conflicts of a schedule: per resource, maximal overloaded stretches in which no activity of that resource
+// starts or ends (one fixed set of members each), so one long overlap counts once. (conflict_number stays 0 under
+// MDA branching, see Globals.h.)
+template<short N>
+inline int cbs_conflict_count(const RCPSPState_CBS<N>& x) {
+  static thread_local std::vector<short> use;
+  static thread_local std::vector<char> ev;
+  const int T = x.makespan();
+  if (T <= 0) return 0;
+  int c = 0;
+  for (const ResourceInfo& res : resource_info) {
+    use.assign(T, 0); ev.assign(T + 1, 0);
+    for (size_t j = 0; j < res.activity_indices.size(); ++j) {
+      const short a = res.activity_indices[j];
+      const int s = x.start_times[a], f = std::min(T, s + (int)RCPSPex.activities[a].duration);
+      for (int u = s; u < f; ++u) use[u] += res.demands[j];
+      if (s < T) ev[s] = 1;
+      if (f <= T) ev[f] = 1;
+    }
+    bool prev = false;
+    for (int u = 0; u < T; ++u) {
+      const bool over = use[u] > res.capacity;
+      if (over && (!prev || ev[u])) ++c;
+      prev = over;
+    }
+  }
+  return c;
+}
+
+// The FREEFIX gates (Globals.h): absolute (MAXOVER, MAXCONF) and relative to the root (RELOVER, RELCONF).
+template<short N>
+inline bool cbs_freefix_gate(const RCPSPState_CBS<N>& x) {
+  if (g_cbs_freefix_maxover > 0 || g_cbs_freefix_relover > 0) {
+    const int ov = cbs_overload<N>(x).first;
+    if (g_cbs_freefix_maxover > 0 && ov > g_cbs_freefix_maxover) return false;
+    if (g_cbs_freefix_relover > 0 && g_cbs_root_over >= 0 && ov > g_cbs_freefix_relover * g_cbs_root_over) return false;
+  }
+  if (g_cbs_freefix_maxconf > 0 || g_cbs_freefix_relconf > 0) {
+    const int nc = cbs_conflict_count<N>(x);
+    if (g_cbs_freefix_maxconf > 0 && nc > g_cbs_freefix_maxconf) return false;
+    if (g_cbs_freefix_relconf > 0 && g_cbs_root_conf >= 0 && nc > g_cbs_freefix_relconf * g_cbs_root_conf) return false;
+  }
+  return true;
+}
+
 template<short N>
 inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optional<RCPSPState_CBS<N>>& out,
                              std::vector<uint64_t>* shared = nullptr) {
@@ -3071,6 +3116,11 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   // regenerated fields are identical to what was stripped.
   if (nodeID.found_conflict && nodeID.rvs_activities_pool.empty())
     nodeID.compute_h_and_RVS();
+  // RCPSP_CBS_FREEFIX relative gates: the root's overload and conflict count, recorded at its first expansion
+  if (g_cbs_freefix && g_cbs_root_over < 0 && nodeID.tb_depth == 0 && !g_in_subsolve && nodeID.found_conflict) {
+    g_cbs_root_over = cbs_overload<N>(nodeID).first;
+    g_cbs_root_conf = cbs_conflict_count<N>(nodeID);
+  }
 
   // Child generation for one parent, shared by the normal path and the inline
   // (B&P Descendants) recursion below. Requires parent's full conflict fields.
@@ -3335,11 +3385,11 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   // served, duplicates by schedule); one equal to an existing child is dropped here.
   // RCPSP_CBS_FREEFIX_SGS: the extra child of THIS node is a schedule (cbs_sgs_within), added only if it keeps f.
   if (g_cbs_freefix && g_cbs_freefix_sgs > 0 && !g_in_subsolve && nodeID.found_conflict && nodeID.h_cached
-      && cpcbs::Active() && !nodeID.rel && nodeID.added_precedences.empty()
-      && (g_cbs_freefix_maxconf <= 0 || nodeID.conflict_number <= g_cbs_freefix_maxconf)) {
+      && cpcbs::Active() && !nodeID.rel && nodeID.added_precedences.empty() && cbs_freefix_gate<N>(nodeID)) {
     const int F = (int)std::ceil((double)nodeID.makespan() + nodeID.h_cache - 1e-9);
     static thread_local std::vector<int> st;
-    const int nRand = (g_cbs_freefix_rand > 0 && nodeID.conflict_number <= g_cbs_freefix_randconf) ? g_cbs_freefix_rand : 0;
+    const int nodeConf = cbs_conflict_count<N>(nodeID);
+    const int nRand = (g_cbs_freefix_rand > 0 && nodeConf <= g_cbs_freefix_randconf) ? g_cbs_freefix_rand : 0;
     const int ov = cbs_sgs_within<N>(nodeID, F, nRand, g_cbs_freefix_sgs >= 2, st);
     bool same = ov >= 0;
     for (int i = 0; same && i < (int)st.size(); ++i) same = (st[i] == nodeID.start_times[i]);
@@ -3355,8 +3405,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       bool keep = true;
       if (ov > 0) {               // conflicts remain (SGS=2): keep it only at the same f and with fewer conflicts
         const double hx = HCost(x, x);                      // the value the search would compute; it stays cached
-        keep = (double)x.makespan() + hx <= (double)F + 1e-9
-               && (nodeID.conflict_number <= 0 || x.conflict_number < nodeID.conflict_number);
+        keep = (double)x.makespan() + hx <= (double)F + 1e-9 && cbs_conflict_count<N>(x) < nodeConf;
         if (!keep) ++g_cbs_freefix_finalfail;
       } else if (g_cbs_freefix == 2) {   // diagnostic: CBS's own scan must find no conflict, and the makespan <= F
         HCost(x, x);
@@ -3377,7 +3426,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
     const size_t nStd = neighbors.size();
     for (size_t i = 0; i < (g_cbs_freefix_lazy ? (size_t)1 : nStd); ++i) {
       const RCPSPState_CBS<N>& base = g_cbs_freefix_lazy ? nodeID : neighbors[i];
-      if (g_cbs_freefix_maxover > 0 && cbs_overload<N>(base).first > g_cbs_freefix_maxover) continue;   // too far from a schedule
+      if (!cbs_freefix_gate<N>(base)) continue;   // too far from a schedule (MAXOVER / MAXCONF / RELOVER / RELCONF)
       const int Fc = g_cbs_freefix_lazy ? Fp : std::max<int>(neighbors[i].makespan(), Fp);
       std::optional<RCPSPState_CBS<N>> xo;
       if (!cbs_free_resolve<N>(base, Fc, xo, sh)) continue;

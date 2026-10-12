@@ -296,6 +296,11 @@ inline int  g_cbs_freefix_maxover = 0;
 // RCPSP_CBS_FREEFIX_RAND=R: if that fails, R more attempts in a random order (random targets inside the windows,
 //   seeded by the node's schedule), only from nodes with at most RCPSP_CBS_FREEFIX_RANDCONF (default 4) conflicts.
 inline int  g_cbs_freefix_sgs = 0, g_cbs_freefix_maxconf = 0, g_cbs_freefix_rand = 0, g_cbs_freefix_randconf = 4;
+// Gates relative to the ROOT (the same rule for any instance size or benchmark; 0 = off):
+// RCPSP_CBS_FREEFIX_RELOVER=r: try only from nodes with at most r x (the root's overloaded resource-time units).
+// RCPSP_CBS_FREEFIX_RELCONF=r: try only from nodes with at most r x (the root's number of conflicts).
+inline double g_cbs_freefix_relover = 0.0, g_cbs_freefix_relconf = 0.0;
+inline int    g_cbs_root_over = -1, g_cbs_root_conf = -1;   // per instance: recorded when the root is expanded
 inline long g_cbs_freefix_sgs_calls = 0;   // per instance: SGS attempts
 inline long g_cbs_freefix_kids = 0, g_cbs_freefix_resolved = 0;
 inline long g_cbs_freefix_finalfail = 0;   // per instance: extra children dropped by the final full test (TEST=1)

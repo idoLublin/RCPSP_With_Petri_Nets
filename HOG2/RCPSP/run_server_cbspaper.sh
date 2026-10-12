@@ -79,6 +79,8 @@
 #   +frx extra "brother" children: one more child per MDA child, as few conflicts as possible without a higher f
 #        (RCPSP_CBS_FREEFIX; +frx1 cheaper, +frxnp control without the contradiction test). Server run 2026-10-11:
 #        ARMS="p-final p-final+frx p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frx" TAG=frx ./run_server_cbspaper.sh
+#        (result: frx finished fewer in every set). +frxr / +frxo = the cheap gated form; run 2026-10-12:
+#        ARMS="p-final p-final+frxr p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frxr" TAG=frxr ./run_server_cbspaper.sh
 #   CXX_EXTRA="-march=native" adds compiler flags to the build (use its own BIN_NAME): same search, faster code.
 #   TAG=<name>: REQUIRED when another launch runs an arm of the same name (or ran it and its files must stay):
 #   directories, logs and merged files are then named <arm>.<TAG> (RUN_<arm>.<TAG>_<size>.csv). Without it two
@@ -312,6 +314,13 @@ arm_mod(){ case $1 in
   frx)   echo "RCPSP_CBS_FREEFIX=1" ;;
   frx1)  echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_TRIES=1" ;;
   frxnp) echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_PROP=0" ;;
+  # frxr / frxo (2026-10-12): the cheap form of frx. The extra child is built when a node is EXPANDED (its f known),
+  # as its child, resolves only the free prefix of its conflicts (stops at the first one without a free fix), and is
+  # tried only from nodes near a schedule, relative to the root: frxr = at most 20% of the root's conflicts, frxo = at
+  # most 20% of its overloaded resource-time units. Local test (cfg8, 71 instances the control needs >= 1 s for,
+  # 60 s): frxr J30 37/40 (control 36), J90 28/29 (27), J60 2/2, nothing lost, same time. Plain frx lost 4-23 per set.
+  frxr)  echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_LAZY=1 RCPSP_CBS_FREEFIX_STOP=1 RCPSP_CBS_FREEFIX_RELCONF=0.2" ;;
+  frxo)  echo "RCPSP_CBS_FREEFIX=1 RCPSP_CBS_FREEFIX_LAZY=1 RCPSP_CBS_FREEFIX_STOP=1 RCPSP_CBS_FREEFIX_RELOVER=0.2" ;;
   nolazy) echo "RCPSP_LAZY=0" ;;             # eager A*: every generated node is evaluated at once (the portfolio runs on it too)
   notp) echo "RCPSP_CBS_TT=0" ;;              noprop) echo "RCPSP_CBS_TT=0 RCPSP_CBS_PATHMAX=0" ;;
   nodr5) echo "RCPSP_DR5=0" ;;                lrn2) echo "RCPSP_CBS_LEARN=2" ;;
@@ -411,7 +420,7 @@ done; done
 
 echo "=== EFFECTIVE FLAGS AND RESULT (rows must be 480) ==="
 for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv"; [ -f "$f" ] || { echo "RUN_${A}_${sz}: MISSING"; continue; }
-  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay cbsFreeFix freeFixProp freeFixTries; do
+  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay cbsFreeFix freeFixProp freeFixTries freeFixLazy freeFixStop freeFixRelConf freeFixRelOver; do
     i=$(col "$f" $c); [ -n "$i" ] && fl="$fl $c=$(awk -F, -v i="$i" 'NR==2{print $i}' "$f")"; done
   fin=$(awk -F, 'NR>1 && $13=="True"' "$f" | wc -l); tot=$(awk -F, 'NR>1' "$f" | wc -l)
   st=""; i=$(col "$f" restartStage); [ -n "$i" ] && st=" solved-by-stage: $(awk -F, -v i="$i" 'NR>1 && $13=="True"{n[$i]++} END{for(k in n) printf "%s=%d ", k, n[k]}' "$f")"

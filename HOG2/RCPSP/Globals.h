@@ -286,6 +286,14 @@ inline int  g_cbs_freefix_tries = 8;
 // RCPSP_CBS_FREEFIX_MAXOVER=K (>0): try the extra child only from a node with at most K overloaded resource-time units.
 inline int  g_cbs_freefix_test = 0, g_cbs_freefix_share = 0, g_cbs_freefix_lazy = 0, g_cbs_freefix_stop = 0, g_cbs_freefix_goal = 0;
 inline int  g_cbs_freefix_maxover = 0;
+// RCPSP_CBS_FREEFIX_SGS=1 (replaces the MDA-based construction): at a node's expansion, try to build a schedule
+//   below it with makespan <= f(node) by a serial schedule generation scheme (RCPSP.h, cbs_sgs_within): every
+//   activity starts between its start in the node and its latest start for deadline f(node), in the node's order.
+//   A success is a goal at the node's f. RCPSP_CBS_FREEFIX_MAXCONF=K (>0): only from nodes with at most K conflicts.
+// RCPSP_CBS_FREEFIX_RAND=R: if that fails, R more attempts in a random order (random targets inside the windows,
+//   seeded by the node's schedule), only from nodes with at most RCPSP_CBS_FREEFIX_RANDCONF (default 4) conflicts.
+inline int  g_cbs_freefix_sgs = 0, g_cbs_freefix_maxconf = 0, g_cbs_freefix_rand = 0, g_cbs_freefix_randconf = 4;
+inline long g_cbs_freefix_sgs_calls = 0;   // per instance: SGS attempts
 inline long g_cbs_freefix_kids = 0, g_cbs_freefix_resolved = 0;
 inline long g_cbs_freefix_finalfail = 0;   // per instance: extra children dropped by the final full test (TEST=1)
 inline long g_ffd_n = 0, g_ffd_same = 0, g_ffd_goal = 0, g_ffd_up = 0, g_ffd_upsum = 0;   // RCPSP_CBS_FREEFIX=2 diagnostic: extra child f vs parent f   // per instance: extra children emitted / resolutions in them

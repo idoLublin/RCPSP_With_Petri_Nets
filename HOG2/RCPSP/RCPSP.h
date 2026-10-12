@@ -2890,6 +2890,7 @@ inline int cbs_conflict_count(const RCPSPState_CBS<N>& x) {
 // The FREEFIX gates (Globals.h): absolute (MAXOVER, MAXCONF) and relative to the root (RELOVER, RELCONF).
 template<short N>
 inline bool cbs_freefix_gate(const RCPSPState_CBS<N>& x) {
+  CbsTimer _tg(g_cbsp.extraGate);   // RCPSP_CBS_PROF
   if (g_cbs_freefix_maxover > 0 || g_cbs_freefix_relover > 0) {
     const int ov = cbs_overload<N>(x).first;
     if (g_cbs_freefix_maxover > 0 && ov > g_cbs_freefix_maxover) return false;
@@ -2914,6 +2915,7 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
   std::vector<std::pair<short, std::vector<short>>> stuck;      // (resource, members): no resolution within F
   std::optional<RCPSPState_CBS<N>> cur;
   int applied = 0;
+  CbsLap lap;                                                     // RCPSP_CBS_PROF: scan / MDA / build / test
   for (int it = 0; it < g_cbs_freefix_max; ++it) {
     const RCPSPState_CBS<N>& x = cur ? *cur : start;
     const int T = x.makespan();
@@ -2958,6 +2960,7 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
         break;
       }
     }
+    lap.to(g_cbsp.extraScan);
     if (br < 0) break;                                            // nothing left that might be resolvable
     std::array<short, N> ls;
     x.computeLatestStarts(ls);                                    // backward pass from x's makespan T ...
@@ -2971,10 +2974,12 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
     for (const MDA& m : mdas) if (m.cost == 0) cand.push_back(&m);
     std::stable_sort(cand.begin(), cand.end(), [](const MDA* a, const MDA* b) { return a->activities.size() < b->activities.size(); });
     if ((int)cand.size() > g_cbs_freefix_tries) cand.resize(g_cbs_freefix_tries);
+    lap.to(g_cbsp.extraMda);
     // Build every candidate (cheap tests first), order by overload, and run the costly contradiction test in that
     // order: the first survivor is the minimum-overload candidate that keeps f, with one test in the usual case.
     std::vector<std::pair<std::pair<int, int>, RCPSPState_CBS<N>>> built;
     for (const MDA* m : cand) {
+      ++g_cbsp.extraBuilt;
       // The MDA constructor reads the conflict members from its parent's rvs_activities_pool.
       std::vector<short> savedPool = std::move(x.rvs_activities_pool);
       const short savedRes = x.resourceType;
@@ -2986,14 +2991,17 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
       built.emplace_back(ov, std::move(y));
     }
     std::stable_sort(built.begin(), built.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    lap.to(g_cbsp.extraBuild);
     bool done = false;
     for (auto& b : built) {
+      if (cheapTest || useProp) ++g_cbsp.extraTests;
       if (cheapTest) { if (cpcbs::tt0(cpcbs::ctx().I, b.second.start_times, F, nullptr)) continue; }   // first round only
       else if (useProp && cpcbs::refuted(b.second.start_times, F)) continue;   // h_CBS-RCPSP would raise f above F
       cur = std::move(b.second);
       ++applied; done = true;
       break;
     }
+    lap.to(g_cbsp.extraTest);
     if (!done) {
       if (g_cbs_freefix_stop) break;                              // RCPSP_CBS_FREEFIX_STOP: keep the free prefix only
       if (shared) shared->push_back(cbs_stuck_key<N>(x, br, bG, F));
@@ -3002,7 +3010,12 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
   }
   if (!applied) return false;
   if (g_cbs_freefix_goal && cbs_overload<N>(*cur).first > 0) return false;   // RCPSP_CBS_FREEFIX_GOAL: schedules only
-  if (cheapTest && cpcbs::refuted(cur->start_times, F)) { ++g_cbs_freefix_finalfail; return false; }   // the full test, once
+  if (cheapTest) {                                                // the full test, once
+    ++g_cbsp.extraTests;
+    const bool isRefuted = cpcbs::refuted(cur->start_times, F);
+    lap.to(g_cbsp.extraTest);
+    if (isRefuted) { ++g_cbs_freefix_finalfail; return false; }
+  }
   g_cbs_freefix_resolved += applied;
   out = std::move(cur);
   return true;
@@ -3099,6 +3112,7 @@ inline int cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, bool 
 template<short N>
 inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
                                       std::vector<RCPSPState_CBS<N>> &neighbors) const {
+  CbsTimer _tExpand(g_cbsp.expand);   // RCPSP_CBS_PROF (Globals.h)
   // Bidirectional dominance: a state whose table entry was retired by a later
   // dominating state expands to nothing — its subtree is covered elsewhere.
   if (g_use_bidir && setting.use_dr5 &&
@@ -3377,8 +3391,9 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
     }
   };
 
-  gen_children(nodeID, neighbors);
+  { CbsTimer _tg(g_cbsp.genRegular); gen_children(nodeID, neighbors); }
 
+  { CbsTimer _tExtra(g_cbsp.extra, g_cbs_freefix != 0);   // RCPSP_CBS_PROF: all FREEFIX work at this expansion
   // RCPSP_CBS_FREEFIX (Globals.h): for every MDA child (brother) c, one extra child c+ = c with as few conflicts as
   // possible and f(c+) <= F_c = max(g(c), f(node)), a lower bound on f(c) (pathmax), so f(c+) <= f(c) without
   // evaluating c. The extras join the ordinary children before the filters below (dominance first come first
@@ -3390,10 +3405,13 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
     static thread_local std::vector<int> st;
     const int nodeConf = cbs_conflict_count<N>(nodeID);
     const int nRand = (g_cbs_freefix_rand > 0 && nodeConf <= g_cbs_freefix_randconf) ? g_cbs_freefix_rand : 0;
+    CbsLap lap;
     const int ov = cbs_sgs_within<N>(nodeID, F, nRand, g_cbs_freefix_sgs >= 2, st);
+    lap.to(g_cbsp.extraSgs);
     bool same = ov >= 0;
     for (int i = 0; same && i < (int)st.size(); ++i) same = (st[i] == nodeID.start_times[i]);
     if (ov >= 0 && !same) {
+      ++g_cbsp.extraBuilt;
       RCPSPState_CBS<N> x(nodeID);
       for (int i = 0; i < (int)st.size(); ++i) x.start_times[i] = (short)st[i];
       x.h_cached = false; x.h_cache = 0; x.found_conflict = false;   // HCost re-evaluates it from its schedule
@@ -3402,20 +3420,25 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       x.tb_seq = (unsigned)++g_cbs_tb_seq;
       x.f_floor = (short)std::max<int>(x.f_floor, F);
       x.lw_n = 0; x.ff_extra = 1;
+      lap.to(g_cbsp.extraBuild);
       bool keep = true;
       if (ov > 0) {               // conflicts remain (SGS=2): keep it only at the same f and with fewer conflicts
+        ++g_cbsp.extraTests;
         const double hx = HCost(x, x);                      // the value the search would compute; it stays cached
         keep = (double)x.makespan() + hx <= (double)F + 1e-9 && cbs_conflict_count<N>(x) < nodeConf;
         if (!keep) ++g_cbs_freefix_finalfail;
+        lap.to(g_cbsp.extraEval);
       } else if (g_cbs_freefix == 2) {   // diagnostic: CBS's own scan must find no conflict, and the makespan <= F
         HCost(x, x);
         ++g_ffd_n;
         if (!x.found_conflict) ++g_ffd_goal;
         if (!x.found_conflict && x.makespan() <= F) ++g_ffd_same; else { ++g_ffd_up; g_ffd_upsum += std::max(0, (int)x.makespan() - F); }
+        lap.to(g_cbsp.extraEval);
       }
       bool dup = false;
       for (const auto& c : neighbors) if (c.start_times == x.start_times) { dup = true; break; }
       if (keep && !dup) { neighbors.push_back(std::move(x)); ++g_cbs_freefix_kids; }
+      lap.to(g_cbsp.extraBuild);
     }
   } else
   // RCPSP_CBS_FREEFIX_LAZY: one extra child of THIS node instead, built now that its f is known (see Globals.h).
@@ -3436,6 +3459,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       if (dup) continue;
       if (g_cbs_freefix_lazy) { x.ff_extra = 1; if (Fc > x.f_floor) x.f_floor = (short)Fc; }   // below `base`: f(base) is a bound
       if (g_cbs_freefix == 2) {   // diagnostic: evaluate the brother and its extension now and compare f
+        CbsTimer _te(g_cbsp.extraEval);
         const double fc = g_cbs_freefix_lazy ? (double)Fp : (double)neighbors[i].makespan() + HCost(neighbors[i], neighbors[i]);
         const double fx = (double)x.makespan() + HCost(x, x);
         ++g_ffd_n;
@@ -3445,6 +3469,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       neighbors.push_back(std::move(x)); ++g_cbs_freefix_kids;
     }
   }
+  }   // RCPSP_CBS_PROF: end of the extra-child scope
 
   // RCPSP_INLINE: B&P's Descendants recursion. An intermediate child (same
   // RVST and scheduled set as the expanded node) is not enqueued to OPEN —
@@ -3452,6 +3477,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   // Local dedup by exact start_times; depth-bounded with a sound fallback
   // (emit as a normal child) if the intermediate layer explodes.
   if (g_use_inline && (setting.use_MDA_sets ? true : !nodeID.rvs_activities_pool.empty())) {
+    CbsTimer _ti(g_cbsp.genInline);   // RCPSP_CBS_PROF
     const CBSCutsetKey<N> ipkey = cbs_cutset_key<N>(nodeID, RCPSPex.activities);
     std::vector<RCPSPState_CBS<N>> work = std::move(neighbors);
     neighbors.clear();
@@ -3484,6 +3510,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
   // A dominated child is dropped outright, so it is never added to OPEN and never
   // expanded. Off unless setting.use_dr5.
   if (setting.use_dr5 || g_use_ub || g_use_leftshift || g_use_dr4) {
+    CbsTimer _tf(g_cbsp.filter);   // RCPSP_CBS_PROF: dominance / UB / left-shift filters over the children
     // Parent's (A_s, RVST). nodeID.compute_h_and_RVS() has already run (HCost).
     const CBSCutsetKey<N> pkey = setting.use_dr5
         ? cbs_cutset_key<N>(nodeID, RCPSPex.activities) : CBSCutsetKey<N>{};
@@ -4068,7 +4095,8 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (state1.h_cached) return state1.h_cache;
   if (g_shadow_cache && g_in_subsolve) { ++g_shadow_probes; uint64_t _sk = GetStateHash(state1)*1099511628211ull + (uint64_t)(unsigned)g_subsolve_k; if (!g_shadow_set.insert(_sk).second) ++g_shadow_hits; }  // cache-hit estimate: every GENERATED sub-state (open+solved), keyed by (state,k), hit if seen in a prior sub-solve
   auto _hct0 = std::chrono::steady_clock::now();
-  double h = state1.compute_h_and_RVS();//return h_cost
+  double h;
+  { CbsTimer _th(g_cbsp.hcbs); h = state1.compute_h_and_RVS(); }   // RCPSP_CBS_PROF: h_CBS (conflict scan + MDA scoring)
   if (g_hcbs_off_now) h = 0.0;   // inside a nested sub-solve with HCBS disabled: use consistent h=0 (conflicts still set above)
   // RCPSP_WARMSTART: use the inflated-resource optimum as an admissible LOWER BOUND.
   // It's valid (more resources => makespan <= real optimum) and tighter than the

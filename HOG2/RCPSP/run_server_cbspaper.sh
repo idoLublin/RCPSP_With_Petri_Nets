@@ -434,4 +434,23 @@ for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv
   st=""; i=$(col "$f" restartStage); [ -n "$i" ] && st=" solved-by-stage: $(awk -F, -v i="$i" 'NR>1 && $13=="True"{n[$i]++} END{for(k in n) printf "%s=%d ", k, n[k]}' "$f")"
   echo "RUN_${A}_${sz}: finished=$fin/$tot |$fl |$st"
 done; done
+
+# RCPSP_CBS_PROF (Globals.h): where the search time goes, summed over all instances of the merged file, as a share
+# of the total search time. expand = generating children; heur = evaluating nodes (incl. hcbs and tt); extra = the
+# FREEFIX extra child (incl. its gate); other = A* bookkeeping and everything not timed.
+echo "=== TIME SPLIT (share of total search time; RCPSP_CBS_PROF) ==="
+for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv"; [ -f "$f" ] || continue
+  awk -F, -v N="RUN_${A}_${sz}" 'NR==1{ for (i=1;i<=NF;i++) c[$i]=i; next }
+    { if (!("profExpandSec" in c)) { nocol=1; exit }
+      T+=$(c["time"]); E+=$(c["profExpandSec"]); G+=$(c["profGenRegularSec"]); I+=$(c["profGenInlineSec"]); F+=$(c["profFilterSec"])
+      X+=$(c["profExtraSec"]); XG+=$(c["profExtraGateSec"]); XS+=$(c["profExtraScanSec"]); XM+=$(c["profExtraMdaSec"])
+      XB+=$(c["profExtraBuildSec"]); XT+=$(c["profExtraTestSec"]); XQ+=$(c["profExtraSgsSec"]); XE+=$(c["profExtraEvalSec"])
+      H+=$(c["heurTimeSec"]); HC+=$(c["profHcbsSec"]); TT+=$(c["ttSec"]) }
+    END{ if (nocol) { printf "%s: no profiling columns (built before RCPSP_CBS_PROF)\n", N; exit }
+      if (T <= 0) { printf "%s: no time\n", N; exit }
+      ho = H - XE
+      printf "%s: total %.0f s | expand %.1f%% (regular %.1f, inline %.1f, filter %.1f, extra %.1f [gate %.1f scan %.1f mda %.1f build %.1f test %.1f sgs %.1f eval %.1f]) | heur %.1f%% (hcbs %.1f, tt %.1f) | other %.1f%%\n",
+        N, T, 100*E/T, 100*G/T, 100*I/T, 100*F/T, 100*X/T, 100*XG/T, 100*XS/T, 100*XM/T, 100*XB/T, 100*XT/T, 100*XQ/T, 100*XE/T,
+        100*ho/T, 100*HC/T, 100*TT/T, 100*(T-E-ho)/T }' "$f"
+done; done
 log "=== DONE ==="

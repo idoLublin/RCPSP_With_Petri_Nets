@@ -654,6 +654,34 @@ inline double secs_since(std::chrono::steady_clock::time_point t0){
   return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
 }
 
+// ── CBS PROFILING (RCPSP_CBS_PROF, default 1 = on) ───────────────────────────
+// Per-instance wall time by feature of the CBS search, reset in solveRCPSP_CBS and written to the CBS CSV
+// (columns prof*). A few clock reads per expansion (~20-30 ns each). How the parts nest:
+//   time (A*)          = expand + heuristic evaluations at pop (heurTimeSec - extraEval) + A* bookkeeping
+//   expand             = genRegular + genInline + extra + filter + the rest of GetSuccessors
+//   extra              = extraGate + extraScan + extraMda + extraBuild + extraTest + extraSgs + extraEval (+ bookkeeping)
+//   heurTimeSec        includes hcbs (h_CBS: conflict scan + MDA scoring) and ttSec (deadline propagation), and
+//                      also extraEval (evaluations made while building the extra child)
+inline int g_cbs_prof = 1;
+struct CbsProf {
+  double expand = 0, genRegular = 0, genInline = 0, filter = 0, hcbs = 0;
+  double extra = 0, extraGate = 0, extraScan = 0, extraMda = 0, extraBuild = 0, extraTest = 0, extraSgs = 0, extraEval = 0;
+  long extraTests = 0, extraBuilt = 0;
+};
+inline CbsProf g_cbsp;
+// adds the scope's wall time to `acc` (when profiling is on and `on`)
+struct CbsTimer {
+  double* acc; std::chrono::steady_clock::time_point t0;
+  explicit CbsTimer(double& a, bool on = true) : acc((g_cbs_prof && on) ? &a : nullptr) { if (acc) t0 = std::chrono::steady_clock::now(); }
+  ~CbsTimer() { if (acc) *acc += secs_since(t0); }
+};
+// lap timer: to(acc) adds the time since the last lap to acc
+struct CbsLap {
+  std::chrono::steady_clock::time_point t;
+  CbsLap() { if (g_cbs_prof) t = std::chrono::steady_clock::now(); }
+  void to(double& acc) { if (!g_cbs_prof) return; const auto n = std::chrono::steady_clock::now(); acc += std::chrono::duration<double>(n - t).count(); t = n; }
+};
+
 // ── Per-instance heuristic deadline ──────────────────────────────────────────
 // The main A* checks its wall clock only BETWEEN expansions; a single HCost that
 // runs an uncapped nested sub-solve can overshoot the 300s budget badly. Set this

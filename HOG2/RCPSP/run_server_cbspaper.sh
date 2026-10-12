@@ -82,6 +82,8 @@
 #        (result: frx finished fewer in every set). +frxr / +frxo = the cheap gated form; run 2026-10-12:
 #        ARMS="p-final p-final+frxr p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frxr" TAG=frxr ./run_server_cbspaper.sh
 #   CXX_EXTRA="-march=native" adds compiler flags to the build (use its own BIN_NAME): same search, faster code.
+#   ORDER=mix: the arms' jobs interleaved (size, part, arm) instead of one arm after the other, so arms that are
+#   compared run side by side under the same server load (matters when the machine is shared and busy).
 #   TAG=<name>: REQUIRED when another launch runs an arm of the same name (or ran it and its files must stay):
 #   directories, logs and merged files are then named <arm>.<TAG> (RUN_<arm>.<TAG>_<size>.csv). Without it two
 #   launches of one arm share a log and overwrite each other's merged file.
@@ -375,7 +377,13 @@ part_list(){ # <size> <part>
 TAG=${TAG:-}
 nm(){ echo "$1${TAG:+.$TAG}"; }      # name of an arm on disk
 JOBS=""
-for A in $ARMS; do for sz in $SIZES; do for p in $(seq 1 $PARTS); do JOBS="$JOBS $A:$sz:$p"; done; done; done
+# ORDER=mix: the arms' jobs interleaved (size, part, arm), so all arms of a size run side by side under the same
+# server load; the default runs the arms one after the other.
+if [ "${ORDER:-arms}" = mix ]; then
+  for sz in $SIZES; do for p in $(seq 1 $PARTS); do for A in $ARMS; do JOBS="$JOBS $A:$sz:$p"; done; done; done
+else
+  for A in $ARMS; do for sz in $SIZES; do for p in $(seq 1 $PARTS); do JOBS="$JOBS $A:$sz:$p"; done; done; done
+fi
 
 part_csv(){ awk -F'-> ' '/Done ->/{print $2}' "$LOGDIR/$1_$2_p$3.log" 2>/dev/null | tail -1; }
 # merge the parts of (arm, size) once every part has finished: header once, rows sorted by group, exam

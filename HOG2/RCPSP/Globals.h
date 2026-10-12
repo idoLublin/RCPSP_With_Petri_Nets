@@ -290,6 +290,9 @@ inline int  g_cbs_freefix_maxover = 0;
 //   below it with makespan <= f(node) by a serial schedule generation scheme (RCPSP.h, cbs_sgs_within): every
 //   activity starts between its start in the node and its latest start for deadline f(node), in the node's order.
 //   A success is a goal at the node's f. RCPSP_CBS_FREEFIX_MAXCONF=K (>0): only from nodes with at most K conflicts.
+// RCPSP_CBS_FREEFIX_SGS=2: the same pass, but an activity whose resources fit nowhere in its window goes to the time in
+//   its window with the least overload (it never leaves its window). A result that still has conflicts is evaluated
+//   once (the h the search would compute, kept cached) and kept only at the node's f and with fewer conflicts.
 // RCPSP_CBS_FREEFIX_RAND=R: if that fails, R more attempts in a random order (random targets inside the windows,
 //   seeded by the node's schedule), only from nodes with at most RCPSP_CBS_FREEFIX_RANDCONF (default 4) conflicts.
 inline int  g_cbs_freefix_sgs = 0, g_cbs_freefix_maxconf = 0, g_cbs_freefix_rand = 0, g_cbs_freefix_randconf = 4;

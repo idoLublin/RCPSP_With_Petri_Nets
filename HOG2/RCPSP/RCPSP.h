@@ -2963,19 +2963,24 @@ inline bool cbs_free_resolve(const RCPSPState_CBS<N>& start, int F, std::optiona
   return true;
 }
 
-// RCPSP_CBS_FREEFIX_SGS=K (Globals.h): a conflict-free schedule below `node` with makespan <= F, built by a serial
-// schedule generation scheme. Activity i starts no earlier than its start in the node (ES) and no later than
-// LS_i = F - tail_i (its latest start for deadline F, tail_i = longest path from its start to the end); an attempt is
-// abandoned the moment an activity cannot be placed by its LS. Attempt 1 places activities in the order of their
-// starts in the node; if it fails, `nRand` more attempts in the order of a random target inside [ES_i, LS_i], from a
-// generator seeded by the node's schedule (a run is repeatable). The result is resource- and precedence-feasible, so
-// it is a goal.
+// RCPSP_CBS_FREEFIX_SGS (Globals.h): a schedule below `node` that keeps every activity inside its window, built by a
+// serial schedule generation scheme. Activity i starts no earlier than its start in the node (ES) and no later than
+// LS_i = F - tail_i (its latest start for deadline F, tail_i = longest path from its start to the end), so the
+// makespan stays <= F. Each activity goes to the earliest time in its window where its resources fit.
+//   partial = false (SGS=1): an activity that fits nowhere in its window ends the attempt (result: a goal or nothing).
+//   partial = true  (SGS=2): it goes to the time in its window with the least overload instead (fewest conflicts
+//                            that fit; never outside the window).
+// Attempt 1 places activities in the order of their starts in the node; if its result still overloads, `nRand` more
+// attempts in the order of a random target inside [ES_i, LS_i] (generator seeded by the node's schedule: repeatable),
+// keeping the result with the least overload. Returns that overload (0 = conflict-free), or -1 for no result.
 template<short N>
-inline bool cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, std::vector<int>& start) {
+inline int cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, bool partial, std::vector<int>& start) {
   const int attempts = 1 + std::max(0, nRand);
+  static thread_local std::vector<int> cur;
+  int best = -1;
   const rootb::Inst& I = cpcbs::ctx().I;
   const int n = I.n;
-  if (n <= 0 || n > N || F <= 0) return false;
+  if (n <= 0 || n > N || F <= 0) return -1;
   static thread_local std::vector<std::vector<int>> use;
   static thread_local std::vector<int> LS, left, elig;
   static thread_local std::vector<double> key;
@@ -2983,13 +2988,20 @@ inline bool cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, std:
   uint64_t seed = 1469598103934665603ULL;
   for (int i = 0; i < n; ++i) {
     LS[i] = F - I.tail[i];
-    if (node.start_times[i] > LS[i]) return false;                // window already empty
+    if (node.start_times[i] > LS[i]) return -1;                   // window already empty
     seed = (seed ^ (uint64_t)(uint16_t)node.start_times[i]) * 1099511628211ULL;
   }
   if ((int)use.size() < I.R) use.resize(I.R);
   for (int k = 0; k < I.R; ++k) if ((int)use[k].size() < F) use[k].resize(F);
   std::mt19937_64 rng(seed);
-  key.resize(n); left.resize(n); start.assign(n, -1);
+  key.resize(n); left.resize(n);
+  // excess demand activity i would add (and meet) at start t
+  auto excessAt = [&](int i, int t) {
+    int ex = 0;
+    for (int k : I.resOf[i])
+      for (int u = t; u < t + I.p[i]; ++u) { const int over = use[k][u] + I.dem[k][i] - I.cap[k]; if (over > 0) ex += std::min(over, I.dem[k][i]); }
+    return ex;
+  };
   for (int a = 0; a < attempts; ++a) {
     ++g_cbs_freefix_sgs_calls;
     for (int i = 0; i < n; ++i) {
@@ -2997,9 +3009,11 @@ inline bool cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, std:
       key[i] = (a == 0) ? (double)es : (double)es + std::uniform_real_distribution<double>(0.0, 1.0)(rng) * (double)(LS[i] - es + 1);
     }
     for (int k = 0; k < I.R; ++k) std::fill(use[k].begin(), use[k].begin() + F, 0);
+    cur.assign(n, -1);
     elig.clear();
     for (int i = 0; i < n; ++i) { left[i] = (int)I.preds[i].size(); if (left[i] == 0) elig.push_back(i); }
     bool ok = true;
+    int overload = 0;
     for (int placed = 0; placed < n && ok; ++placed) {
       if (elig.empty()) { ok = false; break; }
       size_t bi = 0;
@@ -3008,25 +3022,33 @@ inline bool cbs_sgs_within(const RCPSPState_CBS<N>& node, int F, int nRand, std:
         if (key[x] < key[y] || (key[x] == key[y] && (LS[x] < LS[y] || (LS[x] == LS[y] && x < y)))) bi = h;
       }
       const int i = elig[bi]; elig[bi] = elig.back(); elig.pop_back();
-      int t = node.start_times[i];
-      for (int q : I.preds[i]) t = std::max(t, start[q] + I.p[q]);
+      int t0 = node.start_times[i];
+      for (int q : I.preds[i]) t0 = std::max(t0, cur[q] + I.p[q]);
+      if (t0 > LS[i]) { ok = false; break; }                       // cannot happen: predecessors are inside their windows
+      int t = t0;
       if (I.p[i] > 0 && !I.resOf[i].empty()) {
-        while (t <= LS[i]) {
+        while (t <= LS[i]) {                                         // earliest time in the window where i fits
           int clash = -1;
           for (int k : I.resOf[i])
             for (int u = t; u < t + I.p[i]; ++u) if (use[k][u] + I.dem[k][i] > I.cap[k]) clash = std::max(clash, u);
           if (clash < 0) break;
           t = clash + 1;
         }
+        if (t > LS[i]) {
+          if (!partial) { ok = false; break; }                       // SGS=1: no conflict-free placement in the window
+          int bestT = t0, bestEx = INT_MAX;                          // SGS=2: the least overload inside the window
+          for (int u = t0; u <= LS[i]; ++u) { const int ex = excessAt(i, u); if (ex < bestEx) { bestEx = ex; bestT = u; } }
+          t = bestT; overload += bestEx;
+        }
       }
-      if (t > LS[i]) { ok = false; break; }                        // would push the makespan past F
-      start[i] = t;
+      cur[i] = t;
       if (I.p[i] > 0) for (int k : I.resOf[i]) for (int u = t; u < t + I.p[i]; ++u) use[k][u] += I.dem[k][i];
       for (int s : I.succ[i]) if (--left[s] == 0) elig.push_back(s);
     }
-    if (ok) return true;
+    if (ok && (best < 0 || overload < best)) { best = overload; start = cur; }
+    if (best == 0) break;
   }
-  return false;
+  return best;
 }
 
 template<short N>
@@ -3318,16 +3340,25 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
     const int F = (int)std::ceil((double)nodeID.makespan() + nodeID.h_cache - 1e-9);
     static thread_local std::vector<int> st;
     const int nRand = (g_cbs_freefix_rand > 0 && nodeID.conflict_number <= g_cbs_freefix_randconf) ? g_cbs_freefix_rand : 0;
-    if (cbs_sgs_within<N>(nodeID, F, nRand, st)) {
+    const int ov = cbs_sgs_within<N>(nodeID, F, nRand, g_cbs_freefix_sgs >= 2, st);
+    bool same = ov >= 0;
+    for (int i = 0; same && i < (int)st.size(); ++i) same = (st[i] == nodeID.start_times[i]);
+    if (ov >= 0 && !same) {
       RCPSPState_CBS<N> x(nodeID);
       for (int i = 0; i < (int)st.size(); ++i) x.start_times[i] = (short)st[i];
-      x.h_cached = false; x.h_cache = 0; x.found_conflict = false;   // HCost re-evaluates it: no conflict, h = 0
+      x.h_cached = false; x.h_cache = 0; x.found_conflict = false;   // HCost re-evaluates it from its schedule
       x.rvs_activities_pool.clear(); x.first_conflict_pool.clear(); x.conflict_solutions.clear();
       x.tb_depth = (short)(nodeID.tb_depth + 1); x.tb_tfirst = std::max(nodeID.tb_tfirst, nodeID.t_first);
       x.tb_seq = (unsigned)++g_cbs_tb_seq;
       x.f_floor = (short)std::max<int>(x.f_floor, F);
       x.lw_n = 0; x.ff_extra = 1;
-      if (g_cbs_freefix == 2) {   // diagnostic: CBS's own scan must find no conflict, and the makespan must be <= F
+      bool keep = true;
+      if (ov > 0) {               // conflicts remain (SGS=2): keep it only at the same f and with fewer conflicts
+        const double hx = HCost(x, x);                      // the value the search would compute; it stays cached
+        keep = (double)x.makespan() + hx <= (double)F + 1e-9
+               && (nodeID.conflict_number <= 0 || x.conflict_number < nodeID.conflict_number);
+        if (!keep) ++g_cbs_freefix_finalfail;
+      } else if (g_cbs_freefix == 2) {   // diagnostic: CBS's own scan must find no conflict, and the makespan <= F
         HCost(x, x);
         ++g_ffd_n;
         if (!x.found_conflict) ++g_ffd_goal;
@@ -3335,7 +3366,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       }
       bool dup = false;
       for (const auto& c : neighbors) if (c.start_times == x.start_times) { dup = true; break; }
-      if (!dup) { neighbors.push_back(std::move(x)); ++g_cbs_freefix_kids; }
+      if (keep && !dup) { neighbors.push_back(std::move(x)); ++g_cbs_freefix_kids; }
     }
   } else
   // RCPSP_CBS_FREEFIX_LAZY: one extra child of THIS node instead, built now that its f is known (see Globals.h).

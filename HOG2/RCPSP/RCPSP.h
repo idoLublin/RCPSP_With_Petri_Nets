@@ -3454,6 +3454,16 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       std::optional<RCPSPState_CBS<N>> xo;
       if (!cbs_free_resolve<N>(base, Fc, xo, sh)) continue;
       RCPSPState_CBS<N>& x = *xo;
+      // Without the deadline propagation (RCPSP_CBS_TT=0) the construction has no f test of its own, but h_CBS can
+      // still raise f: evaluate the finished child once (the value the search would compute; it stays cached) and
+      // keep it only if f stays <= Fc. With h = 0 (no heuristic) f is the makespan, which the construction keeps.
+      if (!cpcbs::TTOn() && setting.heuristic != HeuristicType::NONE) {
+        CbsTimer _te(g_cbsp.extraEval);
+        ++g_cbsp.extraTests;
+        if (g_cbs_freefix_lazy && Fc > x.f_floor) x.f_floor = (short)Fc;   // the same floor the child gets below
+        const double hx = HCost(x, x);
+        if ((double)x.makespan() + hx > (double)Fc + 1e-9) { ++g_cbs_freefix_finalfail; continue; }
+      }
       bool dup = false;
       for (const auto& c : neighbors) if (c.start_times == x.start_times) { dup = true; break; }
       if (dup) continue;

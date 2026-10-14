@@ -78,35 +78,52 @@ deadline), 65536 by default (~36 MB on J90); a slot is used only if its start ti
 - A warm call costs ~half a cold one. What remains is mostly the cold calls at D+1, D+2...
   after a child is refuted at its parent's deadline (56% of instructions on J90 1,1).
 
-### 0e. Server run waiting to be launched (one launch, 5 arms, ~14 h at MAX_PAR=12)
-Upload `HOG2/RCPSP/*.h *.cpp run_server_cbspaper.sh` (no run may be using the script), then
-on the server in `~/RCPSP_With_Petri_nets/HOG2/RCPSP`:
+### 0e. Weak evaluation + brother: server run `TAG=weak` (finished 2026-10-14)
+A = h_CBS without the deadline propagation (`p-rs-mir4+lrn+bp+notp+frxr`, cfg8);
+B = earliest conflict, no heuristic, light scan (`p-rs-e2+lrn+bp+cfg6+notp+ff3+frxr`).
+Correctness gate clean. Solved (J30 / J60 / J90):
 
-    ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp+frxr p-rs-e2+lrn+bp+cfg6+notp+ff3+frxr p-rs-mir4+lrn+bp+pf+cfg6+inc p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14 BIN_NAME=Driver_cbs_oct14 MAX_PAR=12 JOB_AVAIL_GB=60 nohup bash run_server_cbspaper.sh > cbs_oct14_log.txt 2>&1 &
+| arm | J30 | J60 | J90 |
+|---|---|---|---|
+| A + brother | 441 | 361 | 353 |
+| B + brother | 445 | 342 | 321 |
+| final arm (propagation), `nxt` run | 457 | 376 | 369 |
+| final arm + brother, `frxr` run | 455 | 375 | 368 |
 
-Pull: `new_results/RUN_*.oct14_*.csv`, `HOG2/RCPSP/cbs_oct14_log.txt`, `logs/*.oct14_*.log`.
+- A almost never keeps its brother: ~200 kept per size, 3.4-6.1M dropped because h_CBS
+  raises f (`freeFixFinalFail`). So A + brother ≈ A, minus the 3-5% of time spent building them.
+- B keeps 0.1M / 0.8M / 2.8M brothers (no heuristic, so f = makespan, which the construction
+  keeps). Its effect needs B without the brother under the same load (not in this session's data).
+- Without propagation the child FILTERS (dominance / UB / left-shift; `profFilterSec`) take
+  34-50% of A's time and 56-80% of B's. Per generated child 4.6-19.7 µs against 1.2-3.6 µs in
+  the final arm: the dominance tables hold 2-7× more states (J90: 49M A, 150M B, 22M final),
+  and the check cost grows with them. Any cheap-evaluation configuration needs this fixed first.
+
+### 0f. Server run in progress: `TAG=oct14` / recommended `TAG=oct14b`
+`oct14` (launched 2026-10-14) repeats the two `weak` arms. Recommended: stop it and run the
+no-brother controls of A and B in their place (same 5 arms' time, ~14 h at MAX_PAR=12):
+
+    ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp p-rs-e2+lrn+bp+cfg6+notp+ff3 p-rs-mir4+lrn+bp+pf+cfg6+inc p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14b BIN_NAME=Driver_cbs_oct14b MAX_PAR=12 JOB_AVAIL_GB=60 nohup bash run_server_cbspaper.sh > cbs_oct14b_log.txt 2>&1 &
+
+Pull: `new_results/RUN_*.oct14b_*.csv`, `HOG2/RCPSP/cbs_oct14b_log.txt`, `logs/*.oct14b_*.log`.
 
 What to read from it:
-- **Weak evaluation + brother** (arms 1-2): A = h_CBS without the deadline propagation
-  (cfg8, `notp`); B = earliest conflict, no heuristic, light scan (cfg6, `e2`, `ff3`, `notp`).
-  Compare with the user's earlier no-brother runs of the same arms (assumed names
-  `p-rs-mir4+lrn+bp+notp`, `p-rs-e2+lrn+bp+cfg6+notp+ff3`, not confirmed; if theirs differ,
-  e.g. include `pf`, the arms here should be their names + `frxr`). Earlier,
-  without the brother, the propagation arm was somewhat better than both. Read solved per
-  size, expansions, `freeFixFinalFail` (brothers dropped for a higher f), extraBuilt.
+- **Arms 1-2** against the `weak` run (0e): what the brother does in A and in B.
 - **Warm** (arms 3-5): same search, so solved should differ only through speed. Compare
   solved, time on instances all three solve, the TIME SPLIT line, `ttWarmUsed`,
   `ttWarmEmpty`, `ttWarmUpMade` / `ttWarmUpUsed`. Then `+warm` or `+warmup` (or per size)
   goes into the final arm.
 
-### 0f. Next (in order)
+### 0g. Next (in order)
 1. Conflict selection, same search: score each conflict from the cached MDA sets without
    copying them, build the MDA vector only for the winner (−17.5% instructions on J90 10,10);
    cost an MDA in O(|MDA|) using the conflict's members sorted by finish. Check with
    identical expansions on a J30 sweep.
 2. Propagation: the cold calls at D+1, D+2... (ideas: a finer "touched" test in
    `propagateInc` (c); warm the parent's higher-deadline fixpoint from the grandparent's).
-3. Optional: a real TT2→CBS portfolio run.
+3. The dominance check cost on large tables (0e) — profile `check_and_insert` on a B-type
+   J90 run; it decides whether any cheap-evaluation configuration can compete.
+4. Optional: a real TT2→CBS portfolio run.
 
 ---
 

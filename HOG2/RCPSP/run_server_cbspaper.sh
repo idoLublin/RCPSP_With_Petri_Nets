@@ -87,6 +87,11 @@
 #        ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp+frxr p-rs-e2+lrn+bp+cfg6+notp+ff3+frxr p-rs-mir4+lrn+bp+pf+cfg6+inc
 #          p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14 BIN_NAME=Driver_cbs_oct14
 #          ./run_server_cbspaper.sh
+#   The two brother arms had already run (TAG=weak: A 441/361/353, B 445/342/321; the final arm 457/376/369), so the
+#   replacement launch puts their no-brother controls in their place:
+#        ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp p-rs-e2+lrn+bp+cfg6+notp+ff3 p-rs-mir4+lrn+bp+pf+cfg6+inc
+#          p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14b BIN_NAME=Driver_cbs_oct14b
+#          ./run_server_cbspaper.sh
 #   CXX_EXTRA="-march=native" adds compiler flags to the build (use its own BIN_NAME): same search, faster code.
 #   ORDER=mix: the arms' jobs interleaved (size, part, arm) instead of one arm after the other, so arms that are
 #   compared run side by side under the same server load (matters when the machine is shared and busy).

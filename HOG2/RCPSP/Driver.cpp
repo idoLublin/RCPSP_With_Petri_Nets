@@ -2100,7 +2100,7 @@ int solveRCPSP_CBS_impl(int group, int exam, const std::string& filename, const 
                 std::cout << "CBS PROF (s): expand=" << g_cbsp.expand << " genRegular=" << g_cbsp.genRegular << " genInline=" << g_cbsp.genInline
                           << " filter=" << g_cbsp.filter << " extra=" << g_cbsp.extra << " [gate=" << g_cbsp.extraGate << " scan=" << g_cbsp.extraScan
                           << " mda=" << g_cbsp.extraMda << " build=" << g_cbsp.extraBuild << " test=" << g_cbsp.extraTest << " sgs=" << g_cbsp.extraSgs
-                          << " eval=" << g_cbsp.extraEval << "] heur=" << g_heur_time_sec << " [hcbs=" << g_cbsp.hcbs << " tt=" << cpcbs::st().ttSec << "]" << std::endl;
+                          << " eval=" << g_cbsp.extraEval << "] heur=" << g_heur_time_sec << " [conflictSel=" << g_cbsp.hcbs << " tt=" << cpcbs::st().ttSec << "]" << std::endl;
             if (cpcbs::WarmMode())
                 std::cout << "TT WARM: used=" << cpcbs::st().warmUsed << " emptyWindow=" << cpcbs::st().warmQuick
                           << " noSlot=" << cpcbs::st().warmNoSlot << " notLater=" << cpcbs::st().warmNotLater

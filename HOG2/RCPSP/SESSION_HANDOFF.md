@@ -5,6 +5,109 @@ built, the results, the constraints, and what's still owed. Companion files:
 `DOMINANCE_NOTES.md` (dominance deep-dive + full flag table) and the persistent
 memory under `.claude/.../memory/`.
 
+Section 0 is the latest state (cloud session, 2026-10-11 to 10-14). Sections 1-8 are older
+(post-SoCS) and still describe the project, but their TODO list is out of date.
+
+---
+
+## 0. Latest state (2026-10-14) — start here
+
+Branch `claude/keen-clarke-yzzdkl`. Speed notes: `PARALLEL_NOTES.md` §8. Server runs:
+`run_server_cbspaper.sh` (its header lists every arm and modifier).
+
+### 0a. Rules the user set (keep them)
+- Code changes in C++ with normal edits; Python only for analysing CSVs.
+- HOG2 library files (outside `HOG2/RCPSP/`): change only when needed, minimally, keeping a
+  copy so it can be reverted. None were changed in this session.
+- Never commit `CLAUDE.md` or `upload_lns.bat` (server login; the repo is public), the
+  collaborators' folders, or results.
+- One core per job. Never overwrite a script while a run is executing it; upload it under a
+  new name instead.
+- Server noise: two identical control runs differ by about ±1 instance. Compare arms of
+  one launch with `ORDER=mix` (their jobs interleaved, so they see the same load).
+- Results the user pulled are on the PC Desktop: `server_results_*.tgz`, `tt2compact_full.tgz`.
+
+### 0b. Final CBS arm and where its time goes
+`p-rs-mir4+lrn+bp+pf+cfg6`: restart portfolio 75 s GoD/0.3, 75 s GoD/1.1, the same two
+mirrored; learned conflict selection; B&P set key + bidirectional dominance; fast
+propagation code; cfg6 = prioritisation + MDA, no h_CBS. `+inc` (incremental propagation)
+is the same search and 5-10% faster per expansion.
+
+Time split on the server (`RCPSP_CBS_PROF`, default on; CSV `prof*` columns):
+
+| | J30 | J60 | J90 |
+|---|---|---|---|
+| conflict selection (column `profHcbsSec`) | 29% | 40% | 48% |
+| deadline propagation (`ttSec`) | 52% | 44% | 36% |
+| expansion (children, filters) | 7% | 9% | 10% |
+
+`profHcbsSec` is ALL of conflict selection (`compute_h_and_RVS`), not h_CBS: latest starts,
+every conflict found, each conflict's MDAs costed for the cardinality score; h_CBS is only
+the final max (cfg6 does not even use it). Callgrind, J90 10,10: conflict selection 62% of
+instructions = MDA costing 25% + copying every MDA's activity list 17.5% (19.4M vector copies,
+malloc/free; only the winner's list is kept) + scan and latest starts ~15%; MDA enumeration
+0.5% (cached).
+
+### 0c. Built this session (all default off unless stated; all checked)
+| Feature | Switch / modifier | Result |
+|---|---|---|
+| TT2: DR5 tested before a child is built | `RCPSP_TT2_PRECHECK=1` | same search, −25-29% instructions, 6-15% faster on the server |
+| TT2 compact states (merged) | `RCPSP_TT2_COMPACT=1` | same search, 2.2-2.5× less memory |
+| CBS time per feature | `RCPSP_CBS_PROF` (default ON) | CSV `prof*` columns, "CBS PROF" log line, TIME SPLIT in the run summary |
+| CBS extra "brother" child: same f, fewest conflicts in [ES, LS(f)] | `RCPSP_CBS_FREEFIX` + options; `+frx`, `+frxr`, `+frxo` | plain `+frx` loses 4-23 per set; cheap gated `+frxr` is neutral (±1 = noise) |
+| Brother without the deadline propagation keeps the same f via `makespan + h_CBS` | (part of FREEFIX) | needed for weak-evaluation arm A |
+| **Warm-started deadline propagation** | `RCPSP_CBS_TT_WARM=1` (`+warm`), `_UP=1` (`+warmup`), `=2` check mode (`+warmchk`) | same search; see 0d |
+
+TT2 + CBS portfolio estimate from existing runs: TT2 for 30 s then CBS solves 480 / 379 / 369
+(J30/J60/J90) against CBS alone 457 / 376 / 369; both on 2 cores in parallel, 480 / 402 / 369.
+A real TT2→CBS run was offered, not done.
+
+### 0d. Warm-started propagation (commit 221014b)
+A child's start times are never earlier than its parent's, so at the same deadline the
+parent's propagated windows contain the child's fixpoint. `propagateInc` starts from them
+(rebuilds the parent's profile, marks each time-table step done) and redoes only what the
+delayed activities change. The fixpoint is unique, so windows and answers equal the cold
+call's; a window already empty refutes without propagating. Slots: hash of (node serial,
+deadline), 65536 by default (~36 MB on J90); a slot is used only if its start times are all
+≤ the child's, so a stale slot cannot be wrong.
+- Check mode: 96 J30/J60 + 5 J90 instances, ~5.5M warm calls, no difference.
+- 31 local instances (2-40 s each), `+inc` → `+inc+warm`: propagation −14% / −19% / −26%,
+  total −3% / −10% / −5% (J30/J60/J90), expansions identical. `+warmup` (the parent's
+  fixpoint also at the higher deadlines, computed once and shared): J90 −30% / −10% total,
+  but J30 −9%, J60 −12%.
+- A warm call costs ~half a cold one. What remains is mostly the cold calls at D+1, D+2...
+  after a child is refuted at its parent's deadline (56% of instructions on J90 1,1).
+
+### 0e. Server run waiting to be launched (one launch, 5 arms, ~14 h at MAX_PAR=12)
+Upload `HOG2/RCPSP/*.h *.cpp run_server_cbspaper.sh` (no run may be using the script), then
+on the server in `~/RCPSP_With_Petri_nets/HOG2/RCPSP`:
+
+    ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp+frxr p-rs-e2+lrn+bp+cfg6+notp+ff3+frxr p-rs-mir4+lrn+bp+pf+cfg6+inc p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14 BIN_NAME=Driver_cbs_oct14 MAX_PAR=12 JOB_AVAIL_GB=60 nohup bash run_server_cbspaper.sh > cbs_oct14_log.txt 2>&1 &
+
+Pull: `new_results/RUN_*.oct14_*.csv`, `HOG2/RCPSP/cbs_oct14_log.txt`, `logs/*.oct14_*.log`.
+
+What to read from it:
+- **Weak evaluation + brother** (arms 1-2): A = h_CBS without the deadline propagation
+  (cfg8, `notp`); B = earliest conflict, no heuristic, light scan (cfg6, `e2`, `ff3`, `notp`).
+  Compare with the user's earlier no-brother runs of the same arms (assumed names
+  `p-rs-mir4+lrn+bp+notp`, `p-rs-e2+lrn+bp+cfg6+notp+ff3`, not confirmed; if theirs differ,
+  e.g. include `pf`, the arms here should be their names + `frxr`). Earlier,
+  without the brother, the propagation arm was somewhat better than both. Read solved per
+  size, expansions, `freeFixFinalFail` (brothers dropped for a higher f), extraBuilt.
+- **Warm** (arms 3-5): same search, so solved should differ only through speed. Compare
+  solved, time on instances all three solve, the TIME SPLIT line, `ttWarmUsed`,
+  `ttWarmEmpty`, `ttWarmUpMade` / `ttWarmUpUsed`. Then `+warm` or `+warmup` (or per size)
+  goes into the final arm.
+
+### 0f. Next (in order)
+1. Conflict selection, same search: score each conflict from the cached MDA sets without
+   copying them, build the MDA vector only for the winner (−17.5% instructions on J90 10,10);
+   cost an MDA in O(|MDA|) using the conflict's members sorted by finish. Check with
+   identical expansions on a J30 sweep.
+2. Propagation: the cold calls at D+1, D+2... (ideas: a finer "touched" test in
+   `propagateInc` (c); warm the parent's higher-deadline fixpoint from the grandparent's).
+3. Optional: a real TT2→CBS portfolio run.
+
 ---
 
 ## 1. What the project is

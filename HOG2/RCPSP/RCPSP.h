@@ -4106,7 +4106,9 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
   if (g_shadow_cache && g_in_subsolve) { ++g_shadow_probes; uint64_t _sk = GetStateHash(state1)*1099511628211ull + (uint64_t)(unsigned)g_subsolve_k; if (!g_shadow_set.insert(_sk).second) ++g_shadow_hits; }  // cache-hit estimate: every GENERATED sub-state (open+solved), keyed by (state,k), hit if seen in a prior sub-solve
   auto _hct0 = std::chrono::steady_clock::now();
   double h;
-  { CbsTimer _th(g_cbsp.hcbs); h = state1.compute_h_and_RVS(); }   // RCPSP_CBS_PROF: h_CBS (conflict scan + MDA scoring)
+  // RCPSP_CBS_PROF: conflict selection (latest starts, every conflict found and its MDAs costed, then h_CBS, a max over
+  // those costs). CSV column profHcbsSec keeps its old name.
+  { CbsTimer _th(g_cbsp.hcbs); h = state1.compute_h_and_RVS(); }
   if (g_hcbs_off_now) h = 0.0;   // inside a nested sub-solve with HCBS disabled: use consistent h=0 (conflicts still set above)
   // RCPSP_WARMSTART: use the inflated-resource optimum as an admissible LOWER BOUND.
   // It's valid (more resources => makespan <= real optimum) and tighter than the

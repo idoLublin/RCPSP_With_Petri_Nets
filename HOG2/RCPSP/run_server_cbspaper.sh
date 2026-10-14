@@ -81,6 +81,12 @@
 #        ARMS="p-final p-final+frx p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frx" TAG=frx ./run_server_cbspaper.sh
 #        (result: frx finished fewer in every set). +frxr / +frxo = the cheap gated form; run 2026-10-12:
 #        ARMS="p-final p-final+frxr p-rs-mir4+lrn+bp+pf+cfg6 p-rs-mir4+lrn+bp+pf+cfg6+frxr" TAG=frxr ./run_server_cbspaper.sh
+#   Run 2026-10-14 (one launch, 5 arms, ~14 h at MAX_PAR=12): the brother under a weak evaluation (A = h_CBS without
+#   the deadline propagation, B = earliest conflict, no heuristic; their no-brother rows are from earlier runs), and
+#   the warm-started propagation against +inc (same search: compare solved and time, TIME SPLIT for tt):
+#        ORDER=mix ARMS="p-rs-mir4+lrn+bp+notp+frxr p-rs-e2+lrn+bp+cfg6+notp+ff3+frxr p-rs-mir4+lrn+bp+pf+cfg6+inc
+#          p-rs-mir4+lrn+bp+pf+cfg6+inc+warm p-rs-mir4+lrn+bp+pf+cfg6+inc+warmup" TAG=oct14 BIN_NAME=Driver_cbs_oct14
+#          ./run_server_cbspaper.sh
 #   CXX_EXTRA="-march=native" adds compiler flags to the build (use its own BIN_NAME): same search, faster code.
 #   ORDER=mix: the arms' jobs interleaved (size, part, arm) instead of one arm after the other, so arms that are
 #   compared run side by side under the same server load (matters when the machine is shared and busy).
@@ -457,7 +463,7 @@ for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv
     END{ if (nocol) { printf "%s: no profiling columns (built before RCPSP_CBS_PROF)\n", N; exit }
       if (T <= 0) { printf "%s: no time\n", N; exit }
       ho = H - XE
-      printf "%s: total %.0f s | expand %.1f%% (regular %.1f, inline %.1f, filter %.1f, extra %.1f [gate %.1f scan %.1f mda %.1f build %.1f test %.1f sgs %.1f eval %.1f]) | heur %.1f%% (hcbs %.1f, tt %.1f) | other %.1f%%\n",
+      printf "%s: total %.0f s | expand %.1f%% (regular %.1f, inline %.1f, filter %.1f, extra %.1f [gate %.1f scan %.1f mda %.1f build %.1f test %.1f sgs %.1f eval %.1f]) | heur %.1f%% (conflict selection %.1f, propagation %.1f) | other %.1f%%\n",
         N, T, 100*E/T, 100*G/T, 100*I/T, 100*F/T, 100*X/T, 100*XG/T, 100*XS/T, 100*XM/T, 100*XB/T, 100*XT/T, 100*XQ/T, 100*XE/T,
         100*ho/T, 100*HC/T, 100*TT/T, 100*(T-E-ho)/T }' "$f"
 done; done

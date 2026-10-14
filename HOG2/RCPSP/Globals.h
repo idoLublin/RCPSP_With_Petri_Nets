@@ -664,7 +664,7 @@ inline double secs_since(std::chrono::steady_clock::time_point t0){
 //                      also extraEval (evaluations made while building the extra child)
 inline int g_cbs_prof = 1;
 struct CbsProf {
-  double expand = 0, genRegular = 0, genInline = 0, filter = 0, hcbs = 0;
+  double expand = 0, genRegular = 0, genInline = 0, filter = 0, hcbs = 0;   // hcbs = all of conflict selection, not h_CBS alone
   double extra = 0, extraGate = 0, extraScan = 0, extraMda = 0, extraBuild = 0, extraTest = 0, extraSgs = 0, extraEval = 0;
   long extraTests = 0, extraBuilt = 0;
 };

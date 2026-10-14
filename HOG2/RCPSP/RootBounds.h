@@ -326,8 +326,16 @@ inline bool propagateImpl(const Inst& I, int D, std::vector<int>& es, std::vecto
 //      the next round and the step is repeated.)
 // Windows, result and number of rounds are those of RCPSP_PROP_FAST=1. 1 = on, 2 = also run the RCPSP_PROP_FAST=1
 // code on every call and abort on any difference. Not used with RCPSP_ROOT_PAIR.
+//
+// Warm start (pEs / pLs given, RCPSP_CBS_TT_WARM in CpCBS.h): (pEs, pLs) is the fixpoint this function reached at the
+// SAME D for start times no later than the ones es / ls were built from, and es / ls lie inside it. The call starts
+// from the state that fixpoint left: its compulsory parts in the profile, and every activity's time-table step done
+// at its window there (the step left it unchanged, so (c) holds). Only what changed since is redone. The fixpoint
+// of these monotone, narrowing rules below a domain is unique, and it lies inside (pEs, pLs) because the start times
+// are later, so the result is the cold call's: same windows, same answer.
 inline long PropInc() { static const long v = envNum("RCPSP_PROP_INC", 0); return v; }
-inline bool propagateInc(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls, const bool count) {
+inline bool propagateInc(const Inst& I, int D, std::vector<int>& es, std::vector<int>& ls, const bool count,
+                         const short* pEs = nullptr, const short* pLs = nullptr) {
     static thread_local std::vector<std::vector<int>> prof;
     static thread_local std::vector<char> bad;
     static thread_local std::vector<int> maxprof, chgLo, chgHi, fEs, fLs, cpA, cpB;
@@ -338,6 +346,17 @@ inline bool propagateInc(const Inst& I, int D, std::vector<int>& es, std::vector
     maxprof.assign(R, 0); chgLo.assign(R, H); chgHi.assign(R, 0);
     fEs.assign(n, INT_MIN); fLs.assign(n, INT_MIN);    // window of each activity right after its last time-table step
     cpA.assign(n, 0); cpB.assign(n, 0);                // compulsory part of each activity that is in the profile (empty if cpA >= cpB)
+    if (pEs) {                                         // warm start: the state the earlier fixpoint left
+        for (int i = 0; i < n; ++i) {
+            fEs[i] = pEs[i]; fLs[i] = pLs[i];
+            if (I.p[i] == 0) continue;
+            const int a = pLs[i], b = pEs[i] + I.p[i];
+            if (a >= b) continue;
+            cpA[i] = a; cpB[i] = b;
+            for (int k : I.resOf[i]) { int* pk = prof[k].data(); const int d = I.dem[k][i]; for (int t = a; t < b; ++t) pk[t] += d; }
+        }
+        for (int k = 0; k < R; ++k) { const int* pk = prof[k].data(); int mx = 0; for (int t = 0; t < H; ++t) if (pk[t] > mx) mx = pk[t]; maxprof[k] = mx; }
+    }
     if (count) ++propCalls();
     const int maxIter = (int)PropIters();
     for (int iter = 0; iter < maxIter; ++iter) {

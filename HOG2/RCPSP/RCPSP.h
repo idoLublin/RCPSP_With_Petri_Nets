@@ -3417,7 +3417,7 @@ inline void RCPSP_CBS<N>::GetSuccessors(const RCPSPState_CBS<N> &nodeID,
       x.h_cached = false; x.h_cache = 0; x.found_conflict = false;   // HCost re-evaluates it from its schedule
       x.rvs_activities_pool.clear(); x.first_conflict_pool.clear(); x.conflict_solutions.clear();
       x.tb_depth = (short)(nodeID.tb_depth + 1); x.tb_tfirst = std::max(nodeID.tb_tfirst, nodeID.t_first);
-      x.tb_seq = (unsigned)++g_cbs_tb_seq;
+      x.tt_par = nodeID.tb_seq; x.tb_seq = (unsigned)++g_cbs_tb_seq;
       x.f_floor = (short)std::max<int>(x.f_floor, F);
       x.lw_n = 0; x.ff_extra = 1;
       lap.to(g_cbsp.extraBuild);
@@ -4218,8 +4218,10 @@ inline double RCPSP_CBS<N>::HCost(const RCPSPState_CBS<N> &state1, const RCPSPSt
     const bool mdaOk = setting.use_MDA_sets && !g_use_setdelay && !setting.use_mda_recursive_delay
                        && !state1.conflict_solutions.empty() && !state1.rvs_activities_pool.empty();
     const int nb = mdaOk ? cpcbs::nodeBound(state1.start_times, g_now + (int)h,
-                                            &state1.rvs_activities_pool, &state1.conflict_solutions)
-                         : cpcbs::nodeBound(state1.start_times, g_now + (int)h);
+                                            &state1.rvs_activities_pool, &state1.conflict_solutions,
+                                            state1.tb_seq, state1.tt_par)
+                         : cpcbs::nodeBound(state1.start_times, g_now + (int)h, nullptr, nullptr,
+                                            state1.tb_seq, state1.tt_par);
     if ((double)(nb - g_now) > h) h = (double)(nb - g_now);
   }
   // RCPSP_CBS_LEARN (Globals.h): this node came from a free delay; did its f still end above its parent's?

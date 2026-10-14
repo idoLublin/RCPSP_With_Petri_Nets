@@ -88,6 +88,7 @@ struct Stats {
     long mdaRef = 0, mdaRefChecks = 0;                                             // RCPSP_CBS_MDAREF
     long erRefuted = 0;                                                            // RCPSP_CBS_TT_ER
     double lsSec = 0.0;
+    long warmUsed = 0, warmQuick = 0, warmNoSlot = 0, warmNotLater = 0, warmUpMade = 0, warmUpUsed = 0;   // RCPSP_CBS_TT_WARM
 };
 inline Stats& st() { static Stats s; return s; }
 
@@ -100,12 +101,32 @@ struct Ctx {
     std::vector<Nogood> ng;
     std::unordered_set<uint64_t> ngKeys;
     std::vector<std::vector<int>> prof;
+    // RCPSP_CBS_TT_WARM: slot (hash of node serial and deadline) = the start times, deadline and propagated windows of a
+    // node's successful propagation. A slot is used only at the same deadline and only if the node's start times are
+    // all no later than the child's, so a stale or foreign slot is still a valid outer bound (never wrong, only useless).
+    long wK = 0; int wN = 0;
+    std::vector<unsigned> wSeq;
+    std::vector<int> wD;                  // -1 = empty
+    std::vector<short> wBuf;              // per slot: start, es, ls (wN each)
 };
 inline Ctx& ctx() { static Ctx c; return c; }
 
+// RCPSP_CBS_TT_WARM=1: start a child's propagation from its parent's fixpoint at the same deadline (rootb::propagateInc
+// warm start); 2 = also run the cold propagation and abort on any difference. Needs RCPSP_PROP_FAST=1. Same search.
+// RCPSP_CBS_TT_WARM_SLOTS: number of remembered (node, deadline) pairs (a power of two, default 65536; 6 x n bytes each).
+inline long WarmMode()  { static const long v = rootb::envNum("RCPSP_CBS_TT_WARM", 0); return v; }
+inline long WarmSlots() { static const long v = rootb::envNum("RCPSP_CBS_TT_WARM_SLOTS", 65536); return v; }
+
 inline void resetInstance() { st() = Stats{}; Ctx& c = ctx(); c.built = false; c.rootLB = -1; c.ng.clear(); c.ngKeys.clear(); }
 // call once the real instance is loaded (after warm start / anything that swaps RCPSPex)
-inline void buildInstance(int rootLB) { Ctx& c = ctx(); c.I = rootb::build(); c.built = true; c.rootLB = FloorOn() ? rootLB : -1; }
+inline void buildInstance(int rootLB) {
+    Ctx& c = ctx(); c.I = rootb::build(); c.built = true; c.rootLB = FloorOn() ? rootLB : -1;
+    if (WarmMode()) {                     // new instance or mirrored project: forget every slot
+        long K = 1; while (K < WarmSlots()) K <<= 1;
+        c.wK = K; c.wN = c.I.n;
+        c.wSeq.assign(K, 0); c.wD.assign(K, -1); c.wBuf.assign((size_t)K * 3 * c.wN, 0);
+    }
+}
 inline bool Active() { return ctx().built && !g_in_subsolve; }
 // real incumbent => prune makespan >= incumbent instead of >
 inline int GeShift() { return (st().realInc && g_use_ub && !g_in_subsolve) ? 1 : 0; }
@@ -199,6 +220,91 @@ inline bool refuted(const Arr& start, int D) {
     return false;
 }
 
+// RCPSP_CBS_TT_WARM: the warm start applies where refuted() runs the incremental propagation with no nogood pre-check
+inline bool WarmOn() {
+    const Ctx& c = ctx();
+    return WarmMode() && c.wK > 0 && TTFull() && rootb::PropFast() == 1 && !NGOn() && !(rootb::PairOn() && !c.I.inc.empty());
+}
+// RCPSP_CBS_TT_WARM_UP=1: a child refuted at its parent's deadline goes on to D + 1, D + 2, ... The parent is not refuted
+// there either (refutation only spreads to smaller deadlines), so its fixpoint at those deadlines exists: computed
+// once, from the start times in its slot, when the first child needs it, and every later child starts there too.
+inline long WarmUp() { static const long v = rootb::envNum("RCPSP_CBS_TT_WARM_UP", 0); return v; }
+inline size_t warmIdx(unsigned seq, int D) {
+    return (size_t)((seq * 0x9E3779B1u) ^ ((unsigned)D * 0x85EBCA77u)) & (size_t)(ctx().wK - 1);
+}
+// slot (self, D): start times and the fixpoint at D (es / ls; default the buffers of the last successful propagation)
+template <class Arr>
+inline void warmStore(const Arr& start, int D, unsigned self,
+                      const std::vector<int>& es = esBuf(), const std::vector<int>& ls = lsBuf()) {
+    Ctx& c = ctx();
+    const size_t s = warmIdx(self, D);
+    c.wSeq[s] = self; c.wD[s] = D;
+    short* b = &c.wBuf[s * 3 * c.wN];
+    for (int i = 0; i < c.wN; ++i) { b[i] = (short)start[i]; b[c.wN + i] = (short)es[i]; b[2 * c.wN + i] = (short)ls[i]; }
+}
+inline std::vector<short>& parBuf() { static thread_local std::vector<short> v; return v; }   // the parent's start times
+// the parent's slot at D if it can start this node's propagation there, else nullptr. havePar: parBuf() holds the
+// parent's start times (all no later than this node's), taken from the first slot of the parent found.
+template <class Arr>
+inline const short* warmFind(const Arr& start, int D, unsigned parent, bool& havePar) {
+    Ctx& c = ctx();
+    const int n = c.wN;
+    const size_t s = warmIdx(parent, D);
+    if (c.wSeq[s] == parent && c.wD[s] == D) {
+        const short* b = &c.wBuf[s * 3 * n];
+        for (int i = 0; i < n; ++i) if (start[i] < b[i]) { ++st().warmNotLater; return nullptr; }   // also a foreign slot
+        if (havePar) ++st().warmUpUsed;
+        else { parBuf().assign(b, b + n); havePar = true; }
+        return b;
+    }
+    if (!havePar || !WarmUp()) { ++st().warmNoSlot; return nullptr; }
+    static thread_local std::vector<int> e, l;
+    const rootb::Inst& I = c.I;
+    const std::vector<short>& par = parBuf();
+    e.resize(I.n); l.resize(I.n);
+    for (int i = 0; i < I.n; ++i) { e[i] = par[i]; l[i] = D - I.tail[i]; }
+    if (!rootb::propagate(I, D, e, l)) return nullptr;     // cannot happen: the parent survived a smaller deadline
+    ++st().warmUpMade;
+    warmStore(par, D, parent, e, l);
+    return &c.wBuf[s * 3 * n];
+}
+// refuted(start, D) started from the slot b (same D, start times no later than these): same answer, same windows
+template <class Arr>
+inline bool refutedWarm(const Arr& start, int D, const short* b) {
+    const rootb::Inst& I = ctx().I;
+    const int n = ctx().wN;
+    const short* pEs = b + n; const short* pLs = b + 2 * n;
+    ++st().warmUsed;
+    std::vector<int>& es = esBuf();
+    std::vector<int>& ls = lsBuf();
+    es.resize(I.n); ls.resize(I.n);
+    bool empty = false;
+    for (int i = 0; i < I.n; ++i) {
+        es[i] = std::max((int)start[i], (int)pEs[i]); ls[i] = pLs[i];   // pLs <= D - tail already
+        if (es[i] > ls[i]) empty = true;
+    }
+    bool ref;
+    if (empty) { ++st().warmQuick; ref = true; }             // a window of the parent's fixpoint is already empty
+    else {
+        ref = !rootb::propagateInc(I, D, es, ls, true, pEs, pLs);
+        if (!ref && ErActive() && !rootb::energeticOk(I, es, ls)) { ++st().erRefuted; ref = true; }
+    }
+    if (WarmMode() == 2) {                                    // the cold call must agree
+        static thread_local std::vector<int> e2, l2;
+        e2.resize(I.n); l2.resize(I.n);
+        for (int i = 0; i < I.n; ++i) { e2[i] = start[i]; l2[i] = D - I.tail[i]; }
+        bool ref2 = !rootb::propagate(I, D, e2, l2);
+        if (!ref2 && ErActive() && !rootb::energeticOk(I, e2, l2)) ref2 = true;
+        if (ref != ref2 || (!ref && (es != e2 || ls != l2))) {
+            std::cerr << "RCPSP_CBS_TT_WARM MISMATCH at D=" << D << ": warm " << ref << " cold " << ref2 << std::endl;
+            if (!ref && !ref2) for (int i = 0; i < I.n; ++i) if (es[i] != e2[i] || ls[i] != l2[i])
+                std::cerr << "  act " << i << ": warm [" << es[i] << "," << ls[i] << "] cold [" << e2[i] << "," << l2[i] << "]" << std::endl;
+            std::abort();
+        }
+    }
+    return ref;
+}
+
 // Latest starts of THIS node under "beat the incumbent": propagate from its start times with D = U-1.
 // false = no incumbent yet, flag off, or the node is already refuted at U-1 (the caller then keeps the
 // CPM values; the node dies on its bound anyway). Used only to score conflicts.
@@ -287,9 +393,11 @@ inline bool mdaRefuted(const Arr& start, const std::vector<short>& G, const std:
     return !mdas.empty();
 }
 
+// self / parent: the node's serial and its parent's (RCPSP_CBS_TT_WARM)
 template <class Arr>
 inline int nodeBound(const Arr& start, int B,
-                     const std::vector<short>* G = nullptr, const std::vector<MDA>* mdas = nullptr) {
+                     const std::vector<short>* G = nullptr, const std::vector<MDA>* mdas = nullptr,
+                     unsigned self = 0, unsigned parent = 0) {
     const auto t0 = std::chrono::steady_clock::now();
     ++st().ttCalls;
     int D = std::max(B, ctx().rootLB);
@@ -302,11 +410,17 @@ inline int nodeBound(const Arr& start, int B,
         const int U = (g_use_ub && st().realInc && g_incumbent < SHRT_MAX) ? (int)g_incumbent : INT_MAX;
         if (U != INT_MAX && D < U && refuted(start, U - 1)) D = U;   // refuted at U-1 => at every D <= U-1
         const bool mdaRef = MdaRefOn() && TTFull() && G && mdas && !mdas->empty();
+        const bool warm = WarmOn();
+        bool fix = false;                                    // esBuf / lsBuf hold this node's fixpoint at D
+        bool havePar = false;
         for (long s = 0; D < U && s < TTSteps(); ++s) {
-            if (refuted(start, D)) { ++D; continue; }
+            const short* wb = warm ? warmFind(start, D, parent, havePar) : nullptr;   // the first deadline is the parent's f
+            if (wb ? refutedWarm(start, D, wb) : refuted(start, D)) { ++D; continue; }
             if (mdaRef && mdaRefuted(start, *G, *mdas)) { ++st().mdaRef; ++D; continue; }
+            fix = true;
             break;
         }
+        if (fix && warm) warmStore(start, D, self);
     }
     if (D > B) ++st().ttRaised;
     st().ttSec += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();

@@ -307,6 +307,14 @@ arm_mod(){ case $1 in
   dfar)  echo "RCPSP_CBS_DELAY=far" ;;
   # inc (2026-10-09): the propagation of the heuristic computed incrementally - same search, less time (needs pf).
   inc)   echo "RCPSP_PROP_INC=1" ;;      incchk) echo "RCPSP_PROP_INC=2" ;;
+  # warm (2026-10-14): a child's deadline propagation at its parent's deadline starts from the parent's fixpoint there
+  # (CpCBS.h, RCPSP_CBS_TT_WARM) and redoes only what its later start times change. Same search (needs pf; use with
+  # inc). Local, 31 instances the final arm needs 2-40 s for (16 J30 / 5 J60 / 10 J90), +inc vs +inc+warm: propagation
+  # -14% / -19% / -26%, total -3% / -10% / -5%, expansions identical. warmup = also the deadlines above the parent's
+  # (its fixpoint there computed once and shared by its children): J90 -30% / -10% total but J30 -9%, J60 -12%.
+  # warmchk = check every warm call against the cold one and abort on any difference.
+  warm)  echo "RCPSP_CBS_TT_WARM=1" ;;
+  warmup) echo "RCPSP_CBS_TT_WARM=1 RCPSP_CBS_TT_WARM_UP=1" ;;  warmchk) echo "RCPSP_CBS_TT_WARM=2 RCPSP_CBS_TT_WARM_UP=1" ;;
   # frx (2026-10-11): extra "brother" children (RCPSP_CBS_FREEFIX, Globals.h). For every MDA child c, one more child
   # c+ = c with as few conflicts as possible and f(c+) <= max(g(c), f(parent)) <= f(c): conflicts resolved in time
   # order by the MDA leaving the fewest overloaded resource-time units that the CP contradiction test does not
@@ -428,7 +436,7 @@ done; done
 
 echo "=== EFFECTIVE FLAGS AND RESULT (rows must be 480) ==="
 for A in $ARMS; do A=$(nm "$A"); for sz in $SIZES; do f="$RES/RUN_${A}_${sz}.csv"; [ -f "$f" ] || { echo "RUN_${A}_${sz}: MISSING"; continue; }
-  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay cbsFreeFix freeFixProp freeFixTries freeFixLazy freeFixStop freeFixRelConf freeFixRelOver; do
+  fl=""; for c in useConflictPrioritization useHeuristic useMDASets useLazy useDR5 useDR4 useHybrid hybridT cbsTT ttSteps cbsPathmax cbsTbSpec cbsRestart cbsRestartKeepLB cbsLearn cbsFastFirst useUB ubSeed useLeftshift leftshiftGlobal useBidir useInline domRule domBpSetKey bapMrvs cbsTB useSetDelay cbsFreeFix freeFixProp freeFixTries freeFixLazy freeFixStop freeFixRelConf freeFixRelOver propFast propInc ttWarm ttWarmUp; do
     i=$(col "$f" $c); [ -n "$i" ] && fl="$fl $c=$(awk -F, -v i="$i" 'NR==2{print $i}' "$f")"; done
   fin=$(awk -F, 'NR>1 && $13=="True"' "$f" | wc -l); tot=$(awk -F, 'NR>1' "$f" | wc -l)
   st=""; i=$(col "$f" restartStage); [ -n "$i" ] && st=" solved-by-stage: $(awk -F, -v i="$i" 'NR>1 && $13=="True"{n[$i]++} END{for(k in n) printf "%s=%d ", k, n[k]}' "$f")"

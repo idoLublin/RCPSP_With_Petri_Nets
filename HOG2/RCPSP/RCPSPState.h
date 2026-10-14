@@ -403,6 +403,7 @@ public:
      mutable short tb_x = 0, tb_m = 0;
      mutable unsigned char tb_k = 0;
      unsigned      tb_seq   = 0;   // creation order within the instance
+     unsigned      tt_par   = 0;   // RCPSP_CBS_TT_WARM (CpCBS.h): the parent's tb_seq. Never part of the identity.
      short f_floor   = 0;     // RCPSP_CBS_PATHMAX: the parent's final f (integral makespan lower bound)
      // RCPSP_CBS_LEARN: the activities this child delayed, kept only when the delay left the makespan unchanged
      // (a free MDA). HCost credits them once the child's f is known. Never part of the identity (== / hash).

@@ -5006,7 +5006,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short delayedActiv
     // so its t_first is exact and bounds ours from below.
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
-    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tt_par = prev.tb_seq; tb_seq = (unsigned)++g_cbs_tb_seq;
     tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
@@ -5137,7 +5137,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS& prev, const std::vector<
     // so its t_first is exact and bounds ours from below.
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
-    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tt_par = prev.tb_seq; tb_seq = (unsigned)++g_cbs_tb_seq;
     tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
@@ -5454,7 +5454,7 @@ RCPSPState_CBS<N>::RCPSPState_CBS(const RCPSPState_CBS &prev, short from, short 
     // so its t_first is exact and bounds ours from below.
     tb_depth  = (short)(prev.tb_depth + 1);
     tb_tfirst = std::max(prev.tb_tfirst, prev.t_first);
-    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tb_seq = (unsigned)++g_cbs_tb_seq;
+    tb_nconf = prev.tb_nconf; tb_over = prev.tb_over; tt_par = prev.tb_seq; tb_seq = (unsigned)++g_cbs_tb_seq;
     tb_x = prev.tb_x; tb_k = prev.tb_k; tb_m = prev.tb_m;
     // RCPSP_CBS_PATHMAX: the parent was evaluated before expansion, so h_cache holds its final h. Makespans are
     // integral, so ceil(f_parent) is still a lower bound.
